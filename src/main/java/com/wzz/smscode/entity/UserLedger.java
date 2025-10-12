@@ -106,4 +106,11 @@ public class UserLedger extends BaseEntity {
     @ColumnComment("资金类型（0-业务扣费, 1-后台操作）")
     @TableField("fund_type")
     private Integer fundType;
+
+    /**
+     * 备注
+     */
+    @TableField("remark")
+    @ColumnComment("备注")
+    private  String remark;
 }

@@ -58,8 +58,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         return CommonResultDTO.success("查询成功", user.getBalance());
     }
 
-    @Override
     @Transactional
+    @Override
     public boolean createUser(UserCreateDTO dto, Long operatorId) {
         User operator = this.getById(operatorId);
         if (operator == null) throw new IllegalArgumentException("操作员不存在");
@@ -157,15 +157,15 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     }
 
 
-//    @Override
-//    public IPage<UserDTO> listSubUsers(Long operatorId, IPage<User> page) {
-//        // TODO: 管理员(operatorId)可查询所有用户，需加判断逻辑
-//        LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<>()
-//                .eq(User::getParentId, operatorId);
-//
-//        Page<User> userPage = this.page(page, wrapper);
-//        return userPage.convert(this::convertToDTO);
-//    }
+    @Override
+    public IPage<UserDTO> listSubUsers(Long operatorId, IPage<User> page) {
+        // TODO: 管理员(operatorId)可查询所有用户，需加判断逻辑
+        LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<>()
+                .eq(User::getParentId, operatorId);
+
+        IPage<User> userPage = this.page(page, wrapper);
+        return userPage.convert(this::convertToDTO);
+    }
 
 
     @Transactional
