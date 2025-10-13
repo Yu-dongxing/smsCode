@@ -28,6 +28,15 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
     @Autowired
     private UserService userService; // 注入用户服务用于身份认证
 
+    /**
+     * 查询用户资金列表
+     * @param userId 用户id
+     * @param password 用户密码
+     * @param startTime 开始时间
+     * @param endTime 结束时间
+     * @param page 分页
+     * @return 分页的用户资金列表
+     */
     @Override
     public IPage<LedgerDTO> listUserLedger(Long userId, String password, Date startTime, Date endTime, Page<UserLedger> page){
         // 1. 身份验证
@@ -44,10 +53,7 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
         wrapper.le(endTime != null, UserLedger::getTimestamp, endTime);
         wrapper.orderByDesc(UserLedger::getTimestamp);
 
-        // 3. 执行分页查询
         Page<UserLedger> ledgerPage = this.page(page, wrapper);
-
-        // 4. 将 Page<UserLedger> 转换为 Page<LedgerDTO>
         return ledgerPage.convert(this::convertToDTO);
     }
 
@@ -75,6 +81,12 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
         return ledgerPage.convert(this::convertToDTO);
     }
 
+    /**
+     * 根据用户ID计算其账本中所有金额的总和
+     * @param userId 用户id
+     * @return 数值
+     */
+    //todo  用户金额计算出现错误
     @Override
     public BigDecimal calculateUserBalanceFromLedger(Long userId) {
         // 为避免内存溢出，不应一次性加载所有记录。
@@ -105,7 +117,7 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
         UserLedger ledger = new UserLedger();
         ledger.setUserId(userId);
         ledger.setFundType(fundType.getCode());
-        ledger.setBalanceAfter(amount);// 变动金额
+        //todo 用户变动金额出现问题
         ledger.setBalanceAfter(balanceAfter); // 变动后余额
         ledger.setBalanceBefore(balanceAfter.subtract(amount)); // 推算出变动前余额
         ledger.setRemark(remarks);

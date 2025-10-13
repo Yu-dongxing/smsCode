@@ -3,7 +3,6 @@ package com.wzz.smscode.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
-import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -67,7 +66,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         if (operator.getIsAgent() != 1) throw new SecurityException("无权创建用户");
 
         User user = new User();
-        user.setId(dto.getUserId()); // 如果ID是自增，请移除此行
+//        user.setId(dto.getUserId()); // 如果ID是自增，请移除此行
         user.setPassword(passwordEncoder.encode(dto.getPassword()));
         user.setParentId(operatorId);
         user.setIsAgent(dto.getIsAgent() ? 1 : 0);
@@ -160,8 +159,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     @Override
     public IPage<UserDTO> listSubUsers(Long operatorId, IPage<User> page) {
         // TODO: 管理员(operatorId)可查询所有用户，需加判断逻辑
-        LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<>()
-                .eq(User::getParentId, operatorId);
+        LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(User::getParentId, operatorId);
 
         IPage<User> userPage = this.page(page, wrapper);
         return userPage.convert(this::convertToDTO);

@@ -1,5 +1,6 @@
 package com.wzz.smscode.service;
 
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.wzz.smscode.dto.CommonResultDTO;
@@ -21,6 +22,8 @@ public interface UserService extends IService<User> {
     @Transactional
     boolean updateUser(UserDTO userDTO, Long operatorId);
 
+
+    IPage<UserDTO> listSubUsers(Long operatorId, IPage<User> page);
 
     @Transactional
     CommonResultDTO<?> chargeUser(Long targetUserId, BigDecimal amount, Long operatorId, boolean isRecharge);

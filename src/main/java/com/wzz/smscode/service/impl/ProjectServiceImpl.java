@@ -2,20 +2,20 @@ package com.wzz.smscode.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.wzz.smscode.dto.ProjectDTO;
+import com.wzz.smscode.dto.ProjectPriceDetailsDTO;
 import com.wzz.smscode.dto.ProjectPriceSummaryDTO;
 import com.wzz.smscode.entity.Project;
 import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.mapper.ProjectMapper;
 import com.wzz.smscode.service.ProjectService;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.io.IOException;
 import java.math.BigDecimal;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -25,80 +25,120 @@ import java.util.stream.Collectors;
 @Service
 public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> implements ProjectService {
 
-    // Spring会自动注入 baseMapper，它就是 ProjectMapper 的实例
-    // @Autowired private ProjectMapper projectMapper; // 此行可省略
-
-    @Autowired
-    private ObjectMapper objectMapper; // 引入Jackson库用于JSON操作
-
     @Transactional
     @Override
-    public boolean addProjectLine(Project project) {
-        // 1. 验证 (project_id, line_id) 组合是否唯一
-        LambdaQueryWrapper<Project> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(Project::getProjectId, project.getProjectId())
-                .eq(Project::getLineId, project.getLineId());
-
-        if (this.baseMapper.selectCount(wrapper) > 0) {
+    public boolean createProject(ProjectDTO projectDTO) {
+        // 检查组合键是否已存在
+        if (getProject(projectDTO.getProjectId(), projectDTO.getLineId()) != null) {
             throw new BusinessException(
-                    String.format("项目线路已存在: projectId=%s, lineId=%s", project.getProjectId(), project.getLineId())
+                    String.format("项目线路已存在: projectId=%s, lineId=%s", projectDTO.getProjectId(), projectDTO.getLineId())
             );
         }
+        // DTO 转换为 实体
+        Project project = new Project();
+        BeanUtils.copyProperties(projectDTO, project);
+        // costPrice 和 priceMax/Min 在 DTO 和 Entity 中字段名可能不一致，需要手动映射
+        // project.setPrice(projectDTO.getCostPrice());
+        // project.setMaxPrice(projectDTO.getPriceMax());
+        // project.setMinPrice(projectDTO.getPriceMin());
 
-        // 2. 插入数据
         return this.save(project);
     }
 
+    @Transactional
     @Override
-    public List<Project> listLinesByProjectId(String projectId) {
-        return this.list(new LambdaQueryWrapper<Project>().eq(Project::getProjectId, projectId));
+    public boolean updateProject(ProjectDTO projectDTO) {
+        Project existingProject = getProject(projectDTO.getProjectId(), projectDTO.getLineId());
+        if (existingProject == null) {
+            return false; // 记录不存在，更新失败
+        }
+
+        Project projectToUpdate = new Project();
+        BeanUtils.copyProperties(projectDTO, projectToUpdate);
+        // 确保主键 ID 被设置，以便 Mybatis-Plus 按 ID 更新
+        projectToUpdate.setId(existingProject.getId());
+
+        return this.updateById(projectToUpdate);
+    }
+
+    @Transactional
+    @Override
+    public boolean deleteProject(String projectId, Integer lineId) {
+        // TODO: 在删除前，应检查是否有号码记录等关联数据正在使用此线路
+        // 例如: if (numberRecordService.isLineInUse(projectId, lineId)) { throw new BusinessException("线路正在使用中，无法删除"); }
+
+        LambdaQueryWrapper<Project> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(Project::getProjectId, projectId)
+                .eq(Project::getLineId, lineId);
+
+        return this.remove(wrapper);
+    }
+
+    @Override
+    public Project getProject(String projectId, Integer lineId) {
+        LambdaQueryWrapper<Project> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(Project::getProjectId, projectId)
+                .eq(Project::getLineId, lineId);
+        return this.getOne(wrapper);
+    }
+
+    @Override
+    public List<Integer> listLines(String projectId) {
+        LambdaQueryWrapper<Project> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(Project::getProjectId, projectId)
+                .select(Project::getLineId); // 优化查询，只选择 lineId 列
+
+        List<Project> projects = this.list(wrapper);
+
+        return projects.stream()
+                .map(Project::getLineId)
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public Map<String, ProjectPriceDetailsDTO> getAllProjectPrices() {
+        List<Project> allLines = this.list();
+        if (allLines.isEmpty()) {
+            return Collections.emptyMap();
+        }
+
+        return allLines.stream()
+                .collect(Collectors.toMap(
+                        p -> p.getProjectId() + "-" + p.getLineId(), // key
+                        p -> new ProjectPriceDetailsDTO(p.getPriceMin(),p.getPriceMax(), p.getCostPrice()) // value
+                ));
+    }
+
+    @Override
+    public Map<String, BigDecimal> fillMissingPrices(Map<String, BigDecimal> inputPrices) {
+        // 1. 获取所有项目的价格摘要信息（包含最高价）
+        Map<String, ProjectPriceSummaryDTO> priceSummaries = getAllProjectPriceSummaries();
+        // 2. 获取系统中所有的项目线路
+        List<Project> allProjectLines = this.list();
+
+        // 3. 遍历所有线路，检查并补全
+        for (Project line : allProjectLines) {
+            String priceKey = line.getProjectId() + "-" + line.getLineId();
+            // 使用 computeIfAbsent 更简洁
+            inputPrices.computeIfAbsent(priceKey, k -> {
+                ProjectPriceSummaryDTO summary = priceSummaries.get(line.getProjectId());
+                if (summary != null && summary.getMaxPrice() != null) {
+                    log.info("价格补全: 线路 '{}' 缺失, 使用项目 '{}' 的最高价 '{}' 进行填充。", k, line.getProjectId(), summary.getMaxPrice());
+                    return summary.getMaxPrice();
+                } else {
+                    log.warn("价格补全警告: 线路 '{}' 所属的项目 '{}' 没有找到价格摘要信息，使用线路自身成本价 {} 填充。", k, line.getProjectId(), line.getCostPrice());
+                    return line.getCostPrice(); // 降级方案
+                }
+            });
+        }
+        return inputPrices;
     }
 
     @Override
     public Map<String, ProjectPriceSummaryDTO> getAllProjectPriceSummaries() {
+        // 此方法为内部服务，依赖于 Mapper 中的自定义 SQL
         List<ProjectPriceSummaryDTO> summaries = this.baseMapper.selectProjectPriceSummaries();
-        // 将列表转换为Map，方便按projectId快速查找
         return summaries.stream()
-                .collect(Collectors.toMap(ProjectPriceSummaryDTO::getProjectId, Function.identity()));
-    }
-
-    @Override
-    public String completeUserPrices(String userPricesJson) {
-        try {
-            // 1. 解析用户传入的JSON为Map
-            Map<String, BigDecimal> userPrices = objectMapper.readValue(userPricesJson, new TypeReference<Map<String, BigDecimal>>() {});
-
-            // 2. 获取所有项目的价格摘要信息（包含最高价）
-            Map<String, ProjectPriceSummaryDTO> priceSummaries = getAllProjectPriceSummaries();
-
-            // 3. 获取系统中所有的项目线路
-            List<Project> allProjectLines = this.list();
-
-            boolean isModified = false;
-            // 4. 遍历所有线路，检查并补全
-            for (Project line : allProjectLines) {
-                String priceKey = line.getProjectId() + "-" + line.getLineId();
-                if (!userPrices.containsKey(priceKey)) {
-                    // 5. 如果缺失，找到该线路所属项目的最高价进行填充
-                    ProjectPriceSummaryDTO summary = priceSummaries.get(line.getProjectId());
-                    if (summary != null && summary.getMaxPrice() != null) {
-                        log.info("价格补全: 线路'{}'缺失, 使用项目'{}'的最高价'{}'进行填充。", priceKey, line.getProjectId(), summary.getMaxPrice());
-                        userPrices.put(priceKey, summary.getMaxPrice());
-                        isModified = true;
-                    } else {
-                        // 异常处理：如果某个项目没有线路或者价格信息，这可能是一个数据问题
-                        log.warn("价格补全警告: 线路'{}'所属的项目'{}'没有找到价格摘要信息，无法进行价格补全。", priceKey, line.getProjectId());
-                    }
-                }
-            }
-
-            // 6. 如果Map被修改过，则序列化为新的JSON字符串返回，否则返回原字符串
-            return isModified ? objectMapper.writeValueAsString(userPrices) : userPricesJson;
-
-        } catch (IOException e) {
-            log.error("解析用户价格JSON失败: " + userPricesJson, e);
-            // 根据业务需求，可以抛出自定义异常或返回原始JSON
-            throw new RuntimeException("无效的用户价格JSON格式", e);
-        }
+                .collect(Collectors.toMap(ProjectPriceSummaryDTO::getProjectId, Function.identity(), (a, b) -> a));
     }
 }
