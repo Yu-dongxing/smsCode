@@ -14,6 +14,7 @@ import com.wzz.smscode.service.UserService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -26,6 +27,7 @@ import java.util.Date;
 public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLedger> implements UserLedgerService {
 
     @Autowired
+    @Lazy
     private UserService userService; // 注入用户服务用于身份认证
 
     /**

@@ -48,9 +48,39 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         return null;
     }
 
+
+    /**
+     * 计算用户余额（）
+     */
+
+
+    /**
+     * 计算用户
+     * @param userId
+     * @param password
+     * @return
+     */
+
+    @Override
+    public User authenticateUserByUserName(String userId, String password) {
+        LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
+        queryWrapper.eq(User::getUserName,userId);
+
+        User user = this.getOne(queryWrapper);
+        if (user != null && passwordEncoder.matches(password, user.getPassword())) {
+            return user;
+        }
+        return null;
+    }
+
     @Override
     public CommonResultDTO<BigDecimal> getBalance(Long userId, String password) {
-        User user = authenticate(userId, password);
+        return null;
+    }
+
+    @Override
+    public CommonResultDTO<BigDecimal> getBalance(String userName, String password) {
+        User user = authenticateUserByUserName(userName, password);
         if (user == null) {
             return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED, "用户ID或密码错误");
         }
@@ -419,5 +449,15 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         }
 
         return defaultPrices;
+    }
+
+    /**
+     * 通过用户名查询用户
+     */
+    @Override
+    public User getByUserName(String userName){
+        LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
+        queryWrapper.eq(User::getUserName,userName);
+        return this.getOne(queryWrapper);
     }
 }

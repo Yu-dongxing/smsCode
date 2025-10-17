@@ -14,12 +14,19 @@ public interface NumberRecordService extends IService<NumberRecord> {
     @Transactional
     CommonResultDTO<String> getNumber(Long userId, String password, String projectId, Integer lineId);
 
+    @Transactional
+    CommonResultDTO<String> getNumber(String userName, String password, String projectId, Integer lineId);
+
     @Async("taskExecutor") // 指定使用的线程池Bean名
     void retrieveCode(Long numberId);
 
     CommonResultDTO<String> getCode(Long userId, String password, String phoneNumber);
 
-    IPage<NumberDTO> listUserNumbers(Long userId, String password, Integer statusFilter, Date startTime, Date endTime, IPage<NumberRecord> page);
+    CommonResultDTO<String> getCode(String userName, String password, String phoneNumber);
+
+    IPage<NumberDTO> listUserNumbers(Long userName, String password, Integer statusFilter, Date startTime, Date endTime, IPage<NumberRecord> page);
+
+    IPage<NumberDTO> listUserNumbersByUSerName(String userName, String password, Integer statusFilter, Date startTime, Date endTime, IPage<NumberRecord> page);
 
     IPage<NumberRecord> listAllNumbers(Integer statusFilter, Date startTime, Date endTime, IPage<NumberRecord> page);
 }

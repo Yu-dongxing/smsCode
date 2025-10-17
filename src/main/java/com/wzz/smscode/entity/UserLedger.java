@@ -34,9 +34,6 @@ import java.time.LocalDateTime;
 @Index(name = "idx_timestamp", columns = {"timestamp"}, comment = "操作时间索引，便于按时间范围查询")
 public class UserLedger extends BaseEntity {
 
-    // 主键 id 从 BaseEntity 继承，对应数据库中的主键列 (例如 ledger_id 或 id)
-    // Mybatis-Plus 会自动处理。如果列名不是 id，请在 BaseEntity 的 id 字段上使用 @TableId 指定
-
     /**
      * 该记录所属的用户ID
      */
@@ -73,9 +70,9 @@ public class UserLedger extends BaseEntity {
     private String code;
 
     /**
-     * 金额。正数表示支出（扣款），负数表示收入（充值或退款）。
+     * 变动金额
      */
-    @ColumnComment("金额（正数支出, 负数收入）")
+    @ColumnComment("变动金额")
     @TableField("price")
     private BigDecimal price;
 
@@ -106,6 +103,14 @@ public class UserLedger extends BaseEntity {
     @ColumnComment("资金类型（0-业务扣费, 1-后台操作）")
     @TableField("fund_type")
     private Integer fundType;
+
+    /**
+     * 账本类型（1-入账，0-出账）
+     */
+    @TableField("ledger_type")
+    @ColumnComment("账本类型（1-入账，0-出账）")
+    private Integer ledgerType;
+
 
     /**
      * 备注

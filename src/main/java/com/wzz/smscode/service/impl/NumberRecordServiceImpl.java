@@ -43,14 +43,19 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
     @Autowired private ProjectService projectService;
     @Autowired private UserLedgerService ledgerService;
 
-    // 使用 @Lazy 解决循环依赖问题 (A -> B, B -> A)
+
     @Lazy @Autowired private NumberRecordService self;
+
+    @Override
+    public CommonResultDTO<String> getNumber(Long userId, String password, String projectId, Integer lineId) {
+        return null;
+    }
 
     @Transactional
     @Override
-    public CommonResultDTO<String> getNumber(Long userId, String password, String projectId, Integer lineId) {
+    public CommonResultDTO<String> getNumber(String userName, String password, String projectId, Integer lineId) {
         // 1. 身份验证
-        User user = userService.authenticate(userId, password);
+        User user = userService.authenticateUserByUserName(userName, password);
         if (user == null) return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED, "用户验证失败");
 
         // 2. 用户状态检查
@@ -67,7 +72,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             return CommonResultDTO.error(Constants.ERROR_INSUFFICIENT_BALANCE, "余额不足");
         }
 
-        boolean hasOngoingRecord = this.hasOngoingRecord(userId);
+        boolean hasOngoingRecord = this.hasOngoingRecord(user.getId());
         if (!BalanceUtil.canGetNumber(user, hasOngoingRecord)) {
             return CommonResultDTO.error(Constants.ERROR_INSUFFICIENT_BALANCE, "余额不足或已有进行中的任务");
         }
@@ -85,7 +90,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
 
         // 6. 写入号码记录并启动取码线程
         NumberRecord record = new NumberRecord();
-        record.setUserId(userId);
+        record.setUserId(user.getId());
         record.setProjectId(projectId);
         record.setLineId(lineId);
         record.setPhoneNumber(phoneNumber);
@@ -101,7 +106,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         self.retrieveCode(record.getId());
 
         // 7. 更新统计
-        userService.updateUserStatsForNewNumber(userId, false);
+        userService.updateUserStatsForNewNumber(user.getId(), false);
 
         // 8. 返回结果
         return CommonResultDTO.success("取号成功", phoneNumber);
@@ -145,6 +150,11 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         updateRecordAfterRetrieval(record, code);
     }
 
+    @Override
+    public CommonResultDTO<String> getCode(Long userId, String password, String phoneNumber) {
+        return null;
+    }
+
     @Transactional
     public void updateRecordAfterRetrieval(NumberRecord record, String code) {
         // 重新从数据库获取记录，确保数据最新
@@ -183,14 +193,15 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
 
 
     @Override
-    public CommonResultDTO<String> getCode(Long userId, String password, String phoneNumber) {
-        if (userService.authenticate(userId, password) == null) {
+    public CommonResultDTO<String> getCode(String userName, String password, String phoneNumber) {
+        User user =  userService.authenticateUserByUserName(userName, password);
+        if ( user == null) {
             return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED, "用户验证失败");
         }
 
         NumberRecord record = this.getOne(new LambdaQueryWrapper<NumberRecord>()
                 .eq(NumberRecord::getPhoneNumber, phoneNumber)
-                .eq(NumberRecord::getUserId, userId)
+                .eq(NumberRecord::getUserId, user.getId())
                 .orderByDesc(NumberRecord::getGetNumberTime)
                 .last("LIMIT 1"));
 
@@ -214,6 +225,17 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
 
         LambdaQueryWrapper<NumberRecord> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(NumberRecord::getUserId, userId);
+        addCommonFilters(wrapper, statusFilter, startTime, endTime);
+
+        IPage<NumberRecord> recordPage = this.page(page, wrapper);
+        return recordPage.convert(this::convertToDTO);
+    }
+    @Override
+    public IPage<NumberDTO> listUserNumbersByUSerName(String userName, String password, Integer statusFilter, Date startTime, Date endTime, IPage<NumberRecord> page) {
+        User user =  userService.authenticateUserByUserName(userName, password);
+        if ( user== null) return null;
+        LambdaQueryWrapper<NumberRecord> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(NumberRecord::getUserId, user.getId());
         addCommonFilters(wrapper, statusFilter, startTime, endTime);
 
         IPage<NumberRecord> recordPage = this.page(page, wrapper);

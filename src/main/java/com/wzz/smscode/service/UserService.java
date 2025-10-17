@@ -14,7 +14,11 @@ import java.math.BigDecimal;
 public interface UserService extends IService<User> {
     User authenticate(Long userId, String password);
 
+    User authenticateUserByUserName(String userId, String password);
+
     CommonResultDTO<BigDecimal> getBalance(Long userId, String password);
+
+    CommonResultDTO<BigDecimal> getBalance(String userName, String password);
 
     @Transactional
     boolean createUser(UserCreateDTO dto, Long operatorId);
@@ -37,4 +41,6 @@ public interface UserService extends IService<User> {
     void updateUserStatsForNewNumber(Long userId, boolean codeReceived);
 
     void resetDailyStatsAllUsers();
+
+    User getByUserName(String userName);
 }
