@@ -24,14 +24,14 @@ import java.math.BigDecimal;
 @EqualsAndHashCode(callSuper = true)
 @TableName("user")
 @TableComment("用户表")
-@ForeignKey(
-        name = "fk_user_parent_id",               // 外键约束名称
-        columns = {"parent_id"},                 // 当前表的列
-        referenceEntity = User.class,              // 自我引用，指向 User 实体
-        referencedColumns = {"id"},           // 引用当前表的 user_id 列
-        onDelete = ForeignKeyAction.SET_DEFAULT,      // 当上级代理被删除时，下级用户的parent_id设为NULL
-        onUpdate = ForeignKeyAction.RESTRICT       // 不允许更新上级用户的ID
-)
+//@ForeignKey(
+//        name = "fk_user_parent_id",               // 外键约束名称
+//        columns = {"parent_id"},                 // 当前表的列
+//        referenceEntity = User.class,              // 自我引用，指向 User 实体
+//        referencedColumns = {"id"},           // 引用当前表的 user_id 列
+//        onDelete = ForeignKeyAction.SET_DEFAULT,      // 当上级代理被删除时，下级用户的parent_id设为NULL
+//        onUpdate = ForeignKeyAction.RESTRICT       // 不允许更新上级用户的ID
+//)
 @Index(name = "idx_parent_id", columns = {"parent_id"}, comment = "上级用户ID索引，加速查询下级")
 public class User extends BaseEntity {
 

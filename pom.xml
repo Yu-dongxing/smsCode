@@ -125,10 +125,10 @@
         </dependency>
 
 <!--        密码加密-->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-security</artifactId>
-        </dependency>
+<!--        <dependency>-->
+<!--            <groupId>org.springframework.boot</groupId>-->
+<!--            <artifactId>spring-boot-starter-security</artifactId>-->
+<!--        </dependency>-->
 
         <!-- MyBatis Plus 启动器依赖：增强 MyBatis 功能，简化数据访问层开发 -->
         <dependency>

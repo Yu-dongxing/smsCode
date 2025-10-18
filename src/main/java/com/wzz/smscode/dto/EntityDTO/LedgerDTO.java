@@ -1,9 +1,8 @@
-package com.wzz.smscode.dto;
+package com.wzz.smscode.dto.EntityDTO;
 
 import lombok.Data;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.util.Date;
 
 /**
  * 账本记录传输对象

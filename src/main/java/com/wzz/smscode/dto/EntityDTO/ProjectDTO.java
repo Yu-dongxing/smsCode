@@ -1,4 +1,4 @@
-package com.wzz.smscode.dto;
+package com.wzz.smscode.dto.EntityDTO;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
 import lombok.Data;

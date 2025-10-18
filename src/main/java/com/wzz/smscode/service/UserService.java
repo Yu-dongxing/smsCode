@@ -1,11 +1,12 @@
 package com.wzz.smscode.service;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
-import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.IService;
-import com.wzz.smscode.dto.CommonResultDTO;
-import com.wzz.smscode.dto.UserCreateDTO;
-import com.wzz.smscode.dto.UserDTO;
+import com.wzz.smscode.common.CommonResultDTO;
+import com.wzz.smscode.dto.CreatDTO.UserCreateDTO;
+import com.wzz.smscode.dto.EntityDTO.UserDTO;
+import com.wzz.smscode.dto.LoginDTO.UserLoginDto;
+import com.wzz.smscode.dto.ResultDTO.UserResultDTO;
 import com.wzz.smscode.entity.User;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -43,4 +44,12 @@ public interface UserService extends IService<User> {
     void resetDailyStatsAllUsers();
 
     User getByUserName(String userName);
+
+    Boolean login(UserLoginDto userLoginDto);
+
+    Boolean regist(UserResultDTO userDTO);
+
+    User findAndLockById(Long userId);
+
+    User AgentLogin(String username, String password);
 }

@@ -1,4 +1,4 @@
-package com.wzz.smscode.dto;
+package com.wzz.smscode.common;
 
 import lombok.Data;
 import lombok.NoArgsConstructor;

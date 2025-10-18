@@ -12,9 +12,9 @@ import java.util.List;
 public interface ProjectMapper extends BaseMapper<Project> {
 
     /**
-     * 查询每个项目的价格摘要（最高价和最低价）
+     * 查询每个项目的价格摘要（最高售价的最大值和最低售价的最小值）
      * @return List<ProjectPriceSummaryDTO>
      */
-    @Select("SELECT project_id, MAX(price) as maxPrice, MIN(price) as minPrice FROM project GROUP BY project_id")
+    @Select("SELECT project_id, MAX(price_max) as maxPrice, MIN(price_min) as minPrice FROM project GROUP BY project_id")
     List<ProjectPriceSummaryDTO> selectProjectPriceSummaries();
 }

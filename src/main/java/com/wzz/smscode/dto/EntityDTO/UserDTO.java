@@ -1,4 +1,4 @@
-package com.wzz.smscode.dto;
+package com.wzz.smscode.dto.EntityDTO;
 
 import lombok.Data;
 import java.math.BigDecimal;
@@ -11,6 +11,7 @@ import java.util.Map;
 public class UserDTO {
 
     private Long userId;
+
     private BigDecimal balance;
     /**
      * 用户的项目价格配置（键为 "项目ID-线路ID" 字符串）

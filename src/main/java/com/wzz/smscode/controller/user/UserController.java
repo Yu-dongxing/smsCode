@@ -2,10 +2,12 @@ package com.wzz.smscode.controller.user;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.wzz.smscode.common.CommonResultDTO;
 import com.wzz.smscode.common.Constants;
-import com.wzz.smscode.dto.CommonResultDTO;
-import com.wzz.smscode.dto.NumberDTO;
-import com.wzz.smscode.dto.UserDTO;
+import com.wzz.smscode.dto.*;
+import com.wzz.smscode.dto.EntityDTO.UserDTO;
+import com.wzz.smscode.dto.LoginDTO.UserLoginDto;
+import com.wzz.smscode.dto.ResultDTO.UserResultDTO;
 import com.wzz.smscode.entity.NumberRecord;
 import com.wzz.smscode.entity.User;
 import com.wzz.smscode.service.NumberRecordService;
@@ -164,5 +166,31 @@ public class UserController {
 
         List<Integer> lines = projectService.listLines(projectId);
         return CommonResultDTO.success("查询成功", lines);
+    }
+
+    /**
+     * 用户登录
+     */
+    @PostMapping("/login")
+    public CommonResultDTO<?> userLogin(@RequestBody UserLoginDto userLoginDto){
+        Boolean is_true = userService.login(userLoginDto);
+        if (is_true){
+            return CommonResultDTO.success("用户登录成功");
+        }
+        else {
+            return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED,"用户认证失败！");
+        }
+    }
+    /**
+     * 用户注册（前端不需要使用）
+     */
+    @PostMapping("/regist")
+    public CommonResultDTO<?> userRegist(@RequestBody UserResultDTO userDTO){
+        Boolean is_true = userService.regist(userDTO);
+        if (is_true){
+            return CommonResultDTO.success("用户注册成功");
+        }else {
+            return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED,"用户注册失败！");
+        }
     }
 }

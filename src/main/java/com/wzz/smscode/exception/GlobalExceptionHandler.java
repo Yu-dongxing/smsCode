@@ -1,5 +1,6 @@
 package com.wzz.smscode.exception;
 
+import cn.dev33.satoken.exception.NotLoginException;
 import cn.dev33.satoken.exception.SaTokenException;
 import com.wzz.smscode.common.Result;
 import lombok.extern.slf4j.Slf4j;
@@ -7,8 +8,10 @@ import org.mybatis.spring.MyBatisSystemException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.BindException;
+import org.springframework.validation.FieldError;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -25,20 +28,66 @@ public class GlobalExceptionHandler {
     }
 
     // 参数校验异常-方法参数校验
-    @ExceptionHandler(MethodArgumentNotValidException.class)
-    public Result<?> handleMethodArgumentNotValidException(MethodArgumentNotValidException e) {
-        String msg = e.getBindingResult().getFieldError() != null ?
-                e.getBindingResult().getFieldError().getDefaultMessage() : "参数校验失败";
-        log.warn("参数校验异常: {}, 错误信息={}", msg, e);
-        return Result.error(400, msg);
-    }
+//    @ExceptionHandler(MethodArgumentNotValidException.class)
+//    public Result<?> handleMethodArgumentNotValidException(MethodArgumentNotValidException e) {
+//        String msg = e.getBindingResult().getFieldError() != null ?
+//                e.getBindingResult().getFieldError().getDefaultMessage() : "参数校验失败";
+//        log.warn("参数校验异常: {}, 错误信息={}", msg, e);
+//        return Result.error(400, msg);
+//    }
+//    /**
+//     * 【重点修改】参数校验异常 (JSR-303)
+//     * 这个方法整合了 @RequestBody 和 @RequestParam/ModelAttribute 的参数校验
+//     */
+//    @ExceptionHandler({MethodArgumentNotValidException.class, BindException.class})
+//    @ResponseStatus(HttpStatus.BAD_REQUEST)
+//    public Result<?> handleValidationException(BindException e) {
+//        // 从异常中获取第一个字段错误
+//        FieldError fieldError = e.getBindingResult().getFieldError();
+//        String msg = "参数校验失败";
+//        if (fieldError != null) {
+//            msg = fieldError.getField() + " " + fieldError.getDefaultMessage();
+//        }
+//        log.warn("参数校验异常: {}", msg);
+//        return Result.error(400, msg);
+//    }
 
     // 参数校验异常-BindException
-    @ExceptionHandler(BindException.class)
+//    @ExceptionHandler(BindException.class)
+//    public Result<?> handleBindException(BindException e) {
+//        String msg = e.getBindingResult().getFieldError() != null ?
+//                e.getBindingResult().getFieldError().getDefaultMessage() : "参数绑定失败";
+//        log.warn("参数绑定异常: {}, 错误信息={}", msg, e);
+//        return Result.error(400, msg);
+//    }
+    /**
+     * 【推荐】统一处理参数校验异常 (JSR-303)
+     * 整合了对 @RequestBody, @RequestParam, @ModelAttribute 等参数校验失败的处理
+     */
+    @ExceptionHandler(BindException.class) // 只捕获父类即可
+    @ResponseStatus(HttpStatus.BAD_REQUEST) // 使用此注解可让Spring自动设置HTTP状态码
     public Result<?> handleBindException(BindException e) {
-        String msg = e.getBindingResult().getFieldError() != null ?
-                e.getBindingResult().getFieldError().getDefaultMessage() : "参数绑定失败";
-        log.warn("参数绑定异常: {}, 错误信息={}", msg, e);
+        String msg = "参数校验失败";
+        FieldError fieldError = e.getBindingResult().getFieldError();
+        if (fieldError != null) {
+            // 返回更具体的错误信息，如: "username 不能为空"
+//            msg = fieldError.getDefaultMessage();
+            // 如果想包含字段名，可以这样:
+             msg = fieldError.getField() + " " + fieldError.getDefaultMessage();
+        }
+        // 记录更通用的日志
+        log.warn("参数校验或绑定异常: {}", msg, e);
+        return Result.error(400, msg);
+    }
+    /**
+     * 【新增】处理单个必需参数缺失的异常 (@RequestParam)
+     */
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public Result<?> handleMissingServletRequestParameterException(MissingServletRequestParameterException e) {
+        // 格式化为: "必需的请求参数 '参数名' 不存在"
+        String msg = "必需的请求参数 '" + e.getParameterName() + "' 不存在";
+        log.warn(msg);
         return Result.error(400, msg);
     }
 
@@ -84,6 +133,22 @@ public class GlobalExceptionHandler {
         }
         log.warn("SaToken鉴权异常: code={}, msg={}, 错误信息={}", code, msg, e);
         return Result.error(code, msg);
+    }
+
+    @ExceptionHandler(NotLoginException.class)
+    public Result<?> handleNotLoginException(NotLoginException nle) {
+        // 判断场景, p.s. 这种区分片面, 实际根据前端约定进行灵活处理
+        String message;
+        if (nle.getType().equals(NotLoginException.NOT_TOKEN)) {
+            message = "请求头未提供Token";
+        } else if (nle.getType().equals(NotLoginException.INVALID_TOKEN)) {
+            message = "Token无效";
+        } else if (nle.getType().equals(NotLoginException.TOKEN_TIMEOUT)) {
+            message = "Token已过期";
+        } else {
+            message = "当前会话未登录";
+        }
+        return Result.error(401, message);
     }
 //
 //    // 可以添加自定义业务异常

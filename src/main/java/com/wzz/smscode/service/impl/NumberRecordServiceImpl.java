@@ -7,7 +7,7 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wzz.smscode.common.Constants;
-import com.wzz.smscode.dto.CommonResultDTO;
+import com.wzz.smscode.common.CommonResultDTO;
 import com.wzz.smscode.dto.NumberDTO;
 import com.wzz.smscode.entity.NumberRecord;
 import com.wzz.smscode.entity.Project;
@@ -177,6 +177,8 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             userService.update(null, new LambdaUpdateWrapper<User>()
                     .set(User::getBalance, newBalance)
                     .eq(User::getId, user.getId()));
+
+
 
             // 新增账本记录
             ledgerService.createLedgerEntry(user.getId(), FundType.BUSINESS_DEDUCTION, latestRecord.getPrice().negate(), newBalance, "业务扣费");

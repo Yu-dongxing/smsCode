@@ -14,6 +14,8 @@ public interface UserLedgerMapper extends BaseMapper<UserLedger> {
      * @param userId 用户ID
      * @return 理论余额
      */
-    @Select("SELECT COALESCE(SUM(amount), 0) FROM user_ledger WHERE user_id = #{userId}")
+    @Select("SELECT COALESCE(SUM(CASE WHEN ledger_type = 1 THEN price ELSE -price END), 0)" +
+            "    FROM user_ledger" +
+            "    WHERE user_id = #{userId}")
     BigDecimal sumAmountByUserId(Long userId);
 }

@@ -1,4 +1,4 @@
-package com.wzz.smscode.dto;
+package com.wzz.smscode.dto.CreatDTO;
 
 import lombok.Data;
 import java.math.BigDecimal;
@@ -9,6 +9,11 @@ import java.util.Map;
  */
 @Data
 public class UserCreateDTO {
+
+    /**
+     * 用户名
+     */
+    private String username;
 
     /**
      * 用户ID（编辑时用，新建时可不传）

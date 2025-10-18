@@ -2,7 +2,7 @@ package com.wzz.smscode.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.wzz.smscode.dto.ProjectDTO;
+import com.wzz.smscode.dto.EntityDTO.ProjectDTO;
 import com.wzz.smscode.dto.ProjectPriceDetailsDTO;
 import com.wzz.smscode.dto.ProjectPriceSummaryDTO;
 import com.wzz.smscode.entity.Project;
@@ -140,5 +140,12 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
         List<ProjectPriceSummaryDTO> summaries = this.baseMapper.selectProjectPriceSummaries();
         return summaries.stream()
                 .collect(Collectors.toMap(ProjectPriceSummaryDTO::getProjectId, Function.identity(), (a, b) -> a));
+    }
+
+    @Override
+    public Boolean deleteByID(long id) {
+        LambdaQueryWrapper<Project> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(Project::getId, id);
+        return this.remove(wrapper);
     }
 }

@@ -3,7 +3,8 @@ package com.wzz.smscode.service;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.IService;
-import com.wzz.smscode.dto.LedgerDTO;
+import com.wzz.smscode.dto.CreatDTO.LedgerCreationDTO;
+import com.wzz.smscode.dto.EntityDTO.LedgerDTO;
 import com.wzz.smscode.entity.UserLedger;
 import com.wzz.smscode.enums.FundType;
 import org.springframework.transaction.annotation.Transactional;
@@ -21,4 +22,7 @@ public interface UserLedgerService extends IService<UserLedger> {
 
     @Transactional
     boolean createLedgerEntry(Long userId, FundType fundType, BigDecimal amount, BigDecimal balanceAfter, String remarks);
+
+    @Transactional(rollbackFor = Exception.class) // 确保任何异常都会回滚事务
+    boolean createLedgerAndUpdateBalance(LedgerCreationDTO request);
 }

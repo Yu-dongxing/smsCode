@@ -4,10 +4,12 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.wzz.smscode.dto.LedgerDTO;
+import com.wzz.smscode.dto.CreatDTO.LedgerCreationDTO;
+import com.wzz.smscode.dto.EntityDTO.LedgerDTO;
 import com.wzz.smscode.entity.User;
 import com.wzz.smscode.entity.UserLedger;
 import com.wzz.smscode.enums.FundType;
+import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.mapper.UserLedgerMapper;
 import com.wzz.smscode.service.UserLedgerService;
 import com.wzz.smscode.service.UserService;
@@ -84,17 +86,18 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
     }
 
     /**
-     * 根据用户ID计算其账本中所有金额的总和
+     * [优化] 从账本中计算用户余额（用于审计和数据校对）
+     * <p>
+     * 正常业务中应直接从 User 表的 balance 字段获取余额。
+     * 此方法通过 SQL 直接在数据库中计算，性能高且避免内存溢出。
+     * </p>
      * @param userId 用户id
-     * @return 数值
+     * @return 根据账本计算出的理论总余额
      */
-    //todo  用户金额计算出现错误
     @Override
     public BigDecimal calculateUserBalanceFromLedger(Long userId) {
-        // 为避免内存溢出，不应一次性加载所有记录。
-        // 最优解是直接在数据库层面进行计算。
-        return baseMapper.sumAmountByUserId(userId);
-        // 你需要在 UserLedgerMapper 中添加一个自定义的 SUM 查询方法
+        BigDecimal calculatedBalance = baseMapper.sumAmountByUserId(userId);
+        return calculatedBalance != null ? calculatedBalance : BigDecimal.ZERO;
     }
 
     /*
@@ -142,4 +145,73 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
         // dto.setPrice(ledger.getAmount());
         return dto;
     }
+
+    /**
+     * [核心优化] 统一的账本创建和余额更新方法（接受UserId，Amount）
+     * <p>
+     * 该方法是系统中所有资金变动的唯一入口，确保事务性和数据一致性。
+     * 1. 使用悲观锁锁定用户记录，防止并发问题。
+     * 2. 计算新余额并检查余额是否充足（对于出账）。
+     * 3. 更新用户表中的余额。
+     * 4. 创建详细的资金流水记录。
+     * </p>
+     *
+     * @param request 包含所有账本所需信息的DTO对象
+     * @return 操作成功返回true，否则抛出异常
+     */
+    @Transactional(rollbackFor = Exception.class)
+    @Override
+    public boolean createLedgerAndUpdateBalance(LedgerCreationDTO request) {
+        // 1. 参数校验
+        if (request.getUserId() == null || request.getAmount() == null ||
+                request.getLedgerType() == null || request.getFundType() == null ||
+                request.getAmount().compareTo(BigDecimal.ZERO) <= 0) { // 金额必须是正数
+            throw new IllegalArgumentException("创建账本和更新余额的必要参数缺失或无效");
+        }
+        User user = userService.findAndLockById(request.getUserId());
+        if (user == null) {
+            throw new BusinessException("用户不存在: " + request.getUserId());
+        }
+
+        // 3. 计算余额
+        BigDecimal balanceBefore = user.getBalance();
+        BigDecimal newBalance;
+        BigDecimal amount = request.getAmount();
+
+        // 根据账本类型（入账/出账）计算新余额
+        if (request.getLedgerType() == 1) { // 1-入账
+            newBalance = balanceBefore.add(amount);
+        } else if (request.getLedgerType() == 0) { // 0-出账
+            newBalance = balanceBefore.subtract(amount);
+            // 出账时，检查余额是否充足
+            if (newBalance.signum() < 0) {
+                throw new BusinessException("用户 " + request.getUserId() + " 余额不足");
+            }
+        } else {
+            throw new IllegalArgumentException("无效的账本类型: " + request.getLedgerType());
+        }
+
+        // 4. 更新用户余额
+        user.setBalance(newBalance);
+        boolean userUpdateSuccess = userService.updateById(user);
+        if (!userUpdateSuccess) {
+            log.error("更新用户 {} 余额失败!", user.getId());
+            throw new RuntimeException("更新用户余额失败，事务已回滚");
+        }
+
+        // 5. 创建并保存账本记录
+        UserLedger ledger = new UserLedger();
+        ledger.setUserId(request.getUserId());
+        ledger.setPrice(amount); // `price` 字段记录变动额，始终为正
+        ledger.setLedgerType(request.getLedgerType());
+        ledger.setBalanceBefore(balanceBefore);
+        ledger.setBalanceAfter(newBalance);
+        ledger.setFundType(request.getFundType().getCode());
+        ledger.setTimestamp(LocalDateTime.now());
+        ledger.setRemark(request.getRemark());
+
+        return this.save(ledger);
+    }
+
+
 }

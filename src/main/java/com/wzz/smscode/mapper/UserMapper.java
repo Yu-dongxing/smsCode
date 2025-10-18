@@ -15,4 +15,6 @@ public interface UserMapper extends BaseMapper<User> {
      */
     @Select("SELECT * FROM user WHERE id = #{id} FOR UPDATE")
     User selectByIdForUpdate(Long id);
+
+
 }

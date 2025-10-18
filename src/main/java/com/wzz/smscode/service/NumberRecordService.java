@@ -2,7 +2,7 @@ package com.wzz.smscode.service;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.service.IService;
-import com.wzz.smscode.dto.CommonResultDTO;
+import com.wzz.smscode.common.CommonResultDTO;
 import com.wzz.smscode.dto.NumberDTO;
 import com.wzz.smscode.entity.NumberRecord;
 import org.springframework.scheduling.annotation.Async;
