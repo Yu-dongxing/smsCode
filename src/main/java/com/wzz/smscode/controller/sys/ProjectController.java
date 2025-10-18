@@ -82,4 +82,23 @@ public class ProjectController {
             return Result.error(e.getMessage());
         }
     }
+
+    /**
+     * 添加一个新的项目。
+     *
+     * @param project 项目实体对象，包含需要添加的项目信息
+     * @return 返回一个Result对象。如果添加成功，则返回成功消息"添加成功"；如果添加失败，则返回错误消息"添加失败"或具体的业务异常信息。
+     */
+    @PostMapping("/add")
+    public Result<?> add(@RequestBody Project project){
+        try{
+            Boolean is  =  projectService.save(project);
+            if (is){
+                return Result.success("添加成功");
+            }
+            return Result.error("添加失败！");
+        }catch (BusinessException e){
+            return Result.error(e.getMessage());
+        }
+    }
 }

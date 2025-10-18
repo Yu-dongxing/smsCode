@@ -37,7 +37,7 @@ public class Project extends BaseEntity {
      */
     @ColumnComment("项目线路ID")
     @TableField("line_id")
-    private Integer lineId;
+    private String lineId;
 
     /**
      * 提供服务的域名或基础URL
@@ -72,6 +72,7 @@ public class Project extends BaseEntity {
      */
     @ColumnComment("项目成本价")
     @TableField("cost_price")
+    @DefaultValue("0.00")
     private BigDecimal costPrice;
 
     /**
@@ -79,6 +80,7 @@ public class Project extends BaseEntity {
      */
     @ColumnComment("项目允许设置的最高售价")
     @TableField("price_max")
+    @DefaultValue("0.00")
     private BigDecimal priceMax;
 
     /**
@@ -86,6 +88,7 @@ public class Project extends BaseEntity {
      */
     @ColumnComment("项目允许设置的最低售价")
     @TableField("price_min")
+    @DefaultValue("0.00")
     private BigDecimal priceMin;
 
     /**
@@ -94,7 +97,63 @@ public class Project extends BaseEntity {
     @ColumnComment("是否开启号码筛选（0-关闭, 1-开启）")
     @TableField("enable_filter")
     @DefaultValue("0")
-    private Integer enableFilter; // 使用 Integer 对应 TINYINT，便于处理 0 和 1
+    private Boolean enableFilter; // 使用 Integer 对应 TINYINT，便于处理 0 和 1
+
+    /**
+     * 认证类型（NO_AUTH-无认证, BASIC_AUTH_PARAM-用户名密码（地址栏）, BASIC_AUTH_JSON-用户名密码（JSON）, TOKEN_HEADER-Token（token请求头使用Header）, TOKEN_PARAM-Token（token地址栏））
+     */
+    @ColumnComment("认证类型（NO_AUTH-无认证, BASIC_AUTH_PARAM-用户名密码（地址栏）, BASIC_AUTH_JSON-用户名密码（JSON）, TOKEN_HEADER-Token（token请求头使用Header）, TOKEN_PARAM-Token（token地址栏））")
+    @TableField("auth_type")
+    private String authType;
+
+    /**
+     * 用户名字段的名称，用于构建请求。例如："username", "user", "account"
+     */
+    @ColumnComment("用户名字段名")
+    @TableField("auth_username_field")
+    private String authUsernameField;
+
+    /**
+     * 密码字段的名称，用于构建请求。例如："password", "pass", "secret"
+     */
+    @ColumnComment("密码字段名")
+    @TableField("auth_password_field")
+    private String authPasswordField;
+
+    /**
+     * 实际的认证用户名
+     */
+    @ColumnComment("认证用户名")
+    @TableField("auth_username")
+    private String authUsername;
+
+    /**
+     * 实际的认证密码
+     */
+    @ColumnComment("认证密码")
+    @TableField("auth_password")
+    private String authPassword;
+
+    /**
+     * Token字段的名称，用于构建请求。例如："token", "api_key", "access_token"
+     */
+    @ColumnComment("Token字段名")
+    @TableField("auth_token_field")
+    private String authTokenField;
+
+    /**
+     * Token的值
+     */
+    @ColumnComment("Token值")
+    @TableField("auth_token_value")
+    private String authTokenValue;
+
+    /**
+     * Token的前缀，通常用于Header中。例如："Bearer ", "Token "。注意保留末尾的空格。
+     */
+    @ColumnComment("Token前缀（例如：'Bearer '）")
+    @TableField("auth_token_prefix")
+    private String authTokenPrefix;
 
     /**
      * 筛选API所需的ID或密钥

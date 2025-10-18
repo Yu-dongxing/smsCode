@@ -37,10 +37,6 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
         // DTO 转换为 实体
         Project project = new Project();
         BeanUtils.copyProperties(projectDTO, project);
-        // costPrice 和 priceMax/Min 在 DTO 和 Entity 中字段名可能不一致，需要手动映射
-        // project.setPrice(projectDTO.getCostPrice());
-        // project.setMaxPrice(projectDTO.getPriceMax());
-        // project.setMinPrice(projectDTO.getPriceMin());
 
         return this.save(project);
     }
@@ -83,7 +79,7 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
     }
 
     @Override
-    public List<Integer> listLines(String projectId) {
+    public List<String> listLines(String projectId) {
         LambdaQueryWrapper<Project> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(Project::getProjectId, projectId)
                 .select(Project::getLineId); // 优化查询，只选择 lineId 列
@@ -101,7 +97,6 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
         if (allLines.isEmpty()) {
             return Collections.emptyMap();
         }
-
         return allLines.stream()
                 .collect(Collectors.toMap(
                         p -> p.getProjectId() + "-" + p.getLineId(), // key

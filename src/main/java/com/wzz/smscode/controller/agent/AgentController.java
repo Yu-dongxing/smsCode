@@ -98,7 +98,6 @@ public class AgentController {
     public Result<?> createUser(@RequestBody UserCreateDTO userCreateDTO) {
         long agentId = StpUtil.getLoginIdAsLong();
         try {
-            // 权限校验已转移到 Service 层，Service 层需要使用 agentId 来判断权限
             boolean success = userService.createUser(userCreateDTO, agentId);
             return success ? Result.success("创建成功") : Result.error("创建失败，请稍后重试");
         } catch (IllegalArgumentException | SecurityException | IllegalStateException | BusinessException e) {

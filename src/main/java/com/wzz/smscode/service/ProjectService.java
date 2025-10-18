@@ -24,7 +24,7 @@ public interface ProjectService extends IService<Project> {
 
     Project getProject(String projectId, Integer lineId);
 
-    List<Integer> listLines(String projectId);
+    List<String> listLines(String projectId);
 
     Map<String, ProjectPriceDetailsDTO> getAllProjectPrices();
 

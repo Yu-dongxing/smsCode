@@ -8,7 +8,7 @@ import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
 /**
- * HTTP 请求工具类，基于 OkHttp 封装
+ * HTTP 请求工具类，基于 OkHttp 封装 (支持自定义 Header)
  */
 @Slf4j
 public final class HttpUtil {
@@ -32,7 +32,23 @@ public final class HttpUtil {
      * @return 响应内容字符串，请求失败则返回 null
      */
     public static String get(String url) {
-        Request request = new Request.Builder().url(url).build();
+        return get(url, null); // 调用下面的重载方法，传入空的headers
+    }
+
+    /**
+     * 发送带自定义请求头的 HTTP GET 请求
+     *
+     * @param url     请求的 URL
+     * @param headers 请求头
+     * @return 响应内容字符串，请求失败则返回 null
+     */
+    public static String get(String url, Headers headers) {
+        Request.Builder requestBuilder = new Request.Builder().url(url);
+        if (headers != null) {
+            requestBuilder.headers(headers);
+        }
+        Request request = requestBuilder.build();
+
         try (Response response = client.newCall(request).execute()) {
             if (response.isSuccessful()) {
                 return Objects.requireNonNull(response.body()).string();
@@ -54,8 +70,25 @@ public final class HttpUtil {
      * @return 响应内容字符串，请求失败则返回 null
      */
     public static String post(String url, String json) {
+        return post(url, json, null); // 调用下面的重载方法，传入空的headers
+    }
+
+    /**
+     * 发送带自定义请求头的 HTTP POST 请求 (JSON body)
+     *
+     * @param url     请求的 URL
+     * @param json    请求体 JSON 字符串
+     * @param headers 请求头
+     * @return 响应内容字符串，请求失败则返回 null
+     */
+    public static String post(String url, String json, Headers headers) {
         RequestBody body = RequestBody.create(json, JSON);
-        Request request = new Request.Builder().url(url).post(body).build();
+        Request.Builder requestBuilder = new Request.Builder().url(url).post(body);
+        if (headers != null) {
+            requestBuilder.headers(headers);
+        }
+        Request request = requestBuilder.build();
+
         try (Response response = client.newCall(request).execute()) {
             if (response.isSuccessful()) {
                 return Objects.requireNonNull(response.body()).string();

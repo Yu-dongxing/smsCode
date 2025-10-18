@@ -145,6 +145,10 @@ public class UserController {
     }
 
     /**
+     * 查询项目列表
+     */
+
+    /**
      * 查询某项目的可用线路列表
      *
      * @param userName    用户ID
@@ -153,18 +157,16 @@ public class UserController {
      * @return CommonResultDTO，data 为可用的线路ID集合
      */
     @RequestMapping(value = "/listProjectLines", method = {RequestMethod.GET, RequestMethod.POST})
-    public CommonResultDTO<List<Integer>> listProjectLines(
+    public CommonResultDTO<?> listProjectLines(
             @RequestParam String userName,
             @RequestParam String password,
             @RequestParam String projectId) {
-
         // 权限校验
         User user = userService.authenticateUserByUserName(userName, password);
         if (user == null) {
             return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED, "用户ID或密码错误");
         }
-
-        List<Integer> lines = projectService.listLines(projectId);
+        List<String> lines = projectService.listLines(projectId);
         return CommonResultDTO.success("查询成功", lines);
     }
 
