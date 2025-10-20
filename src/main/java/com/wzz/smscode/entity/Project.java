@@ -6,6 +6,7 @@ import com.wzz.smscode.annotation.ColumnComment;
 import com.wzz.smscode.annotation.DefaultValue;
 import com.wzz.smscode.annotation.TableComment;
 import com.wzz.smscode.common.BaseEntity;
+import com.wzz.smscode.enums.AuthType;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
@@ -13,11 +14,6 @@ import java.math.BigDecimal;
 
 /**
  * 项目表实体类
- * <p>
- * 每个项目代表一个可提供手机号码/验证码服务的来源。
- * 注意：(project_id, line_id) 构成复合主键，确保项目下线路的唯一性。
- * </p>
- * 对应数据库表：project
  */
 @Data
 @EqualsAndHashCode(callSuper = true) // 继承自BaseEntity，建议保留
@@ -47,6 +43,13 @@ public class Project extends BaseEntity {
     private String domain;
 
     /**
+     * 登录接口的路径 (如果需要登录获取Token)
+     */
+    @ColumnComment("登录接口的路径")
+    @TableField("login_route")
+    private String loginRoute;
+
+    /**
      * 获取手机号的接口路径
      */
     @ColumnComment("获取手机号的接口路径")
@@ -67,6 +70,43 @@ public class Project extends BaseEntity {
     @TableField("code_timeout")
     private Integer codeTimeout;
 
+    /**
+     * 接口返回的Token字段名, 例如 "token", "data.accessToken"
+     */
+    @ColumnComment("接口返回的Token字段名")
+    @TableField("response_token_field")
+    private String responseTokenField;
+
+    /**
+     * 接口返回的手机号字段名, 例如 "phone", "data.mobile"
+     */
+    @ColumnComment("接口返回的手机号字段名")
+    @TableField("response_phone_field")
+    private String responsePhoneField;
+
+    /**
+     * 接口返回的用于查询验证码的ID字段名, 例如 "extraParams", "data.sessionId"
+     */
+    @ColumnComment("接口返回的手机号ID字段名")
+    @TableField("response_id_field")
+    private String responseIdField;
+
+    /**
+     * 接口返回的验证码状态字段名, 例如 "status"
+     */
+    @ColumnComment("接口返回的验证码状态字段名")
+    @TableField("response_status_field")
+    private String responseStatusField;
+
+    /**
+     * 接口返回的验证码字段名, 例如 "verificationCode", "data.smsCode"
+     */
+    @ColumnComment("接口返回的验证码字段名")
+    @TableField("response_code_field")
+    private String responseCodeField;
+    /**
+     * 请求接口的tokrn
+     */
     /**
      * 项目成本价（平台获取号码的成本）
      */
@@ -104,7 +144,7 @@ public class Project extends BaseEntity {
      */
     @ColumnComment("认证类型（NO_AUTH-无认证, BASIC_AUTH_PARAM-用户名密码（地址栏）, BASIC_AUTH_JSON-用户名密码（JSON）, TOKEN_HEADER-Token（token请求头使用Header）, TOKEN_PARAM-Token（token地址栏））")
     @TableField("auth_type")
-    private String authType;
+    private AuthType authType;
 
     /**
      * 用户名字段的名称，用于构建请求。例如："username", "user", "account"
@@ -121,14 +161,14 @@ public class Project extends BaseEntity {
     private String authPasswordField;
 
     /**
-     * 实际的认证用户名
+     * 认证用户名
      */
     @ColumnComment("认证用户名")
     @TableField("auth_username")
     private String authUsername;
 
     /**
-     * 实际的认证密码
+     * 认证密码
      */
     @ColumnComment("认证密码")
     @TableField("auth_password")
@@ -151,7 +191,7 @@ public class Project extends BaseEntity {
     /**
      * Token的前缀，通常用于Header中。例如："Bearer ", "Token "。注意保留末尾的空格。
      */
-    @ColumnComment("Token前缀（例如：'Bearer '）")
+    @ColumnComment("Token前缀（例如：Bearer_ ）")
     @TableField("auth_token_prefix")
     private String authTokenPrefix;
 

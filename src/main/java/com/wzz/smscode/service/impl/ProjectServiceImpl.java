@@ -59,6 +59,22 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
 
     @Transactional
     @Override
+    public boolean updateProject(Project projectDTO) {
+        Project existingProject = getProject(projectDTO.getProjectId(), Integer.valueOf(projectDTO.getLineId()));
+        if (existingProject == null) {
+            return false; // 记录不存在，更新失败
+        }
+
+        Project projectToUpdate = new Project();
+        BeanUtils.copyProperties(projectDTO, projectToUpdate);
+        // 确保主键 ID 被设置，以便 Mybatis-Plus 按 ID 更新
+        projectToUpdate.setId(existingProject.getId());
+
+        return this.updateById(projectToUpdate);
+    }
+
+    @Transactional
+    @Override
     public boolean deleteProject(String projectId, Integer lineId) {
         // TODO: 在删除前，应检查是否有号码记录等关联数据正在使用此线路
         // 例如: if (numberRecordService.isLineInUse(projectId, lineId)) { throw new BusinessException("线路正在使用中，无法删除"); }
