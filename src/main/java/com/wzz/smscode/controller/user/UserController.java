@@ -4,14 +4,20 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.wzz.smscode.common.CommonResultDTO;
 import com.wzz.smscode.common.Constants;
+import com.wzz.smscode.common.Result;
 import com.wzz.smscode.dto.*;
 import com.wzz.smscode.dto.EntityDTO.UserDTO;
 import com.wzz.smscode.dto.LoginDTO.UserLoginDto;
 import com.wzz.smscode.dto.ResultDTO.UserResultDTO;
+import com.wzz.smscode.dto.update.UpdateUserDto;
+import com.wzz.smscode.dto.update.UserUpdatePasswardDTO;
 import com.wzz.smscode.entity.NumberRecord;
+import com.wzz.smscode.entity.SystemConfig;
 import com.wzz.smscode.entity.User;
+import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.service.NumberRecordService;
 import com.wzz.smscode.service.ProjectService;
+import com.wzz.smscode.service.SystemConfigService;
 import com.wzz.smscode.service.UserService;
 import com.wzz.smscode.service.impl.UserServiceImpl;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -42,6 +48,8 @@ public class UserController {
     @Autowired
     private ProjectService projectService;
 
+    @Autowired
+    private SystemConfigService systemConfigService;
     /**
      * 获取手机号码
      *
@@ -58,6 +66,32 @@ public class UserController {
             @RequestParam String projectId,
              @RequestParam Integer lineId) {
         return numberRecordService.getNumber(userName, password, projectId, lineId);
+    }
+
+    /**
+     * 更新密码
+     */
+    @PostMapping("/update/passward")
+    public Result<?> updateByUserIdToPassWard(@RequestBody UserUpdatePasswardDTO updateUserDto ){
+        try{
+            Boolean is_ok = userService.updatePassWardByUserName(updateUserDto);
+            if (is_ok){
+                return Result.success("更新成功");
+            }
+            return Result.error("更新失败！");
+        }catch (BusinessException e){
+            return Result.error(e.getMessage());
+        }
+
+    }
+
+    /**
+     * 获取公告接口
+     */
+    @GetMapping("/notice")
+    public Result<?> getUserNotice(){
+        SystemConfig config = systemConfigService.getConfig();
+        return Result.success(config.getSystemNotice());
     }
 
     /**

@@ -73,4 +73,12 @@ public class SystemConfig implements Serializable {
     @TableField("balance_threshold")
     @DefaultValue("0.00")
     private BigDecimal balanceThreshold;
+
+    /**
+     * 系统通知
+     */
+    @ColumnComment("系统通知")
+    @TableField("system_notice")
+    @DefaultValue("'系统通知'")
+    private String systemNotice;
 }

@@ -20,6 +20,9 @@ public interface ProjectService extends IService<Project> {
     boolean updateProject(ProjectDTO projectDTO);
 
     @Transactional
+    boolean updateProject(Project projectDTO);
+
+    @Transactional
     boolean deleteProject(String projectId, Integer lineId);
 
     Project getProject(String projectId, Integer lineId);

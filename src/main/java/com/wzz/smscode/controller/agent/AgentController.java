@@ -74,7 +74,7 @@ public class AgentController {
      */
     @SaCheckLogin // 使用注解，如果未登录，直接抛出异常，由全局异常处理器返回JSON
     @GetMapping("/listUsers") // 推荐使用更具体的 GetMapping
-    public Result<IPage<UserDTO>> listUsers(
+    public Result<?> listUsers(
             @RequestParam(defaultValue = "1") long page,
             @RequestParam(defaultValue = "10") long size) {
 
@@ -85,7 +85,7 @@ public class AgentController {
         checkAgentPermission(agentId);
 
         IPage<User> pageRequest = new Page<>(page, size);
-        IPage<UserDTO> subUsersPage = userService.listSubUsers(agentId, pageRequest);
+        IPage<User> subUsersPage = userService.listSubUsers(agentId, pageRequest);
 
         return Result.success(subUsersPage);
     }

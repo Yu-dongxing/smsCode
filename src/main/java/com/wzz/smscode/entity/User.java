@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.wzz.smscode.annotation.*;
 import com.wzz.smscode.common.BaseEntity;
 import com.wzz.smscode.enums.ForeignKeyAction;
@@ -48,6 +49,7 @@ public class User extends BaseEntity {
      */
     @ColumnComment("密码（加密哈希值）")
     @TableField("password")
+    @JsonIgnore
     private String password;
 
     /**
@@ -137,4 +139,6 @@ public class User extends BaseEntity {
     @TableField("is_agent")
     @DefaultValue("0")
     private Integer isAgent;
+
+
 }
