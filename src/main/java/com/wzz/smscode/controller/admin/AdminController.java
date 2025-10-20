@@ -2,6 +2,7 @@ package com.wzz.smscode.controller.admin;
 
 import cn.dev33.satoken.stp.StpUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.wzz.smscode.common.CommonResultDTO;
@@ -12,9 +13,11 @@ import com.wzz.smscode.dto.CreatDTO.UserCreateDTO;
 import com.wzz.smscode.dto.EntityDTO.LedgerDTO;
 import com.wzz.smscode.dto.EntityDTO.UserDTO;
 import com.wzz.smscode.dto.LoginDTO.AdminLoginDTO;
+import com.wzz.smscode.dto.update.UpdateUserDto;
 import com.wzz.smscode.entity.NumberRecord;
 import com.wzz.smscode.entity.SystemConfig;
 import com.wzz.smscode.entity.User;
+import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.service.*;
 import com.wzz.smscode.service.impl.UserServiceImpl;
 import lombok.Data;
@@ -29,7 +32,9 @@ import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * 管理员后台接口控制器
@@ -93,11 +98,11 @@ public class AdminController {
         if (parentId != null) {
             return Result.success(userService.listSubUsers(parentId, new Page<>(page, size)));
         }
-
         // 如果未提供 parentId，则查询所有用户
         IPage<User> pageRequest = new Page<>(page, size);
         IPage<User> userPage = userService.page(pageRequest, new LambdaQueryWrapper<User>().orderByDesc(User::getId));
-        return Result.success("查询成功", userPage.convert(((UserServiceImpl) userService)::convertToDTO));
+//        return Result.success("查询成功", userPage.convert(((UserServiceImpl) userService)::convertToDTO));
+        return Result.success("查询成功", userPage);
     }
 
     /**
@@ -117,19 +122,35 @@ public class AdminController {
     }
 
     /**
-     * 修改用户信息
+     * 编辑用户信息
      * @param userDTO
      * @return
      */
     @PostMapping("/updateUser")
-    public Result<?> updateUser(@RequestBody UserDTO userDTO) {
+    public Result<?> updateUser(@RequestBody User userDTO) {
         try {
-            // + 管理员操作，operatorId 直接传入 0L
-            boolean success = userService.updateUser(userDTO, 0L);
+            boolean success = userService.updateUserByEn(userDTO, 0L);
             return success ? Result.success("修改成功") : Result.error(-5, "信息无变化或修改失败");
         } catch (Exception e) {
             return Result.error(-5, e.getMessage());
         }
+    }
+
+    /**
+     * 根据用户id更新密码
+     */
+    @PostMapping("/update/passward")
+    public Result<?> updateByUserIdToPassWard(@RequestBody UpdateUserDto updateUserDto ){
+        try{
+            Boolean is_ok = userService.updatePassWardByUserId(updateUserDto);
+            if (is_ok){
+                return Result.success("更新成功");
+            }
+            return Result.error("更新失败！");
+        }catch (BusinessException e){
+            return Result.error(e.getMessage());
+        }
+
     }
 
     /**
@@ -291,14 +312,45 @@ public class AdminController {
 
     @Data
     private static class SystemStatsDTO {
+        /**
+         * 总共用户数
+         */
         private Long totalUsers;
+        /**
+         * 总代理数
+         */
         private Long totalAgents;
+        /**
+         * 总取号数
+         */
         private Long totalNumbersReceived;
+        /**
+         * 总取码数
+         */
         private Long totalCodesReceived;
+        /**
+         * 总体回码率
+         */
         private String overallCodeRate;
+        /**
+         * 近24小时取号数
+         */
         private Long last24hNumbers;
+        /**
+         * 近24小时取码数
+         */
+
         private Long last24hCodes;
+
+        /**
+         * 近24小时回码率
+         */
         private String last24hCodeRate;
+
+        /**
+         * 总余额
+         */
+        private String totalPrice;
     }
 
     /**
@@ -343,8 +395,31 @@ public class AdminController {
         } else {
             stats.setLast24hCodeRate("0.00%");
         }
+        // 创建 QueryWrapper 用于构建 SQL 查询
+        QueryWrapper<User> queryWrapper = new QueryWrapper<>();
+        // 使用 SQL 的 SUM 函数计算 balance 列的总和，并设置别名为 totalBalance
+        queryWrapper.select("sum(balance) as totalBalance");
+
+        // 执行查询，返回一个 Map
+        Map<String, Object> map = userService.getMap(queryWrapper);
+
+        BigDecimal totalBalance = BigDecimal.ZERO;
+        if (map != null && map.get("totalBalance") != null) {
+            // 将结果转换为 BigDecimal
+            totalBalance = new BigDecimal(map.get("totalBalance").toString());
+        }
+        stats.setTotalPrice(totalBalance.setScale(2, RoundingMode.HALF_UP).toString());
 
         return Result.success("统计数据获取成功", stats);
+    }
+
+    /**
+     * 获取公告接口
+     */
+    @GetMapping("/get/user/notice")
+    public Result<?> getUserNotice(){
+        SystemConfig config = systemConfigService.getConfig();
+        return Result.success(config.getSystemNotice());
     }
 
     /**
@@ -422,5 +497,61 @@ public class AdminController {
             return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED, "管理员验证失败或无权限");
         }
         return CommonResultDTO.success();
+    }
+
+    /**
+     * + DTO for daily statistics trend
+     */
+    @Data
+    public static class DailyStatsDTO {
+        /**
+         * 日期
+         */
+        private String date;
+        /**
+         *
+         */
+        private Long numberCount;
+//        private Long codeCount;
+    }
+
+    /**
+     * 返回每日号码/验证码数量趋势
+     * @param days 查询最近 N 天的数据，默认为 30
+     * @return 包含每日统计数据的列表
+     */
+    @GetMapping("/dailyStatsTrend")
+    public Result<List<DailyStatsDTO>> getDailyStatsTrend(@RequestParam(defaultValue = "30") int days) {
+        try {
+            LocalDateTime startTime = LocalDateTime.now().minusDays(days);
+            QueryWrapper<NumberRecord> queryWrapper = new QueryWrapper<>();
+            queryWrapper.select(
+                            "DATE(get_number_time) as date",
+                            "count(id) as numberCount",
+                            "sum(case when status = 2 then 1 else 0 end) as codeCount"
+                    )
+                    .ge("get_number_time", startTime)
+                    .groupBy("date")
+                    .orderByAsc("date");
+            List<Map<String, Object>> resultMaps = numberRecordService.listMaps(queryWrapper);
+            List<DailyStatsDTO> dailyStats = resultMaps.stream().map(map -> {
+                DailyStatsDTO dto = new DailyStatsDTO();
+                Object dateObj = map.get("date");
+                dto.setDate(dateObj != null ? dateObj.toString() : "");
+                Object numberCountObj = map.getOrDefault("numberCount", 0);
+                dto.setNumberCount(Long.parseLong(String.valueOf(numberCountObj)));
+//                Object codeCountObj = map.getOrDefault("codeCount", 0);
+//                if (codeCountObj == null) {
+//                    dto.setCodeCount(0L);
+//                } else {
+//                    dto.setCodeCount(new BigDecimal(String.valueOf(codeCountObj)).longValue());
+//                }
+                return dto;
+            }).collect(Collectors.toList());
+            return Result.success("查询成功", dailyStats);
+        } catch (Exception e) {
+            log.error("查询每日趋势数据失败", e);
+            return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，查询趋势数据失败");
+        }
     }
 }

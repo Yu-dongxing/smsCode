@@ -11,13 +11,11 @@ import com.wzz.smscode.common.CommonResultDTO;
 import com.wzz.smscode.dto.NumberDTO;
 import com.wzz.smscode.entity.NumberRecord;
 import com.wzz.smscode.entity.Project;
+import com.wzz.smscode.entity.SystemConfig;
 import com.wzz.smscode.entity.User;
 import com.wzz.smscode.enums.FundType;
 import com.wzz.smscode.mapper.NumberRecordMapper;
-import com.wzz.smscode.service.NumberRecordService;
-import com.wzz.smscode.service.ProjectService;
-import com.wzz.smscode.service.UserLedgerService;
-import com.wzz.smscode.service.UserService;
+import com.wzz.smscode.service.*;
 import com.wzz.smscode.util.BalanceUtil;
 import com.wzz.smscode.util.HttpUtil;
 import com.wzz.smscode.util.RegexUtil;
@@ -46,6 +44,9 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
 
     @Lazy @Autowired private NumberRecordService self;
 
+    @Autowired
+    private SystemConfigService systemConfigService;
+
     @Override
     public CommonResultDTO<String> getNumber(Long userId, String password, String projectId, Integer lineId) {
         return null;
@@ -58,10 +59,15 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         User user = userService.authenticateUserByUserName(userName, password);
         if (user == null) return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED, "用户验证失败");
 
+
+        SystemConfig config = systemConfigService.getConfig();
+
         // 2. 用户状态检查
         if (user.getStatus() != 0) return CommonResultDTO.error(-5, "用户已被禁用");
-        // TODO: 回码率过低封禁逻辑
-        // if(config.enableBanMode && user.getDailyCodeRate() < config.getMinCodeRate()) { ... }
+
+         if(config.getEnableBanMode()==1 && user.getDailyCodeRate() < config.getMin24hCodeRate()) {
+             return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR,"回码率过低封禁");
+         }
 
         // 3. 余额与阈值检查
         Project project = projectService.getProject(projectId, lineId);
@@ -78,38 +84,38 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         }
 
         // 4. 调用取号 API
-        String url = project.getDomain() + project.getGetNumberRoute();
-        String response = HttpUtil.get(url);
-        if (response == null) return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，获取号码失败");
+//        String url = project.getDomain() + project.getGetNumberRoute();
+//        String response = HttpUtil.get(url);
+//        if (response == null) return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，获取号码失败");
 
-        String phoneNumber = RegexUtil.extractPhoneNumber(response);
-        if (phoneNumber == null) return CommonResultDTO.error(Constants.ERROR_NO_NUMBER, "无可用号码");
+//        String phoneNumber = RegexUtil.extractPhoneNumber(response);
+//        if (phoneNumber == null) return CommonResultDTO.error(Constants.ERROR_NO_NUMBER, "无可用号码");
 
         // 5. 号码筛选 (可选)
         // if (project.getEnableFilter()) { ... }
 
         // 6. 写入号码记录并启动取码线程
-        NumberRecord record = new NumberRecord();
-        record.setUserId(user.getId());
-        record.setProjectId(projectId);
-        record.setLineId(lineId);
-        record.setPhoneNumber(phoneNumber);
-        record.setStatus(0); // 待取码
-        record.setCharged(1);
-        record.setPrice(price);
-        record.setBalanceBefore(user.getBalance());
-        record.setBalanceAfter(user.getBalance()); // 暂未扣费
-        record.setGetNumberTime(LocalDateTime.now());
-        this.save(record);
+//        NumberRecord record = new NumberRecord();
+//        record.setUserId(user.getId());
+//        record.setProjectId(projectId);
+//        record.setLineId(lineId);
+//        record.setPhoneNumber(phoneNumber);
+//        record.setStatus(0); // 待取码
+//        record.setCharged(1);
+//        record.setPrice(price);
+//        record.setBalanceBefore(user.getBalance());
+//        record.setBalanceAfter(user.getBalance()); // 暂未扣费
+//        record.setGetNumberTime(LocalDateTime.now());
+//        this.save(record);
 
         // 异步启动取码任务
-        self.retrieveCode(record.getId());
+//        self.retrieveCode(record.getId());
 
         // 7. 更新统计
         userService.updateUserStatsForNewNumber(user.getId(), false);
 
         // 8. 返回结果
-        return CommonResultDTO.success("取号成功", phoneNumber);
+        return CommonResultDTO.success("取号成功");
     }
 
     @Async("taskExecutor")

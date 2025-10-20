@@ -15,6 +15,8 @@ import com.wzz.smscode.dto.CreatDTO.UserCreateDTO;
 import com.wzz.smscode.dto.EntityDTO.UserDTO;
 import com.wzz.smscode.dto.LoginDTO.UserLoginDto;
 import com.wzz.smscode.dto.ResultDTO.UserResultDTO;
+import com.wzz.smscode.dto.update.UpdateUserDto;
+import com.wzz.smscode.dto.update.UserUpdatePasswardDTO;
 import com.wzz.smscode.entity.Project;
 import com.wzz.smscode.entity.User;
 import com.wzz.smscode.enums.FundType;
@@ -72,6 +74,34 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             return user;
         }
         return null;
+    }
+
+    @Override
+    public boolean updateUserByEn(User userDTO, long l) {
+        return updateById(userDTO);
+    }
+
+    @Override
+    public Boolean updatePassWardByUserId(UpdateUserDto id) {
+        User user = userMapper.selectById(id.getUserId());
+        if (user==null){
+            throw new BusinessException(0,"用户查询失败");
+        }
+        user.setPassword(id.getUserPassword());
+        return updateById(user);
+    }
+
+    @Override
+    public Boolean updatePassWardByUserName(UserUpdatePasswardDTO updateUserDto) {
+        User user = getByUserName(updateUserDto.getUserName());
+        if (user == null){
+            throw new BusinessException(0,"没有该用户！");
+        }
+        if (!user.getPassword().equals(updateUserDto.getOldPassword())){
+            throw new BusinessException(0,"用户名旧密码不正确");
+        }
+        user.setPassword(updateUserDto.getNewPassword());
+        return updateById(user);
     }
 
 
@@ -255,13 +285,13 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
 
 
     @Override
-    public IPage<UserDTO> listSubUsers(Long operatorId, IPage<User> page) {
-        // TODO: 管理员(operatorId)可查询所有用户，需加判断逻辑
+    public IPage<User> listSubUsers(Long operatorId, IPage<User> page) {
+
         LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(User::getParentId, operatorId);
 
         IPage<User> userPage = this.page(page, wrapper);
-        return userPage.convert(this::convertToDTO);
+        return userPage;
     }
 
 
