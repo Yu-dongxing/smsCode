@@ -1,10 +1,68 @@
 package com.wzz.smscode.util;
 
+import com.wzz.smscode.entity.Project;
+import com.wzz.smscode.exception.BusinessException;
+import org.springframework.stereotype.Component;
+
+import java.util.Map;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+@Component
 public class ResponseParser {
+
+
+
+    // 匹配中国大陆手机号
+    private static final Pattern PHONE_NUMBER_PATTERN = Pattern.compile("(1[3-9]\\d{9})");
+
+    // 匹配4位或6位验证码，兼容有无引号的情况
+    // 正则解释: 匹配一个冒号(:)，后面可能跟0到多个空格(\s*)，然后可能有一个双引号或单引号(["']?)
+    // 捕获组(\d{4,6})匹配4到6位数字，最后再匹配一个可选的引号。
+    private static final Pattern VERIFICATION_CODE_PATTERN = Pattern.compile(":\\s*[\"']?(\\d{4,6})[\"']?");
+
+
+    public Optional<String> parsePhoneNumber(String responseBody) {
+        if (responseBody == null || responseBody.isEmpty()) {
+            return Optional.empty();
+        }
+        Matcher matcher = PHONE_NUMBER_PATTERN.matcher(responseBody);
+        if (matcher.find()) {
+            return Optional.of(matcher.group(1));
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * 解析手机号和返回的唯一id
+     * @param project
+     * @param responseBody
+     * @return
+     */
+    public Map<String,String> parsePhoneNumberByType(Project project,String responseBody) {
+        if (responseBody == null || responseBody.isEmpty()) {
+            throw new BusinessException(0,"响应为空");
+        }
+        Matcher matcher = PHONE_NUMBER_PATTERN.matcher(responseBody);
+//        if (matcher.find()) {
+//            return Optional.of(matcher.group(1));
+//        }
+//        return Optional.empty();
+        return null;
+    }
+
+    public Optional<String> parseVerificationCode(String responseBody) {
+        if (responseBody == null || responseBody.isEmpty()) {
+            return Optional.empty();
+        }
+        Matcher matcher = VERIFICATION_CODE_PATTERN.matcher(responseBody);
+        if (matcher.find()) {
+            return Optional.of(matcher.group(1));
+        }
+        return Optional.empty();
+    }
+
 
     /**
      * 从JSON格式的响应体中，根据字段名提取其值。

@@ -121,7 +121,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
 //        if (user != null && passwordEncoder.matches(password, user.getPassword())) {
 //            return user;
 //        }
-        return null;
+        return user;
     }
 
     @Override

@@ -11,7 +11,9 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.Date;
 
 public interface NumberRecordService extends IService<NumberRecord> {
-    @Transactional
+//    @Transactional
+//    CommonResultDTO<String> getNumber(Long userId, String password, String projectId, Integer lineId);
+
     CommonResultDTO<String> getNumber(Long userId, String password, String projectId, Integer lineId);
 
     @Transactional
@@ -20,9 +22,24 @@ public interface NumberRecordService extends IService<NumberRecord> {
     @Async("taskExecutor") // 指定使用的线程池Bean名
     void retrieveCode(Long numberId);
 
-    CommonResultDTO<String> getCode(Long userId, String password, String phoneNumber);
 
-    CommonResultDTO<String> getCode(String userName, String password, String phoneNumber);
+//    CommonResultDTO<String> getCode(Long userId, String password, String phoneNumber);
+
+    @Async("taskExecutor")
+    void retrieveCode(Long numberId, String identifier);
+
+
+    // ... 其他方法保持不变 ...
+//    CommonResultDTO<String> getCode(String userName, String password, String identifier);
+
+    // ... 其他方法保持不变 ...
+//    CommonResultDTO<String> getCode(String userName, String password, String identifier);
+
+    // ... 其他方法保持不变 ...
+//    CommonResultDTO<String> getCode(String userName, String password, String identifier);
+
+    // ... 其他方法保持不变 ...
+    CommonResultDTO<String> getCode(String userName, String password, String identifier);
 
     IPage<NumberDTO> listUserNumbers(Long userName, String password, Integer statusFilter, Date startTime, Date endTime, IPage<NumberRecord> page);
 

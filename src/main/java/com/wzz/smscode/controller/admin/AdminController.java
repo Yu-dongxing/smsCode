@@ -14,6 +14,7 @@ import com.wzz.smscode.dto.EntityDTO.LedgerDTO;
 import com.wzz.smscode.dto.EntityDTO.UserDTO;
 import com.wzz.smscode.dto.LoginDTO.AdminLoginDTO;
 import com.wzz.smscode.dto.update.UpdateUserDto;
+import com.wzz.smscode.entity.ErrorLog;
 import com.wzz.smscode.entity.NumberRecord;
 import com.wzz.smscode.entity.SystemConfig;
 import com.wzz.smscode.entity.User;
@@ -443,7 +444,7 @@ public class AdminController {
         try {
             boolean success = systemConfigService.updateConfig(config);
             return success ? Result.success("更新成功") : Result.error(-5, "更新失败");
-        } catch (Exception e) {
+        } catch (BusinessException e) {
             return Result.error(-5, e.getMessage());
         }
     }
@@ -457,10 +458,12 @@ public class AdminController {
      * @return 返回一个Result对象，包含查询结果或错误信息。如果管理员验证失败或无
      * */
     @RequestMapping(value = "/listErrorLogs", method = {RequestMethod.GET, RequestMethod.POST})
-    public Result<?> listErrorLogs() {
-        // TODO: 调用 ErrorLogService.listErrors(...)
-//        errorLogService.listErrors()
-        return Result.error(-5, "此功能尚未实现");
+    public Result<?> listErrorLogs(@RequestParam(defaultValue = "1") long page,
+                                   @RequestParam(defaultValue = "10") long size) {
+        Page pageRequest = new Page<>(page, size);
+        IPage<LedgerDTO> resultPage = errorLogService.page(pageRequest);
+
+        return Result.success(resultPage);
     }
 
     /**

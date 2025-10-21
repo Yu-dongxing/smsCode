@@ -68,6 +68,13 @@ public class NumberRecord extends BaseEntity {
     private String phoneNumber;
 
     /**
+     * 平台手机码id
+     */
+    @ColumnComment("平台手机码id")
+    @TableField("api_phone_id")
+    private String apiPhoneId;
+
+    /**
      * 获取到的验证码内容（如果已获取成功）
      */
     @ColumnComment("验证码内容")

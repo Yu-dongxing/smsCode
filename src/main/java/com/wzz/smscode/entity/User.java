@@ -7,11 +7,13 @@ import com.baomidou.mybatisplus.annotation.TableName;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.wzz.smscode.annotation.*;
 import com.wzz.smscode.common.BaseEntity;
+import com.wzz.smscode.dto.ProjectPriceDTO;
 import com.wzz.smscode.enums.ForeignKeyAction;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 /**
  * 用户表实体类
@@ -67,6 +69,8 @@ public class User extends BaseEntity {
     @ColumnComment("项目价格配置JSON")
     @TableField("project_prices")
     private String projectPrices; // 数据库中建议使用 TEXT 或 JSON 类型
+//    private List<ProjectPriceDTO> projectPrices;
+
 
     /**
      * 用户状态（0=正常，1=冻结/禁用等）

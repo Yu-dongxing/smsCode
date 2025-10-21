@@ -3,6 +3,8 @@ import com.baomidou.mybatisplus.annotation.EnumValue;
 import com.fasterxml.jackson.annotation.JsonValue;
 import lombok.Getter;
 
+import java.util.Arrays;
+
 /**
  * API认证类型枚举
  */
@@ -29,11 +31,16 @@ public enum AuthType {
      * 该枚举值用于标识需要通过在HTTP请求头中提供Token进行认证的API访问请求。
      */
     TOKEN_HEADER("TOKEN_HEADER", "Token（Header）"),
+
+    TOKEN_PATH("TOKEN_PATH", "Token认证 (Path Variable)"),
+
     /**
      * 表示使用Token认证方式，其中Token通过URL参数传递的API认证类型。
      * 该枚举值用于标识需要通过在地址栏中以参数形式提供Token进行认证的API访问请求。
      */
     TOKEN_PARAM("TOKEN_PARAM", "Token（地址栏）");
+
+
 
     /**
      * 存储到数据库的值
@@ -50,5 +57,12 @@ public enum AuthType {
     AuthType(String value, String description) {
         this.value = value;
         this.description = description;
+    }
+
+    public static AuthType fromCode(String code) {
+        return Arrays.stream(values())
+                .filter(type -> type.getValue().equalsIgnoreCase(code))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("未知的认证类型: " + code));
     }
 }

@@ -201,4 +201,12 @@ public class Project extends BaseEntity {
     @ColumnComment("筛选API的ID或密钥")
     @TableField("filter_id")
     private String filterId;
+
+    /**
+     * 状态
+     */
+    @TableField("status")
+    @ColumnComment("状态")
+    @DefaultValue("1")
+    private boolean status;
 }
