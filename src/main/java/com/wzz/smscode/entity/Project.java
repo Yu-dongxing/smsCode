@@ -7,6 +7,7 @@ import com.wzz.smscode.annotation.DefaultValue;
 import com.wzz.smscode.annotation.TableComment;
 import com.wzz.smscode.common.BaseEntity;
 import com.wzz.smscode.enums.AuthType;
+import com.wzz.smscode.enums.RequestType;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
@@ -145,6 +146,22 @@ public class Project extends BaseEntity {
     @ColumnComment("认证类型（NO_AUTH-无认证, BASIC_AUTH_PARAM-用户名密码（地址栏）, BASIC_AUTH_JSON-用户名密码（JSON）, TOKEN_HEADER-Token（token请求头使用Header）, TOKEN_PARAM-Token（token地址栏））")
     @TableField("auth_type")
     private AuthType authType;
+
+    /**
+     * 获取手机号接口的请求参数类型 (JSON, FORM, PARAM)
+     */
+    @ColumnComment("获取手机号接口的请求参数类型 (JSON, FORM, PARAM)")
+    @TableField("get_number_request_type")
+    @DefaultValue("'PARAM'")
+    private RequestType getNumberRequestType;
+
+    /**
+     * 获取验证码接口的请求参数类型 (JSON, FORM, PARAM)
+     */
+    @ColumnComment("获取验证码接口的请求参数类型 (JSON, FORM, PARAM)")
+    @TableField("get_code_request_type")
+    @DefaultValue("'PARAM'")
+    private RequestType getCodeRequestType;
 
     /**
      * 用户名字段的名称，用于构建请求。例如："username", "user", "account"
