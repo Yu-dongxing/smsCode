@@ -5,7 +5,6 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wzz.smscode.common.CommonResultDTO;
 import com.wzz.smscode.common.Constants;
@@ -19,11 +18,13 @@ import com.wzz.smscode.dto.update.UpdateUserDto;
 import com.wzz.smscode.dto.update.UserUpdatePasswardDTO;
 import com.wzz.smscode.entity.Project;
 import com.wzz.smscode.entity.User;
+import com.wzz.smscode.entity.UserProjectLine;
 import com.wzz.smscode.enums.FundType;
 import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.mapper.UserMapper;
 import com.wzz.smscode.service.ProjectService;
 import com.wzz.smscode.service.UserLedgerService;
+import com.wzz.smscode.service.UserProjectLineService;
 import com.wzz.smscode.service.UserService;
 import com.wzz.smscode.util.BalanceUtil;
 import lombok.extern.slf4j.Slf4j;
@@ -32,10 +33,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.interceptor.TransactionAspectSupport;
-import org.springframework.util.StringUtils;
+import org.springframework.util.CollectionUtils;
 
 import java.math.BigDecimal;
 import java.util.*;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -138,6 +140,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         return CommonResultDTO.success("查询成功", user.getBalance());
     }
 
+    @Autowired
+    private UserProjectLineService userProjectLineService;
+
     /**
      * [重构] 创建用户并处理初始余额
      * 1. 创建用户实体，初始余额设置为0。
@@ -170,24 +175,50 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         user.setStatus(0); // 默认正常状态
         user.setBalance(BigDecimal.ZERO); // 初始化余额为0
 
-        // 3. 处理价格配置
-        Map<String, BigDecimal> finalPrices = dto.getProjectPrices();
-        if (finalPrices == null || finalPrices.isEmpty()) {
-            finalPrices = generateInitialPricesFor(operator);
-        } else {
-            validateProjectPrices(finalPrices, operator);
-        }
-        try {
-            user.setProjectPrices(objectMapper.writeValueAsString(finalPrices));
-        } catch (Exception e) {
-            throw new RuntimeException("序列化价格JSON失败", e);
-        }
+//        // 3. 处理价格配置
+//        Map<String, BigDecimal> finalPrices = dto.getProjectPrices();
+//        if (finalPrices == null || finalPrices.isEmpty()) {
+//            finalPrices = generateInitialPricesFor(operator);
+//        } else {
+//            validateProjectPrices(finalPrices, operator);
+//        }
+//        try {
+//            user.setProjectPrices(objectMapper.writeValueAsString(finalPrices));
+//        } catch (Exception e) {
+//            throw new RuntimeException("序列化价格JSON失败", e);
+//        }
 
         // 4. 保存用户
         boolean saved = this.save(user);
         if (!saved) {
             throw new RuntimeException("创建用户基础信息失败");
         }
+
+        // 4. [核心改造] 处理价格配置并存入新表
+        List<ProjectPriceDTO> priceSettings = dto.getProjectPrices();
+        if (CollectionUtils.isEmpty(priceSettings)) {
+            priceSettings = generateInitialPricesFor(operator);
+        } else {
+            validateProjectPrices(priceSettings, operator);
+        }
+
+        if (!CollectionUtils.isEmpty(priceSettings)) {
+            List<UserProjectLine> linesToInsert = new ArrayList<>();
+            Map<String, String> projectNames = projectService.list().stream()
+                    .collect(Collectors.toMap(p -> p.getProjectId() + "-" + p.getLineId(), Project::getProjectName, (p1, p2) -> p1));
+
+            for (ProjectPriceDTO priceDto : priceSettings) {
+                UserProjectLine upl = new UserProjectLine();
+                upl.setUserId(user.getId());
+                upl.setProjectId(String.valueOf(priceDto.getProjectId()));
+                upl.setLineId(String.valueOf(priceDto.getLineId()));
+                upl.setProjectName(projectNames.get(priceDto.getProjectId() + "-" + priceDto.getLineId()));
+                upl.setAgentPrice(priceDto.getPrice());
+                linesToInsert.add(upl);
+            }
+            userProjectLineService.saveBatch(linesToInsert);
+        }
+
 
         // 5. [核心改造] 通过统一的账本服务处理初始余额
         BigDecimal initialBalance = dto.getInitialBalance();
@@ -241,35 +272,16 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         if (!isAdmin) {
             User operator = this.getById(operatorId);
             if (operator == null) throw new IllegalArgumentException("操作员不存在");
-            boolean isParent = Objects.equals(targetUser.getParentId(), operatorId);
-            if (!isParent) throw new SecurityException("无权修改该用户信息");
+            if (!Objects.equals(targetUser.getParentId(), operatorId)) {
+                throw new SecurityException("无权修改该用户信息");
+            }
         }
 
         boolean changed = false;
-        // 修改密码
-        // if (StringUtils.hasText(userDTO.getPassword())) { ... }
 
         if (userDTO.getStatus() != null && isAdmin) {
             targetUser.setStatus(userDTO.getStatus());
             changed = true;
-        }
-
-        // 修改价格配置
-        if (userDTO.getProjectPrices() != null) {
-            User operatorForValidation;
-            if (isAdmin) {
-                operatorForValidation = new User();
-                operatorForValidation.setId(0L);
-            } else {
-                operatorForValidation = this.getById(operatorId);
-            }
-            validateProjectPrices(userDTO.getProjectPrices(), operatorForValidation);
-            try {
-                targetUser.setProjectPrices(objectMapper.writeValueAsString(userDTO.getProjectPrices()));
-                changed = true;
-            } catch (Exception e) {
-                throw new RuntimeException("序列化价格JSON失败", e);
-            }
         }
 
         if(userDTO.getIsAgent() != null && isAdmin) {
@@ -278,9 +290,45 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         }
 
         if(changed) {
-            return this.updateById(targetUser);
+            this.updateById(targetUser);
         }
-        return false;
+
+        // [核心改造] 修改价格配置
+        if (userDTO.getProjectPrices() != null) {
+            User operatorForValidation = isAdmin ? new User() {{ setId(0L); }} : this.getById(operatorId);
+
+            // 构造 ProjectPriceDTO 列表用于校验
+            List<ProjectPriceDTO> pricesToValidate = userDTO.getProjectPrices().entrySet().stream().map(entry -> {
+                String[] ids = entry.getKey().split("-");
+                ProjectPriceDTO dto = new ProjectPriceDTO();
+                dto.setProjectId(Long.parseLong(ids[0]));
+                dto.setLineId(Long.parseLong(ids[1]));
+                dto.setPrice(entry.getValue());
+                return dto;
+            }).collect(Collectors.toList());
+
+            validateProjectPrices(pricesToValidate, operatorForValidation);
+
+            // 更新价格：先删除旧的，再插入新的
+            userProjectLineService.remove(new LambdaQueryWrapper<UserProjectLine>().eq(UserProjectLine::getUserId, userDTO.getUserId()));
+
+            List<UserProjectLine> linesToInsert = pricesToValidate.stream().map(priceDto -> {
+                UserProjectLine upl = new UserProjectLine();
+                upl.setUserId(userDTO.getUserId());
+                upl.setProjectId(String.valueOf(priceDto.getProjectId()));
+                upl.setLineId(String.valueOf(priceDto.getLineId()));
+                upl.setAgentPrice(priceDto.getPrice());
+                // projectName 可以在此从 projectService 获取并设置
+                return upl;
+            }).collect(Collectors.toList());
+
+            if (!linesToInsert.isEmpty()) {
+                userProjectLineService.saveBatch(linesToInsert);
+            }
+            return true; // 价格操作已执行
+        }
+
+        return changed;
     }
 
 
@@ -400,16 +448,22 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     // --- 私有辅助方法 ---
 
     /**
+     * [新增] 获取指定用户的项目线路价格配置
+     */
+    @Override
+    public List<UserProjectLine> getUserProjectLines(Long userId) {
+        return userProjectLineService.getLinesByUserId(userId);
+    }
+
+    /**
      * [已废弃 -> 移除]
      * 安全地更新用户余额（带悲观锁）的方法已被移除。
      * 所有资金变动均通过 UserLedgerService.createLedgerAndUpdateBalance() 实现，
      * 该方法内部已包含锁和事务管理，确保了数据一致性。
      */
     // private void updateBalanceWithLock(Long userId, BigDecimal amount) { ... }
-
-
     /**
-     * 将 User 实体转换为 UserDTO
+     * [重构] 将 User 实体转换为 UserDTO，价格从新表获取
      */
     public UserDTO convertToDTO(User user) {
         if (user == null) return null;
@@ -419,24 +473,29 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         dto.setStatus(user.getStatus());
         dto.setIsAgent(user.getIsAgent() == 1);
         dto.setParentId(user.getParentId());
-        try {
-            if (StringUtils.hasText(user.getProjectPrices())) {
-                dto.setProjectPrices(objectMapper.readValue(user.getProjectPrices(), new TypeReference<>() {}));
-            } else {
-                dto.setProjectPrices(Collections.emptyMap());
-            }
-        } catch (Exception e) {
-            log.error("解析用户 {} 价格JSON失败", user.getId(), e);
+
+        // 从 user_project_line 表获取价格信息
+        List<UserProjectLine> userLines = userProjectLineService.getLinesByUserId(user.getId());
+        if (!CollectionUtils.isEmpty(userLines)) {
+            Map<String, BigDecimal> pricesMap = userLines.stream()
+                    .collect(Collectors.toMap(
+                            line -> line.getProjectId() + "-" + line.getLineId(),
+                            UserProjectLine::getAgentPrice,
+                            (price1, price2) -> price1 // 如果有重复key，保留第一个
+                    ));
+            dto.setProjectPrices(pricesMap);
+        } else {
             dto.setProjectPrices(Collections.emptyMap());
         }
+
         return dto;
     }
 
     /**
-     * 校验为下级设置的价格是否合规。
+     * [重构] 校验为下级设置的价格是否合规
      */
-    private void validateProjectPrices(Map<String, BigDecimal> pricesToSet, User operator) {
-        if (pricesToSet == null || pricesToSet.isEmpty()) {
+    private void validateProjectPrices(List<ProjectPriceDTO> pricesToSet, User operator) {
+        if (CollectionUtils.isEmpty(pricesToSet)) {
             return;
         }
         boolean isAdmin = (operator.getId() != null && operator.getId() == 0L);
@@ -444,24 +503,23 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
 
         Map<String, BigDecimal> operatorPrices = Collections.emptyMap();
         if (!isAdmin) {
-            try {
-                if (StringUtils.hasText(operator.getProjectPrices())) {
-                    operatorPrices = objectMapper.readValue(operator.getProjectPrices(), new TypeReference<>() {});
-                }
-            } catch (Exception e) {
-                log.error("解析操作员 {} 的价格JSON失败", operator.getId(), e);
-                throw new RuntimeException("操作员价格配置错误，无法完成校验");
+            List<UserProjectLine> operatorLines = userProjectLineService.getLinesByUserId(operator.getId());
+            if (!CollectionUtils.isEmpty(operatorLines)) {
+                operatorPrices = operatorLines.stream().collect(Collectors.toMap(
+                        line -> line.getProjectId() + "-" + line.getLineId(),
+                        UserProjectLine::getAgentPrice
+                ));
             }
         }
 
-        for (Map.Entry<String, BigDecimal> entry : pricesToSet.entrySet()) {
-            String priceKey = entry.getKey();
-            BigDecimal priceToSet = entry.getValue();
-            String projectId = priceKey.split("-")[0];
+        for (ProjectPriceDTO priceDto : pricesToSet) {
+            String priceKey = priceDto.getProjectId() + "-" + priceDto.getLineId();
+            BigDecimal priceToSet = priceDto.getPrice();
+            String projectId = String.valueOf(priceDto.getProjectId());
 
             ProjectPriceSummaryDTO summary = priceSummaries.get(projectId);
             if (summary == null) {
-                log.warn("价格校验警告: 线路 '{}' 所属的项目 '{}' 没有找到价格摘要信息，跳过此项校验。", priceKey, projectId);
+                log.warn("价格校验警告: 项目 '{}' 没有找到价格摘要信息，跳过此项校验。", projectId);
                 continue;
             }
 
@@ -469,10 +527,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
                 if (priceToSet.compareTo(summary.getMinPrice()) < 0) {
                     throw new IllegalArgumentException(String.format("价格设置错误：线路 %s 的价格 %s 不能低于项目最低价 %s", priceKey, priceToSet, summary.getMinPrice()));
                 }
-                if (priceToSet.compareTo(summary.getMaxPrice()) > 0) {
-                    throw new IllegalArgumentException(String.format("价格设置错误：线路 %s 的价格 %s 不能高于项目最高价 %s", priceKey, priceToSet, summary.getMaxPrice()));
-                }
-            } else {
+            } else { // 代理
                 BigDecimal operatorCost = operatorPrices.get(priceKey);
                 if (operatorCost == null) {
                     throw new IllegalArgumentException(String.format("价格设置错误：您没有线路 %s 的价格配置，无法为下级设置", priceKey));
@@ -480,51 +535,47 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
                 if (priceToSet.compareTo(operatorCost) < 0) {
                     throw new IllegalArgumentException(String.format("价格设置错误：线路 %s 的价格 %s 不能低于您的成本价 %s", priceKey, priceToSet, operatorCost));
                 }
-                if (priceToSet.compareTo(summary.getMaxPrice()) > 0) {
-                    throw new IllegalArgumentException(String.format("价格设置错误：线路 %s 的价格 %s 不能高于项目最高价 %s", priceKey, priceToSet, summary.getMaxPrice()));
-                }
+            }
+
+            if (priceToSet.compareTo(summary.getMaxPrice()) > 0) {
+                throw new IllegalArgumentException(String.format("价格设置错误：线路 %s 的价格 %s 不能高于项目最高价 %s", priceKey, priceToSet, summary.getMaxPrice()));
             }
         }
         log.info("操作员 {} 为下级设置的价格已通过校验。", operator.getId());
     }
 
     /**
-     * 为新用户生成初始价格配置。
+     * [重构] 为新用户生成初始价格配置
      */
-    private Map<String, BigDecimal> generateInitialPricesFor(User operator) {
+    private List<ProjectPriceDTO> generateInitialPricesFor(User operator) {
         boolean isAdmin = (operator.getId() != null && operator.getId() == 0L);
 
-        if (!isAdmin && StringUtils.hasText(operator.getProjectPrices())) {
-            try {
-                Map<String, BigDecimal> inheritedPrices = objectMapper.readValue(operator.getProjectPrices(), new TypeReference<>() {});
-                if (!inheritedPrices.isEmpty()) {
-                    log.info("为新用户生成初始价格：成功继承自操作员 {} 的价格配置。", operator.getId());
-                    return inheritedPrices;
-                }
-            } catch (Exception e) {
-                log.error("解析操作员 {} 的价格JSON失败，将采用系统默认最高价策略。", operator.getId(), e);
+        if (!isAdmin) {
+            List<UserProjectLine> operatorLines = userProjectLineService.getLinesByUserId(operator.getId());
+            if (!CollectionUtils.isEmpty(operatorLines)) {
+                log.info("为新用户生成初始价格：成功继承自操作员 {} 的价格配置。", operator.getId());
+                return operatorLines.stream().map(line -> {
+                    ProjectPriceDTO dto = new ProjectPriceDTO();
+                    dto.setProjectId(Long.parseLong(line.getProjectId()));
+                    dto.setLineId(Long.parseLong(line.getLineId()));
+                    dto.setPrice(line.getAgentPrice());
+                    return dto;
+                }).collect(Collectors.toList());
             }
         }
 
         log.info("操作员 {} 无价格配置或为管理员，为新用户生成初始价格：采用系统默认最高价策略。", operator.getId());
-        Map<String, BigDecimal> defaultPrices = new HashMap<>();
-
-        List<Project> allLines = projectService.list();
         Map<String, ProjectPriceSummaryDTO> priceSummaries = projectService.getAllProjectPriceSummaries();
-
-        for (Project line : allLines) {
-            String priceKey = line.getProjectId() + "-" + line.getLineId();
-            ProjectPriceSummaryDTO summary = priceSummaries.get(line.getProjectId());
-
-            if (summary != null && summary.getMaxPrice() != null) {
-                defaultPrices.put(priceKey, summary.getMaxPrice());
-            } else {
-                log.warn("生成初始价格警告：项目 '{}' 未找到价格摘要，使用线路 '{}' 的基础价格 {} 作为默认价。", line.getProjectId(), priceKey, line.getPriceMin());
-                defaultPrices.put(priceKey, line.getPriceMin());
-            }
-        }
-
-        return defaultPrices;
+        return projectService.list().stream()
+                .map(line -> {
+                    ProjectPriceSummaryDTO summary = priceSummaries.get(line.getProjectId());
+                    BigDecimal price = (summary != null && summary.getMaxPrice() != null) ? summary.getMaxPrice() : line.getPriceMin();
+                    ProjectPriceDTO dto = new ProjectPriceDTO();
+                    dto.setProjectId(Long.parseLong(line.getProjectId()));
+                    dto.setLineId(Long.parseLong(line.getLineId()));
+                    dto.setPrice(price);
+                    return dto;
+                }).collect(Collectors.toList());
     }
 
     /**

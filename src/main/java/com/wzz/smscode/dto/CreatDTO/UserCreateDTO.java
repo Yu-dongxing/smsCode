@@ -1,8 +1,9 @@
 package com.wzz.smscode.dto.CreatDTO;
 
+import com.wzz.smscode.dto.ProjectPriceDTO; // 确保引入了 ProjectPriceDTO
 import lombok.Data;
 import java.math.BigDecimal;
-import java.util.Map;
+import java.util.List; // 引入 List
 
 /**
  * 用户创建/编辑 DTO
@@ -31,9 +32,9 @@ public class UserCreateDTO {
     private BigDecimal initialBalance;
 
     /**
-     * 项目价格配置，为新用户设置各项目价格
+     * 项目价格配置，为新用户设置各项目价格（改为ProjectPriceDTO列表）
      */
-    private Map<String, BigDecimal> projectPrices;
+    private List<ProjectPriceDTO> projectPrices; // <-- 这里已修改
 
     /**
      * 是否赋予代理权限

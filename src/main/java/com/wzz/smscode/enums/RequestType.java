@@ -21,9 +21,16 @@ public enum RequestType {
     FORM("FORM", "表单格式"),
 
     /**
+     * 无参数
+     */
+    NONE("NONE", "无参"),
+
+    /**
      * 以 key=value 的形式拼接在URL后面
      */
     PARAM("PARAM", "URL参数");
+
+
 
     @EnumValue // 标记数据库存的值是 code
     private final String code;

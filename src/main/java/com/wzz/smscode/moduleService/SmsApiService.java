@@ -8,10 +8,12 @@ import com.wzz.smscode.util.ResponseParser;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 
 import java.time.Duration;
+import java.util.Map;
 import java.util.Optional;
 
 @Service
@@ -34,19 +36,32 @@ public class SmsApiService {
         log.info("开始为项目 [{} - {}] 获取手机号...", project.getProjectId(), project.getLineId());
         AuthStrategy strategy = authStrategyFactory.getStrategy(String.valueOf(project.getAuthType()));
         try {
-            // 2. 将接收到的 params 原封不动地传递给策略
             String responseBody = strategy.buildGetNumberRequest(webClient, project, params).block();
             log.info("项目 [{} - {}] 获取手机号API响应: {}", project.getProjectId(), project.getLineId(), responseBody);
+            // 【核心修改】调用新的解析方法
+            Map<String, String> parsedResult = responseParser.parsePhoneNumberByType(project, responseBody);
+            String phoneNumber = parsedResult.get("phone");
+            // 如果成功解析出手机号，就返回手机号
+            if (StringUtils.hasText(phoneNumber)) {
+                log.info("为项目 [{} - {}] 解析到手机号: {}", project.getProjectId(), project.getLineId(), phoneNumber);
 
-            return responseParser.parsePhoneNumber(responseBody)
-                    .orElseGet(() -> {
-                        log.warn("在响应中未解析到标准手机号，将返回原始响应体作为操作ID。响应: {}", responseBody);
-                        return responseBody;
-                    });
+                // 你可以在这里处理解析出的ID，例如存入数据库或缓存，用于后续的释放、拉黑等操作
+                String phoneId = parsedResult.get("id");
+                if (StringUtils.hasText(phoneId)) {
+                    log.info("为项目 [{} - {}] 解析到手机号唯一ID: {}", project.getProjectId(), project.getLineId(), phoneId);
+                    // TODO: 在这里添加对 phoneId 的处理逻辑，比如异步保存
+                }
+
+                return phoneNumber;
+            }
+
+            // 如果没有解析到手机号，则按原逻辑返回整个响应体作为操作ID
+            log.warn("在响应中未解析到手机号，将返回原始响应体作为操作ID。响应: {}", responseBody);
+            return responseBody;
+
         } catch (Exception e) {
             log.error("为项目 [{} - {}] 获取手机号失败", project.getProjectId(), project.getLineId(), e);
-            // 3. 将原始异常信息包装起来，而不是只返回 getMessage()
-            throw new BusinessException(0,"获取手机号失败", e);
+            throw new BusinessException(0, "获取手机号失败", e);
         }
     }
 

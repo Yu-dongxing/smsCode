@@ -30,6 +30,13 @@ public class Project extends BaseEntity {
     private String projectId;
 
     /**
+     * 项目名称
+     */
+    @ColumnComment("项目名称")
+    @TableField("project_name")
+    private String projectName;
+
+    /**
      * 项目线路ID，用于区分同一项目下不同的API线路
      */
     @ColumnComment("项目线路ID")
@@ -105,9 +112,7 @@ public class Project extends BaseEntity {
     @ColumnComment("接口返回的验证码字段名")
     @TableField("response_code_field")
     private String responseCodeField;
-    /**
-     * 请求接口的tokrn
-     */
+
     /**
      * 项目成本价（平台获取号码的成本）
      */
@@ -218,6 +223,24 @@ public class Project extends BaseEntity {
     @ColumnComment("筛选API的ID或密钥")
     @TableField("filter_id")
     private String filterId;
+
+    /**
+     * 获取手机号接口返回的手机号字段名称。
+     * 注意：此字段是对现有 responsePhoneField 的补充或替代，用于更复杂的响应结构。
+     * 例如，如果响应是 {"data": {"number": "138..."}}，这里可以填 "number"。
+     */
+    @ColumnComment("获取手机号接口返回的手机号字段名")
+    @TableField("response_phone_number_field")
+    private String responsePhoneNumberField;
+
+    /**
+     * 获取手机号接口返回的手机号唯一ID字段名称。
+     * 用于释放、拉黑等后续操作，区别于获取验证码的会话ID。
+     * 例如，如果响应是 {"phoneId": "xyz123", "number": "138..."}，这里应填 "phoneId"。
+     */
+    @ColumnComment("获取手机号接口返回的手机号唯一ID字段名")
+    @TableField("response_phone_id_field")
+    private String responsePhoneIdField;
 
     /**
      * 状态

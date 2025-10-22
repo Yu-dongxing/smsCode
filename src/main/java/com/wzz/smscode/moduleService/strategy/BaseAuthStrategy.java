@@ -23,7 +23,7 @@ public abstract class BaseAuthStrategy implements AuthStrategy {
      * @param webClient       WebClient 实例
      * @param method          HTTP方法 (e.g., "GET", "POST")
      * @param url             请求的完整URL
-     * @param requestType     请求参数类型 (JSON, FORM, PARAM)
+     * @param requestType     请求参数类型 (JSON, FORM, PARAM,NONE)
      * @param params          请求参数
      * @param authApplier     一个消费者，用于应用特定的认证逻辑 (e.g., 添加Header)
      * @return API 响应的 Mono<String>
@@ -51,6 +51,9 @@ public abstract class BaseAuthStrategy implements AuthStrategy {
                 headersSpec = requestSpec.uri(url)
                         .contentType(MediaType.APPLICATION_FORM_URLENCODED)
                         .body(BodyInserters.fromFormData(formData));
+                break;
+            case NONE:
+                headersSpec = requestSpec.uri(url);
                 break;
 
             case PARAM:

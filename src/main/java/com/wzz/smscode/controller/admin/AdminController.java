@@ -18,6 +18,8 @@ import com.wzz.smscode.entity.ErrorLog;
 import com.wzz.smscode.entity.NumberRecord;
 import com.wzz.smscode.entity.SystemConfig;
 import com.wzz.smscode.entity.User;
+import com.wzz.smscode.enums.AuthType;
+import com.wzz.smscode.enums.RequestType;
 import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.service.*;
 import com.wzz.smscode.service.impl.UserServiceImpl;
@@ -31,10 +33,7 @@ import org.springframework.web.bind.annotation.*;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
-import java.util.Date;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.stream.Collectors;
 
 /**
@@ -556,5 +555,44 @@ public class AdminController {
             log.error("查询每日趋势数据失败", e);
             return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，查询趋势数据失败");
         }
+    }
+
+    /**
+     * 获取项目认证类型枚举
+     * @return
+     */
+    @GetMapping("/enum/auth-types")
+    public Result<?> getAuthTypes() {
+        List<Map<String, String>> aa = Arrays.stream(AuthType.values())
+                .map(authType -> {
+                    Map<String, String> map = new HashMap<>();
+                    // key "value" 对应枚举的 value 字段
+                    map.put("value", authType.getValue());
+                    // key "description" 对应枚举的 description 字段
+                    map.put("description", authType.getDescription());
+                    return map;
+                })
+                .toList();
+        return Result.success(aa);
+    }
+
+    /**
+     * 获取项目认证类型枚举
+     * @return
+     */
+    @GetMapping("/enum/request-types")
+    public Result<?> getRequestTypes() {
+        List<Map<String, String>> aa = Arrays.stream(RequestType.values())
+                .map(authType -> {
+                    Map<String, String> map = new HashMap<>();
+                    // key "value" 对应枚举的 value 字段
+                    map.put("value", authType.getCode());
+                    // key "description" 对应枚举的 description 字段
+                    map.put("description", authType.getDesc());
+                    return map;
+                })
+                .toList();
+
+        return Result.success(aa);
     }
 }

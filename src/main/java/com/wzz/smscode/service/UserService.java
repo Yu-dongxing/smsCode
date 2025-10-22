@@ -10,9 +10,11 @@ import com.wzz.smscode.dto.ResultDTO.UserResultDTO;
 import com.wzz.smscode.dto.update.UpdateUserDto;
 import com.wzz.smscode.dto.update.UserUpdatePasswardDTO;
 import com.wzz.smscode.entity.User;
+import com.wzz.smscode.entity.UserProjectLine;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 public interface UserService extends IService<User> {
     User authenticate(Long userId, String password);
@@ -44,6 +46,8 @@ public interface UserService extends IService<User> {
     void updateUserStatsForNewNumber(Long userId, boolean codeReceived);
 
     void resetDailyStatsAllUsers();
+
+    List<UserProjectLine> getUserProjectLines(Long userId);
 
     User getByUserName(String userName);
 
