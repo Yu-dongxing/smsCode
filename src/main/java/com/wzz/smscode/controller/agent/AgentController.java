@@ -12,9 +12,11 @@ import com.wzz.smscode.dto.CreatDTO.UserCreateDTO;
 import com.wzz.smscode.dto.EntityDTO.LedgerDTO;
 import com.wzz.smscode.dto.EntityDTO.UserDTO;
 import com.wzz.smscode.dto.LoginDTO.AgentLoginDTO;
+import com.wzz.smscode.entity.SystemConfig;
 import com.wzz.smscode.entity.User;
 import com.wzz.smscode.entity.UserLedger;
 import com.wzz.smscode.exception.BusinessException;
+import com.wzz.smscode.service.SystemConfigService;
 import com.wzz.smscode.service.UserLedgerService;
 import com.wzz.smscode.service.UserService;
 import org.apache.logging.log4j.LogManager;
@@ -88,6 +90,16 @@ public class AgentController {
         IPage<User> subUsersPage = userService.listSubUsers(agentId, pageRequest);
 
         return Result.success(subUsersPage);
+    }
+    @Autowired
+    private SystemConfigService systemConfigService;
+    /**
+     * 获取公告接口
+     */
+    @GetMapping("/notice")
+    public Result<?> getUserNotice(){
+        SystemConfig config = systemConfigService.getConfig();
+        return Result.success(config.getSystemNotice());
     }
 
     /**
