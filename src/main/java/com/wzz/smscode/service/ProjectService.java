@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.extension.service.IService;
 import com.wzz.smscode.dto.EntityDTO.ProjectDTO;
 import com.wzz.smscode.dto.ProjectPriceDetailsDTO;
 import com.wzz.smscode.dto.ProjectPriceSummaryDTO;
+import com.wzz.smscode.dto.SelectProjectDTO;
 import com.wzz.smscode.entity.Project;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -36,4 +37,6 @@ public interface ProjectService extends IService<Project> {
     Map<String, ProjectPriceSummaryDTO> getAllProjectPriceSummaries();
 
     Boolean deleteByID(long id);
+
+    List<SelectProjectDTO> listUserProjects(Long userId);
 }

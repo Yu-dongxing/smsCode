@@ -179,8 +179,28 @@ public class UserController {
     }
 
     /**
-     * 查询项目列表
+     * 查询用户项目列表
+     *
+     * @param userName    用户名称
+     * @param password  用户密码
+     * @return CommonResultDTO，data 为该用户有权访问的项目列表
      */
+    @RequestMapping(value = "/by-user/listProjects", method = {RequestMethod.GET, RequestMethod.POST})
+    public CommonResultDTO<List<SelectProjectDTO>> listProjects(
+            @RequestParam String userName,
+            @RequestParam String password) {
+        // 1. 身份验证
+        User user = userService.authenticateUserByUserName(userName, password);
+        if (user == null) {
+            return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED, "用户ID或密码错误");
+        }
+
+        // 2. 调用服务查询项目列表
+        List<SelectProjectDTO> projects = projectService.listUserProjects(user.getId());
+
+        // 3. 返回结果
+        return CommonResultDTO.success("查询成功", projects);
+    }
 
     /**
      * 查询某项目的可用线路列表

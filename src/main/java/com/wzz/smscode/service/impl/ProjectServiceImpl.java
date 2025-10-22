@@ -5,12 +5,16 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.wzz.smscode.dto.EntityDTO.ProjectDTO;
 import com.wzz.smscode.dto.ProjectPriceDetailsDTO;
 import com.wzz.smscode.dto.ProjectPriceSummaryDTO;
+import com.wzz.smscode.dto.SelectProjectDTO;
 import com.wzz.smscode.entity.Project;
+import com.wzz.smscode.entity.UserProjectLine;
 import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.mapper.ProjectMapper;
 import com.wzz.smscode.service.ProjectService;
+import com.wzz.smscode.service.UserProjectLineService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -158,5 +162,31 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
         LambdaQueryWrapper<Project> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(Project::getId, id);
         return this.remove(wrapper);
+    }
+
+    @Autowired
+    private UserProjectLineService userProjectLineService;
+    /**
+     * 新增：根据用户ID查询其有权访问的项目列表
+     * @param userId 用户ID
+     * @return 项目DTO列表
+     */
+    @Override
+    public List<SelectProjectDTO> listUserProjects(Long userId) {
+        // 1. 获取该用户所有的项目线路配置记录
+        List<UserProjectLine> userProjectLines = userProjectLineService.getLinesByUserId(userId);
+
+        if (userProjectLines == null || userProjectLines.isEmpty()) {
+            return Collections.emptyList(); // 如果用户没有任何项目，返回空列表
+        }
+
+        // 2. 使用Java Stream API进行处理
+        return userProjectLines.stream()
+                // 将 UserProjectLine 对象映射成 ProjectDTO 对象
+                .map(line -> new SelectProjectDTO(line.getProjectId(), line.getProjectName()))
+                // 去除重复的项目（根据ProjectDTO的equals和hashCode方法）
+                .distinct()
+                // 收集结果为List
+                .collect(Collectors.toList());
     }
 }

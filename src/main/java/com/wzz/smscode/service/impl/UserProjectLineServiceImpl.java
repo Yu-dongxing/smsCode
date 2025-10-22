@@ -27,4 +27,5 @@ public class UserProjectLineServiceImpl extends ServiceImpl<UserProjectLineMappe
         return this.list(new LambdaQueryWrapper<UserProjectLine>()
                 .eq(UserProjectLine::getUserId, userId));
     }
+    
 }

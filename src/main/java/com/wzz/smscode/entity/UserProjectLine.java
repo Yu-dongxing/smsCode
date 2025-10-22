@@ -37,9 +37,16 @@ public class UserProjectLine extends BaseEntity {
     @TableField("user_id")
     private Long userId;
 
+    /**
+     * 项目表id
+     */
+    @ColumnComment("项目表id")
+    @TableField("project_table_id")
+    private Long projectTableId;
+
 
     /**
-     * 项目ID
+     * 项目名称
      */
     @ColumnComment("项目名称")
     @TableField("project_name")
