@@ -14,6 +14,7 @@ import com.wzz.smscode.dto.update.UserUpdatePasswardDTO;
 import com.wzz.smscode.entity.NumberRecord;
 import com.wzz.smscode.entity.SystemConfig;
 import com.wzz.smscode.entity.User;
+import com.wzz.smscode.entity.UserProjectLine;
 import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.service.NumberRecordService;
 import com.wzz.smscode.service.ProjectService;
@@ -186,7 +187,7 @@ public class UserController {
      * @return CommonResultDTO，data 为该用户有权访问的项目列表
      */
     @RequestMapping(value = "/by-user/listProjects", method = {RequestMethod.GET, RequestMethod.POST})
-    public CommonResultDTO<List<SelectProjectDTO>> listProjects(
+    public CommonResultDTO<?> listProjects(
             @RequestParam String userName,
             @RequestParam String password) {
         // 1. 身份验证
@@ -196,7 +197,7 @@ public class UserController {
         }
 
         // 2. 调用服务查询项目列表
-        List<SelectProjectDTO> projects = projectService.listUserProjects(user.getId());
+        List<UserProjectLine> projects = projectService.listUserProjects(user.getId());
 
         // 3. 返回结果
         return CommonResultDTO.success("查询成功", projects);

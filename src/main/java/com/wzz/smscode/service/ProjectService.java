@@ -6,6 +6,7 @@ import com.wzz.smscode.dto.ProjectPriceDetailsDTO;
 import com.wzz.smscode.dto.ProjectPriceSummaryDTO;
 import com.wzz.smscode.dto.SelectProjectDTO;
 import com.wzz.smscode.entity.Project;
+import com.wzz.smscode.entity.UserProjectLine;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -38,5 +39,5 @@ public interface ProjectService extends IService<Project> {
 
     Boolean deleteByID(long id);
 
-    List<SelectProjectDTO> listUserProjects(Long userId);
+    List<UserProjectLine>listUserProjects(Long userId);
 }

@@ -172,21 +172,21 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
      * @return 项目DTO列表
      */
     @Override
-    public List<SelectProjectDTO> listUserProjects(Long userId) {
+    public List<UserProjectLine> listUserProjects(Long userId) {
         // 1. 获取该用户所有的项目线路配置记录
-        List<UserProjectLine> userProjectLines = userProjectLineService.getLinesByUserId(userId);
 
-        if (userProjectLines == null || userProjectLines.isEmpty()) {
-            return Collections.emptyList(); // 如果用户没有任何项目，返回空列表
-        }
-
-        // 2. 使用Java Stream API进行处理
-        return userProjectLines.stream()
-                // 将 UserProjectLine 对象映射成 ProjectDTO 对象
-                .map(line -> new SelectProjectDTO(line.getProjectId(), line.getProjectName()))
-                // 去除重复的项目（根据ProjectDTO的equals和hashCode方法）
-                .distinct()
-                // 收集结果为List
-                .collect(Collectors.toList());
+//        if (userProjectLines == null || userProjectLines.isEmpty()) {
+//            return Collections.emptyList(); // 如果用户没有任何项目，返回空列表
+//        }
+//
+//        // 2. 使用Java Stream API进行处理
+//        return userProjectLines.stream()
+//                // 将 UserProjectLine 对象映射成 ProjectDTO 对象
+//                .map(line -> new SelectProjectDTO(line.getProjectId(), line.getProjectName()))
+//                // 去除重复的项目（根据ProjectDTO的equals和hashCode方法）
+//                .distinct()
+//                // 收集结果为List
+//                .collect(Collectors.toList());
+        return userProjectLineService.getLinesByUserId(userId);
     }
 }

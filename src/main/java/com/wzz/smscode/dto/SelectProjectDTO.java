@@ -23,4 +23,9 @@ public class SelectProjectDTO {
      * 项目名称
      */
     private String projectName;
+    /**
+     * 线路id
+     */
+    private String lineId;
+
 }
