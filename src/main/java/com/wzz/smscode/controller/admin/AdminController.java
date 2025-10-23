@@ -116,8 +116,14 @@ public class AdminController {
             // + 管理员操作，operatorId 直接传入 0L
             boolean success = userService.createUser(userCreateDTO, 0L);
             return success ? Result.success("创建成功") : Result.error(-5, "创建失败");
+        }catch (IllegalArgumentException | SecurityException | IllegalStateException | BusinessException e) {
+            // 记录业务异常信息，但返回通用错误提示
+            log.warn("创建用户业务校验失败: {}", e.getMessage());
+            return Result.error("创建失败，输入信息有误或权限不足");
         } catch (Exception e) {
-            return Result.error(-5, e.getMessage());
+            // 记录未预料到的系统异常
+            log.error("创建用户时发生系统内部错误", e);
+            return Result.error(Constants.ERROR_SYSTEM_ERROR, "创建用户时发生系统内部错误，请联系管理员");
         }
     }
 
@@ -447,6 +453,16 @@ public class AdminController {
             return Result.error(-5, e.getMessage());
         }
     }
+
+    /**
+     * 根据手机号获取验证码()
+     */
+    @PostMapping("/by-phone/get/code/{phone}")
+    public Result<?> getCodeByPhone(@PathVariable String phone){
+        NumberRecord numberRecord = numberRecordService.getRecordByPhone(phone);
+        return Result.success(numberRecord);
+    }
+
 
 
 

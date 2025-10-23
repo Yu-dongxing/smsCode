@@ -2,6 +2,7 @@ package com.wzz.smscode.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.core.toolkit.CollectionUtils;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.wzz.smscode.dto.CreatDTO.LedgerCreationDTO;
@@ -23,6 +24,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Date;
+import java.util.List;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -211,6 +214,50 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
         ledger.setRemark(request.getRemark());
 
         return this.save(ledger);
+    }
+
+    @Override
+    public IPage<UserLedger> listSubordinateLedgers(Long agentId, Page<UserLedger> page, Long targetUserId, Date startTime, Date endTime) {
+        // 1. 获取该代理的所有下级用户的ID
+        LambdaQueryWrapper<User> userQuery = new LambdaQueryWrapper<User>().eq(User::getParentId, agentId);
+        List<User> subUsers = userService.list(userQuery);
+
+        if (CollectionUtils.isEmpty(subUsers)) {
+            // 如果没有下级用户，直接返回空的分页结果
+            return new Page<>(page.getCurrent(), page.getSize(), 0);
+        }
+        List<Long> subUserIds = subUsers.stream().map(User::getId).collect(Collectors.toList());
+
+        // 2. 构建资金流水的查询条件
+        LambdaQueryWrapper<UserLedger> ledgerWrapper = new LambdaQueryWrapper<>();
+
+        // 3. 安全性校验与核心查询条件
+        if (targetUserId != null) {
+            // 如果传入了 targetUserId，必须校验该用户是否是当前代理的下级
+            if (!subUserIds.contains(targetUserId)) {
+                // 抛出异常或返回空，这里抛出异常让 Controller 捕获更清晰
+                throw new SecurityException("试图查询的用户不属于该代理");
+            }
+            // 只查询这一个下级用户
+            ledgerWrapper.eq(UserLedger::getUserId, targetUserId);
+        } else {
+            // 查询所有下级用户
+            ledgerWrapper.in(UserLedger::getUserId, subUserIds);
+        }
+
+        // 4. 添加其他筛选条件
+        if (startTime != null) {
+            ledgerWrapper.ge(UserLedger::getTimestamp, startTime);
+        }
+        if (endTime != null) {
+            ledgerWrapper.le(UserLedger::getTimestamp, endTime);
+        }
+
+        // 5. 按时间倒序排序
+        ledgerWrapper.orderByDesc(UserLedger::getTimestamp);
+
+        // 6. 执行分页查询并返回
+        return this.page(page, ledgerWrapper);
     }
 
 

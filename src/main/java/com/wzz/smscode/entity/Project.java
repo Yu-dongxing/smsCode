@@ -3,6 +3,7 @@ package com.wzz.smscode.entity;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.wzz.smscode.annotation.ColumnComment;
+import com.wzz.smscode.annotation.ColumnType;
 import com.wzz.smscode.annotation.DefaultValue;
 import com.wzz.smscode.annotation.TableComment;
 import com.wzz.smscode.common.BaseEntity;
@@ -112,6 +113,13 @@ public class Project extends BaseEntity {
     @ColumnComment("接口返回的验证码字段名")
     @TableField("response_code_field")
     private String responseCodeField;
+
+    /**
+     * 获取验证码的最大尝试次数
+     */
+    @ColumnComment("获取验证码的最大尝试次数")
+    @TableField("code_max_attempts")
+    private Integer codeMaxAttempts;
 
     /**
      * 项目成本价（平台获取号码的成本）

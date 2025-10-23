@@ -8,6 +8,7 @@ import org.apache.logging.log4j.Logger;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.util.UriComponentsBuilder;
 import reactor.core.publisher.Mono;
 
 import java.util.Collections;
@@ -56,22 +57,20 @@ public class TokenHeaderStrategy extends BaseAuthStrategy {
     public Mono<String> buildGetCodeRequest(WebClient webClient, Project project, String identifier) {
         log.info("进入 TokenHeaderStrategy - 处理获取验证码请求，参数类型: {}", project.getGetCodeRequestType());
 
-        String domain = normalizeDomain(project.getDomain());
-        String url = domain + project.getGetCodeRoute();
+        // 使用 UriComponentsBuilder 构建 URL
+        String url = UriComponentsBuilder.fromUriString(normalizeDomain(project.getDomain()))
+                .path(project.getGetCodeRoute())
+                .build()
+                .toUriString();
 
-        // 准备请求参数
         Map<String, Object> requestParams = new HashMap<>();
-        // 根据你的代码，验证码请求需要一个 uuidList
         requestParams.put("uuidList", Collections.singletonList(identifier));
 
-        // 定义认证逻辑
         Consumer<WebClient.RequestHeadersSpec<?>> authApplier = spec -> {
             String tokenValue = (StringUtils.hasText(project.getAuthTokenPrefix()) ? project.getAuthTokenPrefix() : "") + project.getAuthTokenValue();
             spec.header(project.getAuthTokenField(), tokenValue);
         };
 
-        // 调用基类的通用方法
-        // 假设获取验证码通常是POST请求
         return buildAndExecuteRequest(webClient, "POST", url, project.getGetCodeRequestType(), requestParams, authApplier);
     }
 

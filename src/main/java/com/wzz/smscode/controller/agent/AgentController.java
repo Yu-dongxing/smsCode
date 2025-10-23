@@ -8,6 +8,7 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.wzz.smscode.common.Constants;
 import com.wzz.smscode.common.Result;
+import com.wzz.smscode.dto.AgentDashboardStatsDTO;
 import com.wzz.smscode.dto.CreatDTO.UserCreateDTO;
 import com.wzz.smscode.dto.EntityDTO.LedgerDTO;
 import com.wzz.smscode.dto.EntityDTO.UserDTO;
@@ -53,7 +54,7 @@ public class AgentController {
      * @return 包含 Token 的 Result 对象
      */
     @PostMapping("/login")
-    public Result<String> login(@RequestBody AgentLoginDTO loginDTO) {
+    public Result<?> login(@RequestBody AgentLoginDTO loginDTO) {
         // 调用业务层进行登录验证
         User agent = userService.AgentLogin(loginDTO.getUsername(), loginDTO.getPassword());
 
@@ -107,7 +108,7 @@ public class AgentController {
      */
     @SaCheckLogin
     @PostMapping("/createUser")
-    public Result<?> createUser(@RequestBody UserCreateDTO userCreateDTO) {
+    public Result<?> createUser( @RequestBody UserCreateDTO userCreateDTO) {
         long agentId = StpUtil.getLoginIdAsLong();
         try {
             boolean success = userService.createUser(userCreateDTO, agentId);
@@ -151,14 +152,18 @@ public class AgentController {
     public Result<?> rechargeUser(
             @RequestParam Long targetUserId,
             @RequestParam BigDecimal amount) {
+
         long agentId = StpUtil.getLoginIdAsLong();
         checkAgentPermission(agentId);
-
+        log.info("为下级用户充值{}::{}", agentId, targetUserId);
         try {
             // 业务逻辑委托给 Service 层，Service 层会进行权限和余额等校验
             userService.rechargeUser(targetUserId, amount, agentId);
             return Result.success("充值成功");
-        } catch(Exception e) {
+        }catch (BusinessException e){
+            return Result.success("充值失败",e.getMessage());
+        }
+        catch(Exception e) {
             // 记录异常信息
             log.error("代理 {} 为用户 {} 充值 {} 元时失败", agentId, targetUserId, amount, e);
             return Result.error("充值失败，请稍后重试");
@@ -175,8 +180,6 @@ public class AgentController {
             @RequestParam BigDecimal amount) {
         long agentId = StpUtil.getLoginIdAsLong();
         checkAgentPermission(agentId);
-
-        // 业务逻辑委托给 Service 层
         try {
             userService.deductUser(targetUserId, amount, agentId);
             return Result.success("扣款成功");
@@ -223,7 +226,6 @@ public class AgentController {
         // 手动转换 DTO
         IPage<LedgerDTO> dtoPage = ledgerPage.convert(ledger -> {
             LedgerDTO dto = new LedgerDTO();
-            // ... (原转换逻辑不变)
             dto.setId(ledger.getId());
             dto.setUserId(ledger.getUserId());
             dto.setFundType(ledger.getFundType());
@@ -249,6 +251,76 @@ public class AgentController {
         if (agent == null || agent.getIsAgent() != 1) {
             // 抛出异常，让全局异常处理器捕获，可以自定义一个业务异常
             throw new SecurityException("权限不足，非代理用户");
+        }
+    }
+
+    /**
+     * 查询当前代理登录用户的所有下级的资金流水表（分页）
+     *
+     * @param targetUserId (可选) 指定下级用户ID，用于筛选特定用户的流水
+     * @param startTime    (可选) 查询起始时间
+     * @param endTime      (可选) 查询结束时间
+     * @param page         当前页码 默认 1
+     * @param size         每页大小 默认 10
+     * @return 分页后的资金流水 DTO 列表
+     */
+    @SaCheckLogin
+    @GetMapping("/subordinate-ledgers")
+    public Result<IPage<LedgerDTO>> viewAllSubordinateLedgers(
+            @RequestParam(required = false) Long targetUserId,
+            @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") Date startTime,
+            @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") Date endTime,
+            @RequestParam(defaultValue = "1") long page,
+            @RequestParam(defaultValue = "10") long size) {
+
+        long agentId = StpUtil.getLoginIdAsLong();
+        checkAgentPermission(agentId); // 复用权限检查
+
+        try {
+            Page<UserLedger> pageRequest = new Page<>(page, size);
+            IPage<UserLedger> ledgerPage = userLedgerService.listSubordinateLedgers(agentId, pageRequest, targetUserId, startTime, endTime);
+            IPage<LedgerDTO> dtoPage = ledgerPage.convert(ledger -> {
+                LedgerDTO dto = new LedgerDTO();
+                dto.setId(ledger.getId());
+                dto.setUserId(ledger.getUserId());
+                dto.setFundType(ledger.getFundType());
+                dto.setPrice(ledger.getBalanceAfter().subtract(ledger.getBalanceBefore()));
+                dto.setBalanceBefore(ledger.getBalanceBefore());
+                dto.setBalanceAfter(ledger.getBalanceAfter());
+                dto.setRemark(ledger.getRemark());
+                dto.setTimestamp(ledger.getTimestamp());
+                return dto;
+            });
+
+            return Result.success(dtoPage);
+
+        } catch (SecurityException e) {
+            log.warn("代理 {} 尝试查询不属于自己的下级 {} 的流水: {}", agentId, targetUserId, e.getMessage());
+            return Result.error( "权限不足，无法查询该用户的流水");
+        } catch (Exception e) {
+            log.error("代理 {} 查询所有下级流水分页时发生系统内部错误", agentId, e);
+            return Result.error(Constants.ERROR_SYSTEM_ERROR, "查询流水失败，请稍后重试");
+        }
+    }
+
+    /**
+     * 获取代理仪表盘统计数据
+     * @return 包含余额、下级总数、今日下级充值、下级回码率的 Result 对象
+     */
+    @SaCheckLogin
+    @GetMapping("/dashboard-stats")
+    public Result<AgentDashboardStatsDTO> getDashboardStats() {
+        long agentId = StpUtil.getLoginIdAsLong();
+        try {
+            // 调用 Service 层获取统计数据
+            AgentDashboardStatsDTO stats = userService.getAgentDashboardStats(agentId);
+            return Result.success(stats);
+        } catch (BusinessException e) {
+            log.warn("获取代理 {} 仪表盘数据业务异常: {}", agentId, e.getMessage());
+            return Result.error(e.getMessage());
+        } catch (Exception e) {
+            log.error("获取代理 {} 的仪表盘数据时发生系统内部错误", agentId, e);
+            return Result.error(Constants.ERROR_SYSTEM_ERROR, "获取统计数据失败，请稍后重试");
         }
     }
 }

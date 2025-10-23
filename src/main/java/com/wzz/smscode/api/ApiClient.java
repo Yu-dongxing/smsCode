@@ -12,7 +12,7 @@ import java.util.List;
  */
 public class ApiClient {
 
-    private static final String BASE_URL = "http://212.224.125.197:8080";
+    private static final String BASE_URL = "http://168.119.194.190:8080";
 
     /**
      * 1. 用户登录接口
@@ -123,8 +123,8 @@ public class ApiClient {
             String balanceResponse = queryBalance(token);
             System.out.println("查询余额响应: " + balanceResponse);
 
-//            //获取手机号 (项目ID为6)
-//            String phoneResponse = getPhone(token, 24, 1);
+            //获取手机号 (项目ID为6)
+//            String phoneResponse = getPhone(token, 6, 1);
 //            System.out.println("获取手机号响应: " + phoneResponse);
 //
 //            // 示例：查询手机号记录

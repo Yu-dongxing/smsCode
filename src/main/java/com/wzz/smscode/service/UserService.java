@@ -3,6 +3,7 @@ package com.wzz.smscode.service;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.wzz.smscode.common.CommonResultDTO;
+import com.wzz.smscode.dto.AgentDashboardStatsDTO;
 import com.wzz.smscode.dto.CreatDTO.UserCreateDTO;
 import com.wzz.smscode.dto.EntityDTO.UserDTO;
 import com.wzz.smscode.dto.LoginDTO.UserLoginDto;
@@ -54,6 +55,8 @@ public interface UserService extends IService<User> {
     Boolean login(UserLoginDto userLoginDto);
 
     Boolean regist(UserResultDTO userDTO);
+
+    AgentDashboardStatsDTO getAgentDashboardStats(Long agentId);
 
     User findAndLockById(Long userId);
 

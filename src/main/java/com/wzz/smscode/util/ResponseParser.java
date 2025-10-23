@@ -17,9 +17,11 @@ public class ResponseParser {
     // 匹配中国大陆手机号
     private static final Pattern PHONE_NUMBER_PATTERN = Pattern.compile("(1[3-9]\\d{9})");
 
-    // 匹配4位或6位验证码
-    private static final Pattern VERIFICATION_CODE_PATTERN = Pattern.compile(":\\s*[\"']?(\\d{4,6})[\"']?");
+    private static final Pattern VERIFICATION_CODE_PATTERN = Pattern.compile("^\\s*[\"']?\\d{4}(?:\\d{2})?[\"']?\\s*$");
 
+
+    // 【新增】匹配常见时间戳格式，例如: "2023-10-27 15:30:00", "2023/10/27 15:30:00" 或 "2023-10-27T15:30:00"
+    private static final Pattern TIMESTAMP_PATTERN = Pattern.compile("(\\d{4}[-/]\\d{2}[-/]\\d{2}[ T]\\d{2}:\\d{2}:\\d{2})");
 
     public Optional<String> parsePhoneNumber(String responseBody) {
         if (responseBody == null || responseBody.isEmpty()) {
@@ -28,6 +30,25 @@ public class ResponseParser {
         Matcher matcher = PHONE_NUMBER_PATTERN.matcher(responseBody);
         if (matcher.find()) {
             return Optional.of(matcher.group(1));
+        }
+        return Optional.empty();
+    }
+
+
+    /**
+     * 【新增】从响应体中解析时间戳字符串。
+     *
+     * @param responseBody API 响应体
+     * @return 包含时间戳字符串的 Optional，例如 "2023-10-27 10:00:00"
+     */
+    public Optional<String> parseTimestamp(String responseBody) {
+        if (responseBody == null || responseBody.isEmpty()) {
+            return Optional.empty();
+        }
+        Matcher matcher = TIMESTAMP_PATTERN.matcher(responseBody);
+        if (matcher.find()) {
+            // .trim() 确保没有多余的空格
+            return Optional.of(matcher.group(1).trim());
         }
         return Optional.empty();
     }
@@ -89,6 +110,34 @@ public class ResponseParser {
             return Optional.of(matcher.group(1));
         }
         return Optional.empty();
+    }
+
+
+    /**
+     * 【新增】根据项目配置，智能解析验证码。
+     * <p>
+     * 业务逻辑:
+     * 1.  如果 project 中配置了 `responseCodeField`，则根据该字段名从JSON响应中解析验证码。
+     * 2.  如果 `responseCodeField` 未配置，则回退到使用通用正则表达式解析整个响应体。
+     *
+     * @param project      项目配置实体
+     * @param responseBody API接口返回的响应体字符串
+     * @return 包含验证码字符串的 Optional。
+     */
+    public Optional<String> parseVerificationCodeByType(Project project, String responseBody) {
+        if (!StringUtils.hasText(responseBody)) {
+            return Optional.empty();
+        }
+
+        String codeField = project.getResponseCodeField();
+
+        // 优先策略：如果定义了验证码字段，则根据字段解析
+        if (StringUtils.hasText(codeField)) {
+            return parseJsonFieldValue(responseBody, codeField);
+        } else {
+            // 回退策略：如果未定义字段，则使用通用正则进行解析
+            return parseVerificationCode(responseBody);
+        }
     }
 
 

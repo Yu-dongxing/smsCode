@@ -18,6 +18,7 @@ import com.wzz.smscode.dto.update.UpdateUserDto;
 import com.wzz.smscode.dto.update.UserUpdatePasswardDTO;
 import com.wzz.smscode.entity.Project;
 import com.wzz.smscode.entity.User;
+import com.wzz.smscode.entity.UserLedger;
 import com.wzz.smscode.entity.UserProjectLine;
 import com.wzz.smscode.enums.FundType;
 import com.wzz.smscode.exception.BusinessException;
@@ -27,6 +28,8 @@ import com.wzz.smscode.service.UserLedgerService;
 import com.wzz.smscode.service.UserProjectLineService;
 import com.wzz.smscode.service.UserService;
 import com.wzz.smscode.util.BalanceUtil;
+import lombok.AllArgsConstructor;
+import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 //import org.springframework.security.crypto.password.PasswordEncoder;
@@ -36,6 +39,10 @@ import org.springframework.transaction.interceptor.TransactionAspectSupport;
 import org.springframework.util.CollectionUtils;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -57,6 +64,78 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
 //            return user;
 //        }
         return null;
+    }
+
+
+    @Autowired
+    private UserLedgerService userLedgerService;
+
+    /**
+     * 获取代理仪表盘的统计数据
+     * @param agentId 代理的用户ID
+     * @return 包含核心统计数据的DTO
+     */
+    @Override
+    public AgentDashboardStatsDTO getAgentDashboardStats(Long agentId) {
+        AgentDashboardStatsDTO statsDTO = new AgentDashboardStatsDTO();
+
+        // 1. 获取代理自身信息，查询"我的余额"
+        User agent = this.getById(agentId);
+        if (agent == null) {
+            throw new BusinessException("代理用户不存在");
+        }
+        statsDTO.setMyBalance(agent.getBalance());
+
+        // 2. 查询该代理的所有下级用户
+        LambdaQueryWrapper<User> subUsersQuery = new LambdaQueryWrapper<User>().eq(User::getParentId, agentId);
+        List<User> subUsers = this.list(subUsersQuery);
+
+        if (subUsers.isEmpty()) {
+            // 如果没有下级，直接返回默认值
+            statsDTO.setTotalSubUsers(0L);
+            statsDTO.setTodaySubUsersRecharge(BigDecimal.ZERO);
+            statsDTO.setSubUsersCodeRate(0.0);
+            return statsDTO;
+        }
+
+        // 3. 计算"我的下级总人数"
+        statsDTO.setTotalSubUsers((long) subUsers.size());
+        List<Long> subUserIds = subUsers.stream().map(User::getId).collect(Collectors.toList());
+
+        // 4. 计算"我的下级所有人今日充值"
+        LocalDateTime todayStart = LocalDateTime.of(LocalDate.now(), LocalTime.MIN);
+        LocalDateTime todayEnd = LocalDateTime.of(LocalDate.now(), LocalTime.MAX);
+
+        LambdaQueryWrapper<UserLedger> ledgerWrapper = new LambdaQueryWrapper<>();
+        ledgerWrapper.in(UserLedger::getUserId, subUserIds)
+                // FundType.AGENT_RECHARGE 代表上级给下级充值，是下级的入账记录
+                .eq(UserLedger::getFundType, FundType.AGENT_RECHARGE.getCode())
+                // ledgerType 1 代表入账
+                .eq(UserLedger::getLedgerType, 1)
+                .ge(UserLedger::getTimestamp, todayStart)
+                .le(UserLedger::getTimestamp, todayEnd);
+
+        List<UserLedger> todayRechargeLedgers = userLedgerService.list(ledgerWrapper);
+        BigDecimal totalRecharge = todayRechargeLedgers.stream()
+                .map(UserLedger::getPrice) // price 字段记录了变动金额
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        statsDTO.setTodaySubUsersRecharge(totalRecharge);
+
+        // 5. 计算"我的下级的回码率"
+        // 累加所有下级的总取号数和总成功取码数来计算总回码率
+        long totalGetCount = subUsers.stream().mapToLong(User::getTotalGetCount).sum();
+        long totalCodeCount = subUsers.stream().mapToLong(User::getTotalCodeCount).sum();
+
+        if (totalGetCount == 0) {
+            statsDTO.setSubUsersCodeRate(0.0);
+        } else {
+            double rate = ((double) totalCodeCount / totalGetCount) * 100.0;
+            // 格式化为两位小数
+            statsDTO.setSubUsersCodeRate(BigDecimal.valueOf(rate)
+                    .setScale(2, RoundingMode.HALF_UP).doubleValue());
+        }
+
+        return statsDTO;
     }
 
     @Override
@@ -140,6 +219,15 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         return CommonResultDTO.success("查询成功", user.getBalance());
     }
 
+
+    /* 新建一个简单 VO，用来装需要的一次性数据 */
+    @Data
+    @AllArgsConstructor
+    private static class ProjMeta {
+        String projectName;
+        BigDecimal costPrice;
+    }
+
     @Autowired
     private UserProjectLineService userProjectLineService;
 
@@ -201,19 +289,27 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         } else {
             validateProjectPrices(priceSettings, operator);
         }
+        log.info("处理价格配置并存入新表{}",priceSettings);
 
         if (!CollectionUtils.isEmpty(priceSettings)) {
             List<UserProjectLine> linesToInsert = new ArrayList<>();
-            Map<String, String> projectNames = projectService.list().stream()
-                    .collect(Collectors.toMap(p -> p.getProjectId() + "-" + p.getLineId(), Project::getProjectName, (p1, p2) -> p1));
+            Map<String, ProjMeta> projMetaMap = projectService.list().stream()
+                    .collect(Collectors.toMap(
+                            p -> p.getProjectId() + "-" + p.getLineId(),
+                            p -> new ProjMeta(p.getProjectName(), p.getCostPrice()),
+                            (a, b) -> a));   // 重复 key 取第一个
 
             for (ProjectPriceDTO priceDto : priceSettings) {
                 UserProjectLine upl = new UserProjectLine();
                 upl.setUserId(user.getId());
                 upl.setProjectId(String.valueOf(priceDto.getProjectId()));
                 upl.setLineId(String.valueOf(priceDto.getLineId()));
-                upl.setProjectName(projectNames.get(priceDto.getProjectId() + "-" + priceDto.getLineId()));
+
+                ProjMeta meta = projMetaMap.get(priceDto.getProjectId() + "-" + priceDto.getLineId());
+                upl.setProjectName(meta.getProjectName());
+                upl.setCostPrice(meta.getCostPrice());   // <-- 新增
                 upl.setAgentPrice(priceDto.getPrice());
+
                 linesToInsert.add(upl);
             }
             userProjectLineService.saveBatch(linesToInsert);
@@ -310,7 +406,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             validateProjectPrices(pricesToValidate, operatorForValidation);
 
             // 更新价格：先删除旧的，再插入新的
-            userProjectLineService.remove(new LambdaQueryWrapper<UserProjectLine>().eq(UserProjectLine::getUserId, userDTO.getUserId()));
+//            userProjectLineService.remove(new LambdaQueryWrapper<UserProjectLine>().eq(UserProjectLine::getUserId, userDTO.getUserId()));
 
             List<UserProjectLine> linesToInsert = pricesToValidate.stream().map(priceDto -> {
                 UserProjectLine upl = new UserProjectLine();

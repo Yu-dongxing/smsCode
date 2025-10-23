@@ -3,6 +3,7 @@ package com.wzz.smscode.service;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.wzz.smscode.common.CommonResultDTO;
+import com.wzz.smscode.dto.CodeResult;
 import com.wzz.smscode.dto.NumberDTO;
 import com.wzz.smscode.entity.NumberRecord;
 import org.springframework.scheduling.annotation.Async;
@@ -38,6 +39,9 @@ public interface NumberRecordService extends IService<NumberRecord> {
     // ... 其他方法保持不变 ...
 //    CommonResultDTO<String> getCode(String userName, String password, String identifier);
 
+    @Transactional
+    void updateRecordAfterRetrieval(NumberRecord record, CodeResult result);
+
     // ... 其他方法保持不变 ...
     CommonResultDTO<String> getCode(String userName, String password, String identifier);
 
@@ -46,4 +50,6 @@ public interface NumberRecordService extends IService<NumberRecord> {
     IPage<NumberDTO> listUserNumbersByUSerName(String userName, String password, Integer statusFilter, Date startTime, Date endTime, IPage<NumberRecord> page);
 
     IPage<NumberRecord> listAllNumbers(Integer statusFilter, Date startTime, Date endTime, IPage<NumberRecord> page);
+
+    NumberRecord getRecordByPhone(String phone);
 }

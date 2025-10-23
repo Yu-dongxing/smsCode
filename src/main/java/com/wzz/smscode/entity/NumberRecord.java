@@ -142,4 +142,12 @@ public class NumberRecord extends BaseEntity {
     @TableField("code_received_time")
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
     private LocalDateTime codeReceivedTime;
+
+    /**
+     * 备注
+     */
+    @ColumnComment("备注")
+    @TableField("remark")
+    @ColumnType("TEXT")
+    private String remark;
 }

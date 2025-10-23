@@ -27,6 +27,8 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronizationAdapter;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
@@ -81,13 +83,12 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         }
 
         // 3. 【核心改造】调用统一服务获取号码或操作ID
-        String identifier;
+        Map<String,String>  identifier;
         try {
-            // 在调用 getPhoneNumber 时，把需要的动态参数传递进去
-            // 这里我们假设 num 的值是 "1"
             String numForApi = "1";
-            identifier = smsApiService.getPhoneNumber(project, numForApi);
-            if (!StringUtils.hasText(identifier)) {
+             identifier = smsApiService.getPhoneNumber(project, numForApi);
+             log.info("获取到手机号的信息：{}",identifier);
+            if (!StringUtils.hasText(identifier.get("phone"))) {
                 return CommonResultDTO.error(Constants.ERROR_NO_NUMBER, "未获取到有效号码或ID");
             }
         } catch (BusinessException e) {
@@ -102,7 +103,8 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         record.setProjectId(projectId);
         record.setLineId(lineId);
         // 注意：这里存入的是 identifier，它可能是手机号，也可能是一个操作ID(UUID)
-        record.setPhoneNumber(identifier);
+        record.setPhoneNumber(identifier.get("phone"));
+        record.setApiPhoneId(identifier.get("id"));
         record.setStatus(0); // 待取码
         record.setCharged(1); // 默认未扣费
         record.setPrice(price);
@@ -112,13 +114,26 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         this.save(record);
 
         // 5. 异步启动取码任务，并将 identifier 传递过去，避免二次查询
-//        self.retrieveCode(record.getId(), identifier);
+//        self.retrieveCode(record.getId(), identifier.get("id"));
+        // 5. 【核心优化】注册一个事务成功提交后的回调，来安全地启动异步取码任务
+        final String finalIdentifierId = project.getResponsePhoneField() != null
+                ? identifier.get("id")
+                : identifier.get("phone");
+
+        final Long recordId = record.getId();
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronizationAdapter() {
+            @Override
+            public void afterCommit() {
+                log.info("事务已提交，开始为记录ID {} 异步获取验证码...", recordId);
+                self.retrieveCode(recordId, finalIdentifierId);
+            }
+        });
 
         // 6. 更新统计
         userService.updateUserStatsForNewNumber(user.getId(), false);
 
         // 7. 返回操作ID或部分号码给用户
-        return CommonResultDTO.success("取号成功，请稍后查询验证码", identifier);
+        return CommonResultDTO.success("取号成功，请稍后查询验证码", identifier.get("phone"));
     }
 
     @Override
@@ -148,6 +163,8 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         } catch (BusinessException e) {
             log.warn("获取验证码过程中发生业务异常 for record {}: {}", numberId, e.getMessage());
             result = String.valueOf(CodeResult.failure()); // 视作失败
+            record.setRemark(e.getMessage());
+
         }
 
         // 9. 更新最终状态和执行扣费
@@ -155,6 +172,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
     }
 
     @Transactional
+    @Override
     public void updateRecordAfterRetrieval(NumberRecord record, CodeResult result) {
         NumberRecord latestRecord = this.getById(record.getId());
         if (latestRecord.getStatus() != 1) return; // 防止重复处理
@@ -258,6 +276,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             // 超时未获取
             latestRecord.setStatus(3);
         }
+        latestRecord.setRemark(record.getRemark());
 
         this.updateById(latestRecord);
     }
@@ -319,6 +338,17 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         LambdaQueryWrapper<NumberRecord> wrapper = new LambdaQueryWrapper<>();
         addCommonFilters(wrapper, statusFilter, startTime, endTime);
         return this.page(page, wrapper);
+    }
+
+
+    @Override
+    public NumberRecord getRecordByPhone(String phone) {
+        LambdaQueryWrapper<NumberRecord> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(NumberRecord::getPhoneNumber,phone);
+        NumberRecord numberRecord = this.getOne(wrapper);
+
+//        smsApiService.getVerificationCode()
+        return numberRecord;
     }
 
     // --- 私有辅助方法 ---
