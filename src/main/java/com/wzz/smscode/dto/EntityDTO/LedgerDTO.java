@@ -1,5 +1,6 @@
 package com.wzz.smscode.dto.EntityDTO;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
 import lombok.Data;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -57,6 +58,7 @@ public class LedgerDTO {
     /**
      * 操作时间（扣费或充值发生的时间）
      */
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
     private LocalDateTime timestamp;
 
     /**

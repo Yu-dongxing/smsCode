@@ -4,6 +4,7 @@ import cn.hutool.core.bean.BeanUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.repository.AbstractRepository;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wzz.smscode.common.CommonResultDTO;
@@ -31,6 +32,7 @@ import com.wzz.smscode.util.BalanceUtil;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 //import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -564,25 +566,22 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     public UserDTO convertToDTO(User user) {
         if (user == null) return null;
         UserDTO dto = new UserDTO();
+        BeanUtils.copyProperties(user, dto);
         dto.setUserId(user.getId());
-        dto.setBalance(user.getBalance());
-        dto.setStatus(user.getStatus());
-        dto.setIsAgent(user.getIsAgent() == 1);
-        dto.setParentId(user.getParentId());
-
+        dto.setIsAgent(Boolean.parseBoolean(user.getIsAgent().toString()));
         // 从 user_project_line 表获取价格信息
-        List<UserProjectLine> userLines = userProjectLineService.getLinesByUserId(user.getId());
-        if (!CollectionUtils.isEmpty(userLines)) {
-            Map<String, BigDecimal> pricesMap = userLines.stream()
-                    .collect(Collectors.toMap(
-                            line -> line.getProjectId() + "-" + line.getLineId(),
-                            UserProjectLine::getAgentPrice,
-                            (price1, price2) -> price1 // 如果有重复key，保留第一个
-                    ));
-            dto.setProjectPrices(pricesMap);
-        } else {
-            dto.setProjectPrices(Collections.emptyMap());
-        }
+//        List<UserProjectLine> userLines = userProjectLineService.getLinesByUserId(user.getId());
+//        if (!CollectionUtils.isEmpty(userLines)) {
+//            Map<String, BigDecimal> pricesMap = userLines.stream()
+//                    .collect(Collectors.toMap(
+//                            line -> line.getProjectId() + "-" + line.getLineId(),
+//                            UserProjectLine::getAgentPrice,
+//                            (price1, price2) -> price1 // 如果有重复key，保留第一个
+//                    ));
+//            dto.setProjectPrices(pricesMap);
+//        } else {
+//            dto.setProjectPrices(Collections.emptyMap());
+//        }
 
         return dto;
     }
@@ -702,5 +701,283 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         //todo
         BeanUtil.copyProperties(userDTO, uu);
         return userMapper.insert(uu)>0;
+    }
+
+    /**
+     * 【新-重构】处理代理为用户充值的业务逻辑
+     * 通过调用统一的账本服务来确保事务和数据一致性。
+     * 1. 扣除代理余额
+     * 2. 增加用户余额
+     * 3. 为双方创建账本记录
+     */
+    @Transactional(rollbackFor = Exception.class)
+    @Override
+    public void rechargeUserFromAgentBalance(Long targetUserId, BigDecimal amount, Long agentId) {
+        // 步骤 0: 校验金额必须为正数
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BusinessException("操作金额必须为正数");
+        }
+
+        // 步骤 1: 获取代理和目标用户信息，用于权限校验和记录备注
+        // 注意: 此处不需要加锁(FOR UPDATE)，因为加锁操作由下游的 createLedgerAndUpdateBalance 方法完成
+        User agent = this.getById(agentId);
+        User targetUser = this.getById(targetUserId);
+
+        // 步骤 2: 进行严格的权限和状态校验
+        if (agent == null || agent.getIsAgent() != 1) {
+            throw new SecurityException("操作员权限不足或非代理用户");
+        }
+        if (targetUser == null) {
+            throw new BusinessException("目标用户不存在");
+        }
+        // 确保目标用户是该代理的直接下级
+        if (!agentId.equals(targetUser.getParentId())) {
+            throw new SecurityException("无权操作非下级用户");
+        }
+
+        // 步骤 3: 代理账户出账
+        // 构建代理扣款的请求DTO
+        LedgerCreationDTO agentDeductRequest = LedgerCreationDTO.builder()
+                .userId(agentId)
+                .amount(amount)
+                .ledgerType(0) // 0-出账
+                .fundType(FundType.AGENT_DEDUCTION) // 假设有此类型：代理为下级充值扣款
+                .remark(String.format("为用户 %s 充值", targetUser.getUserName()))
+                .build();
+
+        // 调用核心服务，该方法会检查代理余额是否充足，如果不足会抛出异常，整个事务回滚
+        userLedgerService.createLedgerAndUpdateBalance(agentDeductRequest);
+
+        // 步骤 4: 用户账户入账
+        // 构建用户充值的请求DTO
+        LedgerCreationDTO userRechargeRequest = LedgerCreationDTO.builder()
+                .userId(targetUserId)
+                .amount(amount)
+                .ledgerType(1) // 1-入账
+                .fundType(FundType.AGENT_RECHARGE) // 假设有此类型：代理充值
+                .remark(String.format("收到代理 %s 的充值", agent.getUserName()))
+                .build();
+
+        // 调用核心服务
+        userLedgerService.createLedgerAndUpdateBalance(userRechargeRequest);
+    }
+
+    /**
+     * 【新-重构】处理代理从用户扣款的业务逻辑
+     * 通过调用统一的账本服务来确保事务和数据一致性。
+     * 1. 扣除用户余额
+     * 2. 增加代理余额
+     * 3. 为双方创建账本记录
+     */
+    @Transactional(rollbackFor = Exception.class)
+    @Override
+    public void deductUserToAgentBalance(Long targetUserId, BigDecimal amount, Long agentId) {
+        // 步骤 0: 校验金额
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BusinessException("操作金额必须为正数");
+        }
+
+        // 步骤 1: 获取用户信息用于校验和备注
+        User agent = this.getById(agentId);
+        User targetUser = this.getById(targetUserId);
+
+        // 步骤 2: 权限和状态校验
+        if (agent == null || agent.getIsAgent() != 1) {
+            throw new SecurityException("操作员权限不足或非代理用户");
+        }
+        if (targetUser == null) {
+            throw new BusinessException("目标用户不存在");
+        }
+        if (!agentId.equals(targetUser.getParentId())) {
+            throw new SecurityException("无权操作非下级用户");
+        }
+
+        // 步骤 3: 用户账户出账
+        // 构建用户被扣款的请求DTO
+        LedgerCreationDTO userDeductRequest = LedgerCreationDTO.builder()
+                .userId(targetUserId)
+                .amount(amount)
+                .ledgerType(0) // 0-出账
+                .fundType(FundType.AGENT_DEDUCTION) // 假设有此类型：代理扣款
+                .remark(String.format("被代理 %s 扣款", agent.getUserName()))
+                .build();
+
+        // 调用核心服务，该方法会检查用户余额是否充足
+        userLedgerService.createLedgerAndUpdateBalance(userDeductRequest);
+
+        // 步骤 4: 代理账户入账
+        // 构建代理收款的请求DTO
+        LedgerCreationDTO agentAddRequest = LedgerCreationDTO.builder()
+                .userId(agentId)
+                .amount(amount)
+                .ledgerType(1) // 1-入账
+                .fundType(FundType.AGENT_RECHARGE) // 假设有此类型：从下级扣款入账
+                .remark(String.format("从用户 %s 扣款", targetUser.getUserName()))
+                .build();
+
+        // 调用核心服务
+        userLedgerService.createLedgerAndUpdateBalance(agentAddRequest);
+    }
+
+    @Override
+    public List<AgentProjectPriceDTO> getAgentProjectPrices(Long agentId) {
+        List<UserProjectLine> agentLines = userProjectLineService.getLinesByUserId(agentId);
+        if (CollectionUtils.isEmpty(agentLines)) {
+            return Collections.emptyList(); // 如果代理没有任何项目线路，直接返回空列表
+        }
+        List<Long> projectTableIds = agentLines.stream()
+                .map(UserProjectLine::getProjectTableId)
+                .distinct()
+                .collect(Collectors.toList());
+        Map<Long, Project> projectMap = projectService.listByIds(projectTableIds).stream()
+                .collect(Collectors.toMap(Project::getId, project -> project));
+        return agentLines.stream().map(line -> {
+            AgentProjectPriceDTO dto = new AgentProjectPriceDTO();
+            dto.setProjectTableId(line.getProjectTableId());
+            dto.setProjectId(line.getProjectId());
+            dto.setProjectName(line.getProjectName());
+            dto.setLineId(line.getLineId());
+
+            dto.setCostPrice(line.getCostPrice());
+            dto.setCurrentAgentPrice(line.getAgentPrice());
+
+            // 从 projectMap 中获取对应的系统最高限价
+            Project project = projectMap.get(line.getProjectTableId());
+            if (project != null) {
+                dto.setPriceMax(project.getPriceMax());
+            } else {
+                // 容错处理：如果 Project 表找不到对应记录，给一个默认值或成本价
+                dto.setPriceMax(line.getCostPrice());
+                log.warn("数据不一致：UserProjectLine ID {} 对应的项目在线路表(project)中未找到", line.getProjectTableId());
+            }
+
+            return dto;
+        }).collect(Collectors.toList());
+    }
+
+    @Transactional
+    @Override
+    public void updateAgentProjectConfig(Long agentId, AgentProjectLineUpdateDTO updateDTO) {
+        log.info("更新项目配置接口：{}",updateDTO);
+        // 1. 查找对应的用户项目线路记录
+        UserProjectLine userProjectLine = userProjectLineService.getById(updateDTO.getUserProjectLineId());
+
+        // 2. 安全校验：确保记录存在，并且属于当前操作的代理用户
+        if (userProjectLine == null) {
+            throw new BusinessException("操作失败：该项目不存在。");
+        }
+
+        boolean needsUpdate = false; // 标记是否需要执行数据库更新操作
+
+        // 3. 按需更新字段
+        // 3.1 检查是否需要更新价格
+        if (updateDTO.getAgentPrice() != null) {
+            // 如果价格字段被传递了，执行价格校验逻辑
+//            Project project = projectService.getById(userProjectLine.getProjectTableId());
+            Project project = projectService.getProject(updateDTO.getProjectId(), Integer.valueOf(updateDTO.getLineId()));
+            if (project == null) {
+                log.error("数据不一致：UserProjectLine ID {} 对应的项目在线路表(project)中未找到", userProjectLine.getProjectTableId());
+                throw new BusinessException("更新失败：项目基础信息不存在。");
+            }
+
+            BigDecimal newPrice = updateDTO.getAgentPrice();
+            BigDecimal costPrice = userProjectLine.getCostPrice();
+            BigDecimal maxPrice = project.getPriceMax();
+
+            // 价格逻辑校验
+            if (newPrice.compareTo(costPrice) < 0) {
+                throw new BusinessException("更新失败：售价不能低于成本价 " + costPrice);
+            }
+            if (maxPrice != null && maxPrice.compareTo(BigDecimal.ZERO) > 0 && newPrice.compareTo(maxPrice) > 0) {
+                throw new BusinessException("更新失败：售价不能高于系统最高限价 " + maxPrice);
+            }
+
+            // 设置新价格并标记需要更新
+            userProjectLine.setAgentPrice(newPrice);
+            needsUpdate = true;
+        }
+
+        // 3.2 检查是否需要更新备注
+        if (updateDTO.getRemark() != null) {
+            // 如果备注字段被传递了，直接更新
+            userProjectLine.setRemark(updateDTO.getRemark());
+            needsUpdate = true;
+        }
+        if(updateDTO.getProjectId() != null) {
+            userProjectLine.setProjectId(updateDTO.getProjectId());
+            needsUpdate = true;
+        }
+
+        if (updateDTO.getLineId() != null) {
+            userProjectLine.setLineId(updateDTO.getLineId());
+            needsUpdate = true;
+        }
+
+        // 3.3 如果未来有其他字段，在这里添加类似的 if (updateDTO.getOtherField() != null) { ... } 逻辑块
+
+        // 4. 如果有任何字段被修改，则执行数据库更新
+        if (needsUpdate) {
+            boolean updated = userProjectLineService.updateById(userProjectLine);
+            if (!updated) {
+                throw new BusinessException("更新失败，请稍后重试。");
+            }
+        }
+        // 如果没有任何字段需要更新，则方法静默成功，不执行任何数据库操作
+    }
+
+    @Override
+    public List<SubUserProjectPriceDTO> getSubUsersProjectPrices(Long agentId) {
+        // 1. 校验操作者是否是代理 (可选，但推荐)
+        User agent = this.getById(agentId);
+        if (agent == null || agent.getIsAgent() != 1) {
+            throw new BusinessException("当前用户不是代理或用户不存在");
+        }
+
+        // 2. 查询该代理的所有下级用户
+        LambdaQueryWrapper<User> subUsersQuery = new LambdaQueryWrapper<User>()
+                .eq(User::getParentId, agentId);
+        List<User> subUsers = this.list(subUsersQuery);
+
+        if (CollectionUtils.isEmpty(subUsers)) {
+            return Collections.emptyList(); // 如果没有下级，直接返回空列表
+        }
+
+        // 3. 提取所有下级的用户ID
+        List<Long> subUserIds = subUsers.stream().map(User::getId).collect(Collectors.toList());
+
+        // 4. 一次性查询所有下级的所有项目线路配置
+        //    注意：这里需要 UserProjectLineService 提供一个根据用户ID列表查询的方法
+        List<UserProjectLine> allLines = userProjectLineService.getLinesByUserIds(subUserIds);
+
+        // 5. 将线路配置按用户ID分组，方便后续处理
+        Map<Long, List<UserProjectLine>> linesByUserId = allLines.stream()
+                .collect(Collectors.groupingBy(UserProjectLine::getUserId));
+
+        // 6. 构建并返回结果列表
+        return subUsers.stream().map(subUser -> {
+            SubUserProjectPriceDTO dto = new SubUserProjectPriceDTO();
+            dto.setUserId(subUser.getId());
+            dto.setUserName(subUser.getUserName());
+            List<UserProjectLine> userLines = linesByUserId.getOrDefault(subUser.getId(), Collections.emptyList());
+            // 将 UserProjectLine 转换为更清晰的 ProjectPriceInfoDTO
+            List<ProjectPriceInfoDTO> prices = userLines.stream().map(line -> {
+
+                Project project = projectService.getProject(line.getProjectId(), Integer.valueOf(line.getLineId()));
+
+                ProjectPriceInfoDTO priceInfo = new ProjectPriceInfoDTO();
+                priceInfo.setId(line.getId());
+                priceInfo.setProjectName(line.getProjectName());
+                priceInfo.setProjectId(line.getProjectId());
+                priceInfo.setLineId(line.getLineId());
+                priceInfo.setPrice(line.getAgentPrice()); // 这是下级用户的 "代理价"，即他的成本价
+                priceInfo.setCostPrice(line.getCostPrice());
+                priceInfo.setMaxPrice(project.getPriceMax()!=null?project.getPriceMax():BigDecimal.ZERO  );
+                priceInfo.setMinPrice(project.getPriceMin()!=null?project.getPriceMin():BigDecimal.ZERO );
+                return priceInfo;
+            }).collect(Collectors.toList());
+
+            dto.setProjectPrices(prices);
+            return dto;
+        }).collect(Collectors.toList());
     }
 }

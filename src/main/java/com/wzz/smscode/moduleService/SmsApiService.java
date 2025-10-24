@@ -73,7 +73,7 @@ public class SmsApiService {
     }
 
     /**
-     * 统一获取验证码（带轮询和时间戳校验）
+     * 统一获取验证码（带轮询）
      *
      * @param project    项目配置
      * @param identifier 手机号或上一步获取的操作ID
@@ -84,54 +84,36 @@ public class SmsApiService {
                 project.getProjectId(), project.getLineId(), identifier, project.getCodeMaxAttempts());
         AuthStrategy strategy = authStrategyFactory.getStrategy(String.valueOf(project.getAuthType()));
 
-        //定义计数器和最大尝试次数
+        // 定义计数器和最大尝试次数
         int attempts = 0;
         final int maxAttempts = (project.getCodeMaxAttempts() != null && project.getCodeMaxAttempts() > 0)
                 ? project.getCodeMaxAttempts()
                 : 20;
-        final long pollIntervalMillis = 3000; // 轮询间隔保持不变
-        final long recencyThresholdSeconds = 5; // 时间戳校验阈值保持不变
+        final long pollIntervalMillis = 3000; // 轮询间隔
 
         while (attempts < maxAttempts) {
             try {
                 String responseBody = strategy.buildGetCodeRequest(webClient, project, identifier).block();
                 log.info("轮询获取验证码响应: {}", responseBody);
+
                 if (responseBody != null && (responseBody.contains("错误") || responseBody.contains("失败"))) {
                     log.info("响应体中检测到错误信息，将立即停止轮询。响应内容: {}", responseBody);
                     // 抛出业务异常，并将完整的响应体作为错误信息返回给调用方
                     throw new BusinessException("获取验证码失败，上游API返回明确的错误信息: " + responseBody);
                 }
-                Optional<String> codeOpt = responseParser.parseVerificationCodeByType(project, responseBody);
-                //增加对字符串 "null" (忽略大小写) 的判断
+
+                Optional<String> codeOpt = responseParser.parseVerificationCodeByTypeByJson(project, responseBody);
+
+                // 增加对字符串 "null" (忽略大小写) 的判断
                 if (codeOpt.isPresent() &&
                         !codeOpt.get().trim().isEmpty() &&
                         !"null".equalsIgnoreCase(codeOpt.get().trim())) {
 
                     String code = codeOpt.get().trim();
-                    Optional<String> timestampOpt = responseParser.parseTimestamp(responseBody);
-
-                    if (timestampOpt.isPresent()) {
-                        Optional<LocalDateTime> parsedTimestampOpt = parseFlexibleTimestamp(timestampOpt.get());
-                        if (parsedTimestampOpt.isPresent()) {
-                            LocalDateTime responseTime = parsedTimestampOpt.get();
-                            LocalDateTime now = LocalDateTime.now();
-                            long secondsDiff = ChronoUnit.SECONDS.between(responseTime, now);
-
-                            if (Math.abs(secondsDiff) <= recencyThresholdSeconds) {
-                                log.info("成功获取到最新的验证码: {}, 时间戳: {}, 与当前时间差: {}秒", code, responseTime, secondsDiff);
-                                return code;
-                            } else {
-                                log.warn("获取到验证码 {}，但其时间戳 {} 已过时（差异超过{}秒），继续轮询...", code, responseTime, recencyThresholdSeconds);
-                            }
-                        } else {
-                            log.warn("获取到验证码 {}，但无法解析其时间戳 {}。将直接返回该验证码。", code, timestampOpt.get());
-                            return code;
-                        }
-                    } else {
-                        log.info("成功获取到验证码 (无时间戳): {}", code);
-                        return code;
-                    }
+                    log.info("成功获取到验证码: {}", code);
+                    return code; // 获取到有效验证码后直接返回
                 }
+
                 // 递增计数器
                 attempts++;
                 if (attempts < maxAttempts) {
@@ -147,6 +129,39 @@ public class SmsApiService {
             }
         }
         throw new BusinessException("获取验证码失败，已达到最大尝试次数 (" + maxAttempts + "次)");
+    }
+
+    /**
+     * 【新增方法】
+     * 单次尝试获取验证码，无轮询。
+     * 此方法主要由 getCode 接口在用户主动查询时调用，以进行一次即时检查。
+     *
+     * @param project    项目配置
+     * @param identifier 手机号或操作ID
+     * @return Optional<String> 包含验证码（如果获取到）
+     */
+    public Optional<String> fetchVerificationCodeOnce(Project project, String identifier) {
+        log.info("为项目 [{}], 标识符 [{}] 执行单次验证码获取...", project.getProjectId(), identifier);
+        AuthStrategy strategy = authStrategyFactory.getStrategy(String.valueOf(project.getAuthType()));
+        try {
+            String responseBody = strategy.buildGetCodeRequest(webClient, project, identifier).block();
+            log.info("单次获取验证码响应: {}", responseBody);
+
+            if (responseBody != null && (responseBody.contains("错误") || responseBody.contains("失败"))) {
+                log.warn("上游API在单次获取中返回明确错误: {}", responseBody);
+                return Optional.empty(); // 返回空，表示未获取到
+            }
+
+            Optional<String> codeOpt = responseParser.parseVerificationCodeByTypeByJson(project, responseBody);
+
+            // 过滤掉空字符串或 "null" 字符串
+            return codeOpt.filter(code -> StringUtils.hasText(code) && !"null".equalsIgnoreCase(code.trim()));
+
+        } catch (Exception e) {
+            log.error("单次轮询获取验证码时发生错误, identifier [{}]: {}", identifier, e.getMessage());
+            // 发生任何异常都视为未获取到
+            return Optional.empty();
+        }
     }
 
     /**

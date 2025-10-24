@@ -20,19 +20,22 @@ public enum AuthType {
      * 表示使用基本认证方式，其中用户名和密码通过URL参数传递的API认证类型。
      * 该枚举值用于标识需要通过在地址栏中以参数形式提供用户名和密码进行认证的API访问请求。
      */
-    BASIC_AUTH_PARAM("BASIC_AUTH_PARAM", "用户名密码（地址栏）"),
+
+    API_KEY_TOKEN_LOGIN("API_KEY_TOKEN_LOGIN","api密钥token登录"),
+
+//    BASIC_AUTH_PARAM("BASIC_AUTH_PARAM", "用户名密码（地址栏）"),
     /**
      * 表示使用基本认证方式，其中用户名和密码通过JSON格式传递的API认证类型。
      * 该枚举值用于标识需要通过在请求体中以JSON格式提供用户名和密码进行认证的API访问请求。
      */
-    BASIC_AUTH_JSON("BASIC_AUTH_JSON", "用户名密码（JSON）"),
+//    BASIC_AUTH_JSON("BASIC_AUTH_JSON", "用户名密码（JSON）"),
     /**
      * 表示使用Token认证方式，其中Token通过请求头传递的API认证类型。
      * 该枚举值用于标识需要通过在HTTP请求头中提供Token进行认证的API访问请求。
      */
     TOKEN_HEADER("TOKEN_HEADER", "Token（Header）"),
 
-    TOKEN_PATH("TOKEN_PATH", "Token认证 (Path Variable)"),
+//    TOKEN_PATH("TOKEN_PATH", "Token认证 (Path Variable)"),
 
     /**
      * 表示使用Token认证方式，其中Token通过URL参数传递的API认证类型。

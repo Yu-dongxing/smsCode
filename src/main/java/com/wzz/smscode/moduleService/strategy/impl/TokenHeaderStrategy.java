@@ -64,7 +64,7 @@ public class TokenHeaderStrategy extends BaseAuthStrategy {
                 .toUriString();
 
         Map<String, Object> requestParams = new HashMap<>();
-        requestParams.put("uuidList", Collections.singletonList(identifier));
+        requestParams.put(project.getGetCodeField(), Collections.singletonList(identifier));
 
         Consumer<WebClient.RequestHeadersSpec<?>> authApplier = spec -> {
             String tokenValue = (StringUtils.hasText(project.getAuthTokenPrefix()) ? project.getAuthTokenPrefix() : "") + project.getAuthTokenValue();

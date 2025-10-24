@@ -4,10 +4,13 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.wzz.smscode.common.CommonResultDTO;
 import com.wzz.smscode.dto.AgentDashboardStatsDTO;
+import com.wzz.smscode.dto.AgentProjectLineUpdateDTO;
+import com.wzz.smscode.dto.AgentProjectPriceDTO;
 import com.wzz.smscode.dto.CreatDTO.UserCreateDTO;
 import com.wzz.smscode.dto.EntityDTO.UserDTO;
 import com.wzz.smscode.dto.LoginDTO.UserLoginDto;
 import com.wzz.smscode.dto.ResultDTO.UserResultDTO;
+import com.wzz.smscode.dto.SubUserProjectPriceDTO;
 import com.wzz.smscode.dto.update.UpdateUserDto;
 import com.wzz.smscode.dto.update.UserUpdatePasswardDTO;
 import com.wzz.smscode.entity.User;
@@ -67,4 +70,19 @@ public interface UserService extends IService<User> {
     Boolean updatePassWardByUserId(UpdateUserDto id);
 
     Boolean updatePassWardByUserName(UserUpdatePasswardDTO updateUserDto);
+
+    @Transactional(rollbackFor = Exception.class)
+        // 如果您已在 UserService 接口中声明此方法
+    void rechargeUserFromAgentBalance(Long targetUserId, BigDecimal amount, Long agentId);
+
+    @Transactional(rollbackFor = Exception.class)
+        // 如果您已在 UserService 接口中声明此方法
+    void deductUserToAgentBalance(Long targetUserId, BigDecimal amount, Long agentId);
+
+    List<AgentProjectPriceDTO> getAgentProjectPrices(Long agentId);
+
+    @Transactional
+    void updateAgentProjectConfig(Long agentId, AgentProjectLineUpdateDTO updateDTO);
+
+    List<SubUserProjectPriceDTO> getSubUsersProjectPrices(Long agentId);
 }

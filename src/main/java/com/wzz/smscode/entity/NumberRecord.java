@@ -111,6 +111,14 @@ public class NumberRecord extends BaseEntity {
     @TableField("balance_before")
     private BigDecimal balanceBefore;
 
+    /**
+     * 错误信息
+     */
+    @TableField("error_info")
+    @ColumnComment("错误信息")
+    @ColumnType("TEXT")
+    private String errorInfo;
+
 
 
     /**

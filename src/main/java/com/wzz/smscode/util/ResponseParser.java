@@ -1,7 +1,12 @@
 package com.wzz.smscode.util;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wzz.smscode.entity.Project;
 import com.wzz.smscode.exception.BusinessException;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils; // 确保已导入
 
@@ -14,6 +19,9 @@ import java.util.regex.Pattern;
 @Component
 public class ResponseParser {
 
+    // ObjectMapper是线程安全的，可以作为单例使用
+    private static final ObjectMapper objectMapper = new ObjectMapper();
+
     // 匹配中国大陆手机号
     private static final Pattern PHONE_NUMBER_PATTERN = Pattern.compile("(1[3-9]\\d{9})");
 
@@ -22,6 +30,7 @@ public class ResponseParser {
 
     // 【新增】匹配常见时间戳格式，例如: "2023-10-27 15:30:00", "2023/10/27 15:30:00" 或 "2023-10-27T15:30:00"
     private static final Pattern TIMESTAMP_PATTERN = Pattern.compile("(\\d{4}[-/]\\d{2}[-/]\\d{2}[ T]\\d{2}:\\d{2}:\\d{2})");
+    private static final Logger log = LogManager.getLogger(ResponseParser.class);
 
     public Optional<String> parsePhoneNumber(String responseBody) {
         if (responseBody == null || responseBody.isEmpty()) {
@@ -73,7 +82,7 @@ public class ResponseParser {
         }
 
         Map<String, String> result = new HashMap<>();
-        String phoneNumberField = project.getResponsePhoneNumberField();
+        String phoneNumberField = project.getResponsePhoneField();
         String phoneIdField = project.getResponsePhoneIdField();
 
         boolean isPhoneNumberFieldDefined = StringUtils.hasText(phoneNumberField);
@@ -99,6 +108,93 @@ public class ResponseParser {
         }
 
         return result;
+    }
+
+
+
+    /**
+     * 【已重构】根据项目配置，智能解析验证码。
+     * 优先使用JSON路径解析，如果失败或未配置，则回退到正则表达式。
+     *
+     * @param project      项目配置实体
+     * @param responseBody API接口返回的响应体字符串
+     * @return 包含验证码字符串的 Optional。
+     */
+    public Optional<String> parseVerificationCodeByTypeByJson(Project project, String responseBody) {
+        if (!StringUtils.hasText(responseBody)) {
+            return Optional.empty();
+        }
+
+        String codeField = project.getResponseCodeField();
+
+        // 优先策略：如果定义了验证码字段，则根据JSON路径进行解析
+        if (StringUtils.hasText(codeField)) {
+            Optional<String> parsedCode = parseJsonFieldValueByPath(responseBody, codeField);
+            // 如果JSON解析成功，直接返回结果
+            if (parsedCode.isPresent()) {
+                return parsedCode;
+            }
+            // 如果JSON解析失败，可以根据业务需求决定是否要继续尝试正则（这里选择继续）
+            log.warn("使用JSON路径 '{}' 解析验证码失败，将尝试使用通用正则进行回退解析。", codeField);
+        }
+
+        // 回退策略：如果未定义字段或JSON解析失败，则使用通用正则进行解析
+        return parseVerificationCodeWithRegex(responseBody);
+    }
+
+    /**
+     * 【回退方法】使用正则表达式从任意文本中提取可能是验证码的数字。
+     * 注意：这个正则表达式比原来的更通用，不再强制要求整个字符串就是验证码。
+     *
+     * @param responseBody 响应体
+     * @return 验证码
+     */
+    public Optional<String> parseVerificationCodeWithRegex(String responseBody) {
+        if (responseBody == null || responseBody.isEmpty()) {
+            return Optional.empty();
+        }
+        // 这个正则会寻找4到6位的连续数字，更适合在复杂字符串中查找
+        Matcher matcher = VERIFICATION_CODE_PATTERN.matcher(responseBody);
+        if (matcher.find()) {
+            // 这里可以添加更多校验，例如检查匹配到的数字周围的上下文
+            return Optional.of(matcher.group(1));
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * 【已升级】使用标准的JSON Pointer按路径解析字段值。
+     * 支持嵌套对象 (如 "result.code") 和数组索引 (如 "data[0].verificationCode")。
+     *
+     * @param jsonBody  JSON响应体
+     * @param fieldPath 字段路径，例如 "data[0].verificationCode"
+     * @return 提取到的值的字符串形式
+     */
+    public Optional<String> parseJsonFieldValueByPath(String jsonBody, String fieldPath) {
+        try {
+            // 1. 将用户友好的路径转换为标准的JSON Pointer路径
+            //    - "result.code" -> "/result/code"
+            //    - "data[0].verificationCode" -> "/data/0/verificationCode"
+            String jsonPointerPath = "/" + fieldPath.replace(".", "/").replaceAll("\\[(\\d+)\\]", "/$1");
+
+            // 2. 读取JSON树
+            JsonNode rootNode = objectMapper.readTree(jsonBody);
+
+            // 3. 使用 at() 方法和JSON Pointer路径来查找节点
+            JsonNode targetNode = rootNode.at(jsonPointerPath);
+
+            // 4. 检查节点是否存在且有值
+            if (targetNode.isMissingNode() || targetNode.isNull()) {
+                return Optional.empty();
+            }
+
+            // 5. 返回节点的值的文本表示
+            return Optional.of(targetNode.asText());
+
+        } catch (JsonProcessingException e) {
+            log.error("解析JSON响应体失败: {}", jsonBody, e);
+            return Optional.empty();
+        }
     }
 
     public Optional<String> parseVerificationCode(String responseBody) {

@@ -9,10 +9,13 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.wzz.smscode.common.Constants;
 import com.wzz.smscode.common.Result;
 import com.wzz.smscode.dto.AgentDashboardStatsDTO;
+import com.wzz.smscode.dto.AgentProjectLineUpdateDTO;
+import com.wzz.smscode.dto.AgentProjectPriceDTO;
 import com.wzz.smscode.dto.CreatDTO.UserCreateDTO;
 import com.wzz.smscode.dto.EntityDTO.LedgerDTO;
 import com.wzz.smscode.dto.EntityDTO.UserDTO;
 import com.wzz.smscode.dto.LoginDTO.AgentLoginDTO;
+import com.wzz.smscode.dto.SubUserProjectPriceDTO;
 import com.wzz.smscode.entity.SystemConfig;
 import com.wzz.smscode.entity.User;
 import com.wzz.smscode.entity.UserLedger;
@@ -24,10 +27,12 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
 import java.util.Date;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -158,7 +163,7 @@ public class AgentController {
         log.info("为下级用户充值{}::{}", agentId, targetUserId);
         try {
             // 业务逻辑委托给 Service 层，Service 层会进行权限和余额等校验
-            userService.rechargeUser(targetUserId, amount, agentId);
+            userService.rechargeUserFromAgentBalance(targetUserId, amount, agentId);
             return Result.success("充值成功");
         }catch (BusinessException e){
             return Result.success("充值失败",e.getMessage());
@@ -181,9 +186,13 @@ public class AgentController {
         long agentId = StpUtil.getLoginIdAsLong();
         checkAgentPermission(agentId);
         try {
-            userService.deductUser(targetUserId, amount, agentId);
+            userService.deductUserToAgentBalance(targetUserId, amount, agentId);
             return Result.success("扣款成功");
-        } catch (Exception e) {
+        }
+        catch (BusinessException e){
+            return Result.success("扣款失败",e.getMessage());
+        }
+        catch (Exception e) {
             log.error("代理 {} 为用户 {} 扣款 {} 元时失败", agentId, targetUserId, amount, e);
             return Result.error("扣款失败，请稍后重试");
         }
@@ -268,8 +277,8 @@ public class AgentController {
     @GetMapping("/subordinate-ledgers")
     public Result<IPage<LedgerDTO>> viewAllSubordinateLedgers(
             @RequestParam(required = false) Long targetUserId,
-            @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") Date startTime,
-            @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") Date endTime,
+            @RequestParam(required = false) Date startTime,
+            @RequestParam(required = false) Date endTime,
             @RequestParam(defaultValue = "1") long page,
             @RequestParam(defaultValue = "10") long size) {
 
@@ -321,6 +330,67 @@ public class AgentController {
         } catch (Exception e) {
             log.error("获取代理 {} 的仪表盘数据时发生系统内部错误", agentId, e);
             return Result.error(Constants.ERROR_SYSTEM_ERROR, "获取统计数据失败，请稍后重试");
+        }
+    }
+    /**
+     * 查询当前代理用户的项目价格配置
+     */
+//    @GetMapping("/get/by-agent/project")
+//    public Result<?> getByAgenrToProject(){
+//        try{
+//            StpUtil.checkLogin();
+//            Long agentId = StpUtil.getLoginIdAsLong();
+//            List<AgentProjectPriceDTO> agentProjectPrices = userService.getAgentProjectPrices(agentId);
+//            if (agentProjectPrices.isEmpty()){
+//                return Result.success("获取成功，暂无数据");
+//            }
+//            return Result.success("获取成功",agentProjectPrices);
+//        }catch (BusinessException e){
+//            return Result.error("获取失败！");
+//        }
+//    }
+
+    /**
+     * 查询当前代理用户的所有下级的项目价格配置
+     */
+    @GetMapping("/get/by-agent/project")
+    public Result<?> getSubUsersProjectPrices() {
+        try {
+            // 假设你使用了 Sa-Token 或类似框架进行登录校验
+            StpUtil.checkLogin();
+            Long agentId = StpUtil.getLoginIdAsLong();
+
+            List<SubUserProjectPriceDTO> result = userService.getSubUsersProjectPrices(agentId);
+
+            if (result.isEmpty()) {
+                return Result.success("查询成功，暂无下级用户或价格数据");
+            }
+            return Result.success("查询成功", result);
+
+        } catch (BusinessException e) {
+            log.error("查询下级项目价格失败: {}", e.getMessage());
+            return Result.error(e.getMessage());
+        } catch (Exception e) {
+            log.error("查询下级项目价格时发生未知错误", e);
+            return Result.error("系统错误，请联系管理员");
+        }
+    }
+
+    /**
+     * 更新当前代理用户的项目线路配置（如价格、备注等）传入的是项目配置表的id不是项目id和线路id
+     */
+    @PostMapping("/update/by-agent/project-config")
+    public Result<?> updateAgentProjectConfig(@Validated @RequestBody AgentProjectLineUpdateDTO updateDTO) {
+        try {
+            StpUtil.checkLogin();
+            Long agentId = StpUtil.getLoginIdAsLong();
+            userService.updateAgentProjectConfig(agentId, updateDTO);
+            return Result.success("配置更新成功");
+        } catch (BusinessException e) {
+            return Result.error(e.getMessage());
+        } catch (Exception e) {
+            log.error("更新代理项目配置时发生未知错误", e);
+            return Result.error("更新失败，系统内部错误");
         }
     }
 }

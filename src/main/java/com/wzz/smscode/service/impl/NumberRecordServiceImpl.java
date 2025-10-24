@@ -10,10 +10,7 @@ import com.wzz.smscode.common.Constants;
 import com.wzz.smscode.common.CommonResultDTO;
 import com.wzz.smscode.dto.CodeResult;
 import com.wzz.smscode.dto.NumberDTO;
-import com.wzz.smscode.entity.NumberRecord;
-import com.wzz.smscode.entity.Project;
-import com.wzz.smscode.entity.SystemConfig;
-import com.wzz.smscode.entity.User;
+import com.wzz.smscode.entity.*;
 import com.wzz.smscode.enums.FundType;
 import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.mapper.NumberRecordMapper;
@@ -35,6 +32,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Date;
 import java.util.Map;
+import java.util.Optional;
 
 @Slf4j
 @Service
@@ -57,6 +55,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
 
     // 2. 注入我们统一的API服务
     @Autowired private SmsApiService smsApiService;
+    @Autowired private UserProjectLineService userProjectLineService;
 
     @Transactional
     @Override
@@ -67,13 +66,23 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
 
         // ... 省略其他业务校验代码，保持不变 ...
         SystemConfig config = systemConfigService.getConfig();
-        if (user.getStatus() != 0) return CommonResultDTO.error(-5, "用户已被禁用");
+        if (user.getStatus() != 0){
+            return CommonResultDTO.error(-5, "用户已被禁用");
+        }
         if(config.getEnableBanMode()==1 && user.getDailyCodeRate() < config.getMin24hCodeRate()) {
             return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR,"回码率过低封禁");
         }
-        Project project = projectService.getProject(projectId, lineId);
-        if (project == null) return CommonResultDTO.error(-5, "项目线路不存在");
-        BigDecimal price = getUserPriceForProject(user, projectId, lineId, project.getCostPrice());
+//        Project project = projectService.getProject(projectId, lineId);
+        UserProjectLine userProjectLine = userProjectLineService.getByProjectIdLineID(projectId,lineId,user.getId());
+        if (userProjectLine == null) return CommonResultDTO.error(-5, "项目线路不存在用户项目中");
+
+
+        BigDecimal price = getUserPriceForProject(user, projectId, lineId, userProjectLine.getAgentPrice());
+
+
+        Project projectT = projectService.getProject(projectId, lineId);
+        if (projectT == null) return CommonResultDTO.error(-5, "总项目表中不存在这个项目和线路！");
+
         if (user.getBalance().compareTo(price) < 0) {
             return CommonResultDTO.error(Constants.ERROR_INSUFFICIENT_BALANCE, "余额不足");
         }
@@ -86,7 +95,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         Map<String,String>  identifier;
         try {
             String numForApi = "1";
-             identifier = smsApiService.getPhoneNumber(project, numForApi);
+             identifier = smsApiService.getPhoneNumber(projectT, numForApi);
              log.info("获取到手机号的信息：{}",identifier);
             if (!StringUtils.hasText(identifier.get("phone"))) {
                 return CommonResultDTO.error(Constants.ERROR_NO_NUMBER, "未获取到有效号码或ID");
@@ -113,10 +122,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         record.setGetNumberTime(LocalDateTime.now());
         this.save(record);
 
-        // 5. 异步启动取码任务，并将 identifier 传递过去，避免二次查询
-//        self.retrieveCode(record.getId(), identifier.get("id"));
-        // 5. 【核心优化】注册一个事务成功提交后的回调，来安全地启动异步取码任务
-        final String finalIdentifierId = project.getResponsePhoneField() != null
+        final String finalIdentifierId = projectT.getResponsePhoneField() != null
                 ? identifier.get("id")
                 : identifier.get("phone");
 
@@ -162,8 +168,10 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             result = smsApiService.getVerificationCode(project, identifier);
         } catch (BusinessException e) {
             log.warn("获取验证码过程中发生业务异常 for record {}: {}", numberId, e.getMessage());
-            result = String.valueOf(CodeResult.failure()); // 视作失败
+            record.setErrorInfo(String.valueOf(CodeResult.failure()));
+            result = null; // 视作失败
             record.setRemark(e.getMessage());
+            record.setStatus(3);
 
         }
 
@@ -209,33 +217,69 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         this.updateById(latestRecord);
     }
 
-    // ... 其他方法保持不变 ...
+/**
+     * 【核心修改】重写 getCode 方法
+     */
     @Override
     public CommonResultDTO<String> getCode(String userName, String password, String identifier) {
-        User user =  userService.authenticateUserByUserName(userName, password);
-        if ( user == null) {
+        User user = userService.authenticateUserByUserName(userName, password);
+        if (user == null) {
             return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED, "用户验证失败");
         }
 
-        // 使用 identifier 查询，可以是手机号或UUID
         NumberRecord record = this.getOne(new LambdaQueryWrapper<NumberRecord>()
                 .eq(NumberRecord::getPhoneNumber, identifier) // phoneNumber 字段现在存储 identifier
                 .eq(NumberRecord::getUserId, user.getId())
                 .orderByDesc(NumberRecord::getGetNumberTime)
                 .last("LIMIT 1"));
 
-        if (record == null) return CommonResultDTO.error(Constants.ERROR_NO_CODE, "无验证码记录");
-
-        switch (record.getStatus()) {
-            case 2:
-                return CommonResultDTO.success("验证码获取成功", record.getCode());
-            case 3:
-                return CommonResultDTO.error(Constants.ERROR_NO_CODE, "验证码获取超时/失败");
-            case 4:
-                return CommonResultDTO.error(Constants.ERROR_NO_CODE, "该号码无效，请重新取号");
-            default:
-                return CommonResultDTO.error(Constants.ERROR_NO_CODE, "验证码尚未获取，请稍后重试");
+        if (record == null) {
+            return CommonResultDTO.error(Constants.ERROR_NO_CODE, "无验证码记录");
         }
+
+        // 如果状态已经是成功，直接返回结果，避免不必要的API调用
+        if (record.getStatus() == 2) {
+            return CommonResultDTO.success("验证码获取成功", record.getCode());
+        }
+
+        // 【新增逻辑】如果状态是待取码(0)或取码中(1)，尝试进行一次即时获取
+        if (record.getStatus() == 0 || record.getStatus() == 1) {
+            log.info("记录 {} 状态为进行中，用户主动查询，触发一次即时验证码获取...", record.getId());
+            Project project = projectService.getProject(record.getProjectId(), record.getLineId());
+            if (project != null) {
+                // 根据项目配置决定使用 phone 还是 id 作为API请求的 identifier
+                final String finalIdentifierId = project.getResponsePhoneField() != null
+                        ? record.getApiPhoneId()
+                        : record.getPhoneNumber();
+
+                // 调用单次获取方法
+                Optional<String> codeOpt = smsApiService.fetchVerificationCodeOnce(project, finalIdentifierId);
+
+                if (codeOpt.isPresent()) {
+                    String code = codeOpt.get();
+                    log.info("即时获取成功！为记录 {} 获取到验证码: {}", record.getId(), code);
+                    CodeResult codeResult = new CodeResult();
+                    codeResult.setCode(code);
+                    codeResult.setPhoneNumber(record.getPhoneNumber());
+                    codeResult.setSuccess(true);
+                    // 【关键】调用事务方法更新记录、扣费并返回成功
+                    self.updateRecordAfterRetrieval(record, codeResult);
+                    return CommonResultDTO.success("验证码获取成功", code);
+                } else {
+                    log.info("即时获取未返回有效验证码，继续等待异步任务结果。");
+                }
+            }
+        }
+
+        // 如果即时获取失败或状态不允许，则按原逻辑返回当前状态
+        return switch (record.getStatus()) {
+            case 2 -> // 虽然前面处理过，但保留以防万一
+                    CommonResultDTO.success("验证码获取成功", record.getCode());
+            case 3 -> CommonResultDTO.error(Constants.ERROR_NO_CODE, "验证码获取超时/失败");
+            case 4 -> CommonResultDTO.error(Constants.ERROR_NO_CODE, "该号码无效，请重新取号");
+            default -> // 状态为 0 或 1
+                    CommonResultDTO.error(Constants.ERROR_NO_CODE, "验证码尚未获取，请稍后重试");
+        };
     }
 //    @Override
 //    public CommonResultDTO<String> getCode(Long userId, String password, String phoneNumber) {
@@ -251,7 +295,6 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         latestRecord.setCodeReceivedTime(LocalDateTime.now());
 
         if (code != null) {
-            // 成功获取验证码
             latestRecord.setStatus(2);
             latestRecord.setCode(code);
             latestRecord.setCharged(0);

@@ -2,6 +2,7 @@ package com.wzz.smscode.entity;
 
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.fasterxml.jackson.annotation.JsonFormat;
 import com.wzz.smscode.annotation.*;
 import com.wzz.smscode.common.BaseEntity;
 import com.wzz.smscode.enums.ForeignKeyAction;
@@ -95,6 +96,7 @@ public class UserLedger extends BaseEntity {
      */
     @ColumnComment("操作时间")
     @TableField("timestamp")
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
     private LocalDateTime timestamp;
 
     /**
