@@ -65,14 +65,47 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
     }
 
     @Override
-    public IPage<LedgerDTO> listAllLedger(Long adminId, String adminPassword, Long filterByUserId, Date startTime, Date endTime, Page<UserLedger> page) {
-        // 1. 管理员身份验证
-        User admin = userService.authenticate(adminId, adminPassword);
-        // TODO: 此处应增加更严格的管理员角色判断
-        if (admin == null || admin.getIsAgent() != 1) { // 假设管理员也是一种特殊的代理
-            log.warn("管理员 {} 账本查询失败：身份验证或权限不足", adminId);
+    public IPage<UserLedger> listUserLedgerByUSerId(Long userId, Page<UserLedger> page){
+        // 1. 身份验证
+        User user = userService.getById(userId);
+        if (user == null) {
+            log.warn("用户 {} 账本查询失败：身份验证未通过", userId);
             return null;
         }
+
+        // 2. 构建查询条件
+        LambdaQueryWrapper<UserLedger> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(UserLedger::getUserId, userId); // 严格限制只能查询自己的记录
+        wrapper.orderByDesc(UserLedger::getTimestamp);
+
+        return this.page(page, wrapper);
+    }
+
+    /**
+     * 通过条件查询号码表
+     * @param adminId 管理员id
+     * @param adminPassword 管理员密码
+     * @param filterByUserId 用户id
+     * @param startTime 开始时间
+     * @param endTime 结束时间
+     * @param page 分页
+     * @return 分页的
+     */
+    @Override
+    public IPage<LedgerDTO> listAllLedger(
+            Long adminId,
+            String adminPassword,
+            Long filterByUserId,
+            Date startTime,
+            Date endTime,
+            Page<UserLedger> page) {
+        // 1. 管理员身份验证
+//        User admin = userService.authenticate(adminId, adminPassword);
+        // TODO: 此处应增加更严格的管理员角色判断
+//        if (admin == null || admin.getIsAgent() != 1) { // 假设管理员也是一种特殊的代理
+//            log.warn("管理员 {} 账本查询失败：身份验证或权限不足", adminId);
+//            return null;
+//        }
 
         // 2. 构建查询条件
         LambdaQueryWrapper<UserLedger> wrapper = new LambdaQueryWrapper<>();

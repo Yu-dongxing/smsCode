@@ -11,15 +11,9 @@ import com.wzz.smscode.dto.LoginDTO.UserLoginDto;
 import com.wzz.smscode.dto.ResultDTO.UserResultDTO;
 import com.wzz.smscode.dto.update.UpdateUserDto;
 import com.wzz.smscode.dto.update.UserUpdatePasswardDTO;
-import com.wzz.smscode.entity.NumberRecord;
-import com.wzz.smscode.entity.SystemConfig;
-import com.wzz.smscode.entity.User;
-import com.wzz.smscode.entity.UserProjectLine;
+import com.wzz.smscode.entity.*;
 import com.wzz.smscode.exception.BusinessException;
-import com.wzz.smscode.service.NumberRecordService;
-import com.wzz.smscode.service.ProjectService;
-import com.wzz.smscode.service.SystemConfigService;
-import com.wzz.smscode.service.UserService;
+import com.wzz.smscode.service.*;
 import com.wzz.smscode.service.impl.UserServiceImpl;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -146,6 +140,29 @@ public class UserController {
         // 调用在 UserServiceImpl 中定义的 DTO 转换方法
         UserDTO userDTO = ((UserServiceImpl) userService).convertToDTO(user);
         return CommonResultDTO.success("登录成功", userDTO);
+    }
+
+    @Autowired
+    private UserProjectLineService userProjectLineService;
+
+    @Autowired
+    private UserLedgerService userLedgerService;
+    /**
+     * 查询当前用户的账本列表
+     */
+    @RequestMapping(value = "/ledger/list", method = {RequestMethod.GET, RequestMethod.POST})
+    public CommonResultDTO<?> listLedger(
+            @RequestParam String userName,
+            @RequestParam String password,
+            @RequestParam(defaultValue = "1") long page,
+            @RequestParam(defaultValue = "10") long size) {
+        Page<UserLedger> pageRequest = new Page<>(page, size);
+        User user = userService.authenticateUserByUserName(userName, password);
+        if (user == null){
+            return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED,"用户名密码错误！");
+        }
+        return CommonResultDTO.success( userLedgerService.listUserLedgerByUSerId(user.getId(),pageRequest));
+
     }
 
     /**

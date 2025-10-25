@@ -33,9 +33,10 @@ public enum RequestType {
 
 
     @EnumValue // 标记数据库存的值是 code
+    @JsonValue
     private final String code;
 
-    @JsonValue // 标记Json序列化/反序列化的值
+
     private final String desc;
 
     RequestType(String code, String desc) {

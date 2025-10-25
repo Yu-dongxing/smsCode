@@ -197,6 +197,64 @@ public class ResponseParser {
         }
     }
 
+    /**
+     * 【新增核心方法】从登录响应中解析出Token和有效期。
+     * 这是一个高级封装方法，供策略类直接调用。
+     *
+     * @param project 项目配置，包含token和有效期的字段路径
+     * @param loginResponseBody 登录接口的JSON响应体
+     * @return 一个Map，可能包含 "token" 和 "expiresIn" 两个键。
+     */
+    public Map<String, String> parseTokenInfo(Project project, String loginResponseBody) {
+        Map<String, String> tokenInfo = new HashMap<>();
+
+        if (!StringUtils.hasText(loginResponseBody)) {
+            return tokenInfo;
+        }
+
+        // 使用核心解析方法解析Token
+        if (StringUtils.hasText(project.getResponseTokenField())) {
+            parseJsonPath(loginResponseBody, project.getResponseTokenField())
+                    .ifPresent(token -> tokenInfo.put("token", token));
+        }
+
+        // 使用核心解析方法解析有效期
+        if (StringUtils.hasText(project.getResponseTokenExpirationField())) {
+            parseJsonPath(loginResponseBody, project.getResponseTokenExpirationField())
+                    .ifPresent(expiresIn -> tokenInfo.put("expiresIn", expiresIn));
+        }
+
+        return tokenInfo;
+    }
+
+    /**
+     * 【强化核心解析能力】使用JSON Path从响应体中提取字段值。
+     * 这是本类中进行JSON解析的唯一推荐方法，支持嵌套路径。
+     *
+     * @param jsonBody  JSON响应体
+     * @param jsonPath  字段的JSON路径 (例如 "data.token" 或 "result[0].id")
+     * @return 包含字段值的Optional<String>
+     */
+    public Optional<String> parseJsonPath(String jsonBody, String jsonPath) {
+        if (!StringUtils.hasText(jsonBody) || !StringUtils.hasText(jsonPath)) {
+            return Optional.empty();
+        }
+        try {
+            // 将点分隔路径转换为JSON Pointer路径 (e.g., "data.token" -> "/data/token")
+            String jsonPointerPath = "/" + jsonPath.replace(".", "/").replaceAll("\\[(\\d+)\\]", "/$1");
+            JsonNode rootNode = objectMapper.readTree(jsonBody);
+            JsonNode targetNode = rootNode.at(jsonPointerPath);
+
+            if (targetNode.isMissingNode() || targetNode.isNull()) {
+                return Optional.empty();
+            }
+            return Optional.of(targetNode.asText());
+        } catch (JsonProcessingException e) {
+            log.error("使用JSON Path '{}' 解析JSON响应体失败: {}", jsonPath, jsonBody, e);
+            return Optional.empty();
+        }
+    }
+
     public Optional<String> parseVerificationCode(String responseBody) {
         if (responseBody == null || responseBody.isEmpty()) {
             return Optional.empty();

@@ -69,6 +69,7 @@ public class LedgerDTO {
     /**
      * 账本类型（1-入账，0-出账）
      */
+    private Integer ledgerType;
 
 
     /**

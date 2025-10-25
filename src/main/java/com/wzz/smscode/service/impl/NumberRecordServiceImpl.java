@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wzz.smscode.common.Constants;
 import com.wzz.smscode.common.CommonResultDTO;
 import com.wzz.smscode.dto.CodeResult;
+import com.wzz.smscode.dto.CreatDTO.LedgerCreationDTO;
 import com.wzz.smscode.dto.NumberDTO;
 import com.wzz.smscode.entity.*;
 import com.wzz.smscode.enums.FundType;
@@ -226,7 +227,6 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         if (user == null) {
             return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED, "用户验证失败");
         }
-
         NumberRecord record = this.getOne(new LambdaQueryWrapper<NumberRecord>()
                 .eq(NumberRecord::getPhoneNumber, identifier) // phoneNumber 字段现在存储 identifier
                 .eq(NumberRecord::getUserId, user.getId())
@@ -242,8 +242,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             return CommonResultDTO.success("验证码获取成功", record.getCode());
         }
 
-        // 【新增逻辑】如果状态是待取码(0)或取码中(1)，尝试进行一次即时获取
-        if (record.getStatus() == 0 || record.getStatus() == 1) {
+        if (record.getStatus() == 0 || record.getStatus() == 1 || record.getStatus() == 3) {
             log.info("记录 {} 状态为进行中，用户主动查询，触发一次即时验证码获取...", record.getId());
             Project project = projectService.getProject(record.getProjectId(), record.getLineId());
             if (project != null) {
@@ -262,11 +261,11 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                     codeResult.setCode(code);
                     codeResult.setPhoneNumber(record.getPhoneNumber());
                     codeResult.setSuccess(true);
-                    // 【关键】调用事务方法更新记录、扣费并返回成功
                     self.updateRecordAfterRetrieval(record, codeResult);
                     return CommonResultDTO.success("验证码获取成功", code);
                 } else {
                     log.info("即时获取未返回有效验证码，继续等待异步任务结果。");
+                    return CommonResultDTO.error(Constants.ERROR_NO_CODE,"验证码获取失败");
                 }
             }
         }
@@ -290,7 +289,9 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
     public void updateRecordAfterRetrieval(NumberRecord record, String code) {
         // 重新从数据库获取记录，确保数据最新
         NumberRecord latestRecord = this.getById(record.getId());
-        if (latestRecord.getStatus() != 1) return; // 防止重复处理
+        if (latestRecord.getStatus() != 1) { // 防止重复处理
+            return;
+        }
 
         latestRecord.setCodeReceivedTime(LocalDateTime.now());
 
@@ -298,29 +299,26 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             latestRecord.setStatus(2);
             latestRecord.setCode(code);
             latestRecord.setCharged(0);
-
-            // 执行扣费
             User user = userService.getById(latestRecord.getUserId());
-            BigDecimal newBalance = user.getBalance().subtract(latestRecord.getPrice());
-            latestRecord.setBalanceAfter(newBalance);
 
-            userService.update(null, new LambdaUpdateWrapper<User>()
-                    .set(User::getBalance, newBalance)
-                    .eq(User::getId, user.getId()));
+            // 使用统一的账本创建服务来处理扣费和记账
+            LedgerCreationDTO ledgerDto = LedgerCreationDTO.builder()
+                    .userId(user.getId())
+                    .amount(latestRecord.getPrice()) // 统一方法要求金额为正数
+                    .ledgerType(0) // 0-出账
+                    .fundType(FundType.BUSINESS_DEDUCTION) // 资金业务类型为业务扣费
+                    .remark("业务扣费") // 备注
+                    .build();
 
-
-
-            // 新增账本记录
-            ledgerService.createLedgerEntry(user.getId(), FundType.BUSINESS_DEDUCTION, latestRecord.getPrice().negate(), newBalance, "业务扣费");
-
-            // 更新用户成功回码统计
+            // 调用统一的账本服务，该方法内部会处理用户余额的更新和账本记录的创建
+            ledgerService.createLedgerAndUpdateBalance(ledgerDto);
+            User updatedUser = userService.getById(user.getId());
+            latestRecord.setBalanceAfter(updatedUser.getBalance());
             userService.updateUserStatsForNewNumber(user.getId(), true);
         } else {
-            // 超时未获取
             latestRecord.setStatus(3);
         }
         latestRecord.setRemark(record.getRemark());
-
         this.updateById(latestRecord);
     }
 
@@ -358,7 +356,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
 
         LambdaQueryWrapper<NumberRecord> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(NumberRecord::getUserId, userId);
-        addCommonFilters(wrapper, statusFilter, startTime, endTime);
+        addCommonFilters(wrapper, statusFilter, startTime, endTime, null, null, null, null,null);
 
         IPage<NumberRecord> recordPage = this.page(page, wrapper);
         return recordPage.convert(this::convertToDTO);
@@ -369,17 +367,23 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         if ( user== null) return null;
         LambdaQueryWrapper<NumberRecord> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(NumberRecord::getUserId, user.getId());
-        addCommonFilters(wrapper, statusFilter, startTime, endTime);
-
+        addCommonFilters(wrapper, statusFilter, startTime, endTime, null, null, null, null,null);
         IPage<NumberRecord> recordPage = this.page(page, wrapper);
         return recordPage.convert(this::convertToDTO);
     }
 
+    /**
+     * 列表查询所有号码记录（增加了新的过滤条件）
+     */
     @Override
-    public IPage<NumberRecord> listAllNumbers(Integer statusFilter, Date startTime, Date endTime, IPage<NumberRecord> page) {
-        // TODO: 添加管理员权限校验
+    public IPage<NumberRecord> listAllNumbers(Integer statusFilter, Date startTime, Date endTime,
+                                              Long userId, String projectId, String phoneNumber, Integer charged,
+                                              IPage<NumberRecord> page,String lineId) {
         LambdaQueryWrapper<NumberRecord> wrapper = new LambdaQueryWrapper<>();
-        addCommonFilters(wrapper, statusFilter, startTime, endTime);
+
+        // 调用包含所有过滤逻辑的辅助方法
+        addCommonFilters(wrapper, statusFilter, startTime, endTime, userId, projectId, phoneNumber, charged,lineId);
+
         return this.page(page, wrapper);
     }
 
@@ -411,10 +415,34 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         }
     }
 
-    private void addCommonFilters(LambdaQueryWrapper<NumberRecord> wrapper, Integer status, Date start, Date end) {
+    /**
+     * 【核心修改】扩展 addCommonFilters 方法以支持更多查询条件
+     * 我们将新参数添加到这个方法中，而不是直接在 listAllNumbers 中堆砌 wrapper.eq() 调用，
+     * 这样 listUserNumbersByUSerName 等其他方法如果需要也可以复用这部分逻辑。
+     */
+    private void addCommonFilters(LambdaQueryWrapper<NumberRecord> wrapper, Integer status, Date start, Date end,
+                                  Long userId, String projectId, String phoneNumber, Integer charged,String lineId) {
+        // --- 原有逻辑 ---
         wrapper.eq(status != null, NumberRecord::getStatus, status);
         wrapper.ge(start != null, NumberRecord::getGetNumberTime, start);
         wrapper.le(end != null, NumberRecord::getGetNumberTime, end);
+
+        // --- 新增的过滤逻辑 ---
+        // 1. 按用户ID过滤
+        wrapper.eq(userId != null, NumberRecord::getUserId, userId);
+
+        // 2. 按项目ID过滤 (使用 StringUtils.hasText 判断非空，更严谨)
+        wrapper.eq(StringUtils.hasText(projectId), NumberRecord::getProjectId, projectId);
+
+        wrapper.eq(StringUtils.hasText(lineId), NumberRecord::getLineId, lineId);
+
+        // 3. 按手机号模糊查询 (LIKE %phoneNumber%)
+        wrapper.like(StringUtils.hasText(phoneNumber), NumberRecord::getPhoneNumber, phoneNumber);
+
+        // 4. 按扣费状态过滤
+        wrapper.eq(charged != null, NumberRecord::getCharged, charged);
+
+        // 排序逻辑保持不变
         wrapper.orderByDesc(NumberRecord::getGetNumberTime);
     }
 

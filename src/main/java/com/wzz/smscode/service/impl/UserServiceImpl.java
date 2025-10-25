@@ -486,8 +486,10 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
                 ledgerService.createLedgerAndUpdateBalance(operatorLedger);
             }
         } catch (BusinessException e) {
+            log.info("出现错误：{}", e.getMessage());
             TransactionAspectSupport.currentTransactionStatus().setRollbackOnly();
-            return CommonResultDTO.error(Constants.ERROR_INSUFFICIENT_BALANCE, e.getMessage());
+//            return CommonResultDTO.error(Constants.ERROR_INSUFFICIENT_BALANCE, e.getMessage());
+            throw new BusinessException(0,e.getMessage());
         } catch (Exception e) {
             log.error("资金操作失败，未知异常", e);
             TransactionAspectSupport.currentTransactionStatus().setRollbackOnly();

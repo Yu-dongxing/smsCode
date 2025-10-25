@@ -232,7 +232,8 @@ public class AdminController {
             @RequestParam Long targetUserId,
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") Date startTime,
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") Date endTime,
-            @RequestParam(defaultValue = "1") long page, @RequestParam(defaultValue = "10") long size) {
+            @RequestParam(defaultValue = "1") long page,
+            @RequestParam(defaultValue = "10") long size) {
 
         Page pageRequest = new Page<>(page, size);
         // + 管理员可无密码查询任意用户，传入 adminId=0L, password=null
@@ -290,26 +291,39 @@ public class AdminController {
     }
 
     /**
-     * 查看全局号码记录
-     * @param status 状态过滤
+     * 查询号码记录
+     * @param status 状态
      * @param startTime 开始时间
      * @param endTime 结束时间
-     * @param page 页码
-     * @param size 每页数量
+     * @param page 页面
+     * @param size 页小
+     * @param userId 用户id
+     * @param projectId 项目id
+     * @param lineId 线路id
+     * @param phoneNumber 手机号码
+     * @param charged 扣费状态
      * @return
      */
     @RequestMapping(value = "/viewAllNumbers", method = {RequestMethod.GET, RequestMethod.POST})
     public Result<IPage<NumberRecord>> viewAllNumbers(
-            //- @RequestParam Long adminId,
-            //- @RequestParam String password,
             @RequestParam(required = false) Integer status,
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") Date startTime,
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") Date endTime,
             @RequestParam(defaultValue = "1") long page,
-            @RequestParam(defaultValue = "10") long size) {
+            @RequestParam(defaultValue = "10") long size,
+            @RequestParam(required = false) Long userId, //用户id
+            @RequestParam(required = false) String projectId, //项目id
+            @RequestParam(required = false) String lineId, //线路id
+            @RequestParam(required = false) String phoneNumber, // 用于模糊查询
+            @RequestParam(required = false) Integer charged //扣费状态
+    ) {
 
         IPage<NumberRecord> pageRequest = new Page<>(page, size);
-        IPage<NumberRecord> resultPage = numberRecordService.listAllNumbers(status, startTime, endTime, pageRequest);
+        // 调用服务层方法，并传入所有参数
+        IPage<NumberRecord> resultPage = numberRecordService.listAllNumbers(
+                status, startTime, endTime, userId, projectId, phoneNumber, charged, pageRequest,lineId
+        );
+
         return Result.success("查询成功", resultPage);
     }
 
@@ -530,7 +544,7 @@ public class AdminController {
          *
          */
         private Long numberCount;
-//        private Long codeCount;
+        private Long codeCount;
     }
 
     /**
@@ -545,27 +559,32 @@ public class AdminController {
             QueryWrapper<NumberRecord> queryWrapper = new QueryWrapper<>();
             queryWrapper.select(
                             "DATE(get_number_time) as date",
-                            "count(id) as numberCount",
-                            "sum(case when status = 2 then 1 else 0 end) as codeCount"
+                            "count(id) as numberCount", // 统计总取号数
+                            "count(code) as codeCount"   // 统计 code 字段非空的记录数，即成功获取验证码的数量
                     )
                     .ge("get_number_time", startTime)
                     .groupBy("date")
                     .orderByAsc("date");
+
             List<Map<String, Object>> resultMaps = numberRecordService.listMaps(queryWrapper);
+
             List<DailyStatsDTO> dailyStats = resultMaps.stream().map(map -> {
                 DailyStatsDTO dto = new DailyStatsDTO();
+                // 获取日期
                 Object dateObj = map.get("date");
                 dto.setDate(dateObj != null ? dateObj.toString() : "");
+
+                // 获取取号总数 (数据库返回的可能是 Long 或 BigInteger, 用 Number 类型接收最稳妥)
                 Object numberCountObj = map.getOrDefault("numberCount", 0);
-                dto.setNumberCount(Long.parseLong(String.valueOf(numberCountObj)));
-//                Object codeCountObj = map.getOrDefault("codeCount", 0);
-//                if (codeCountObj == null) {
-//                    dto.setCodeCount(0L);
-//                } else {
-//                    dto.setCodeCount(new BigDecimal(String.valueOf(codeCountObj)).longValue());
-//                }
+                dto.setNumberCount(((Number) numberCountObj).longValue());
+
+                // 获取成功验证码数
+                Object codeCountObj = map.getOrDefault("codeCount", 0);
+                dto.setCodeCount(((Number) codeCountObj).longValue());
+
                 return dto;
             }).collect(Collectors.toList());
+
             return Result.success("查询成功", dailyStats);
         } catch (Exception e) {
             log.error("查询每日趋势数据失败", e);

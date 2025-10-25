@@ -16,6 +16,8 @@ public interface UserLedgerService extends IService<UserLedger> {
 
     IPage<LedgerDTO> listUserLedger(Long userId, String password, Date startTime, Date endTime, Page<UserLedger> page);
 
+    IPage<UserLedger> listUserLedgerByUSerId(Long userId, Page<UserLedger> page);
+
     IPage<LedgerDTO> listAllLedger(Long adminId, String adminPassword, Long filterByUserId, Date startTime, Date endTime, Page<UserLedger> page);
 
     BigDecimal calculateUserBalanceFromLedger(Long userId);

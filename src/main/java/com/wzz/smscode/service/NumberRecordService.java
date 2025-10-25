@@ -49,7 +49,11 @@ public interface NumberRecordService extends IService<NumberRecord> {
 
     IPage<NumberDTO> listUserNumbersByUSerName(String userName, String password, Integer statusFilter, Date startTime, Date endTime, IPage<NumberRecord> page);
 
-    IPage<NumberRecord> listAllNumbers(Integer statusFilter, Date startTime, Date endTime, IPage<NumberRecord> page);
+    IPage<NumberRecord> listAllNumbers(
+            Integer statusFilter, Date startTime, Date endTime,
+            Long userId, String projectId, String phoneNumber, Integer charged,
+            IPage<NumberRecord> page,String lineId
+    );
 
     NumberRecord getRecordByPhone(String phone);
 }

@@ -35,6 +35,14 @@ public class NumberDTO {
      */
     private String errorInfo;
     /**
+     * 项目id
+     */
+    private String projectId;
+    /**
+     * 线路id
+     */
+    private Integer lineId;
+    /**
      * 获取手机号的时间
      */
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
