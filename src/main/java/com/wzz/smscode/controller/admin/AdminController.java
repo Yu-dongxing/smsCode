@@ -610,7 +610,7 @@ public class AdminController {
     }
 
     /**
-     * 获取项目认证类型枚举
+     * 获取项目请求类型枚举
      * @return
      */
     @GetMapping("/enum/request-types")
