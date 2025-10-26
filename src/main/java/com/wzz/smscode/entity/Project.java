@@ -120,6 +120,20 @@ public class Project extends BaseEntity {
     @TableField("refresh_token_route")
     private String refreshTokenRoute;
 
+    /**
+     * 筛选号码的api的接口
+     */
+    @ColumnComment("筛选号码的api的接口")
+    @TableField("select_number_api_route")
+    private String selectNumberApiRoute;
+
+    /**
+     * 筛选号码的api的接口请求方法
+     */
+    @ColumnComment("筛选号码的api的接口请求方法")
+    @TableField("select_number_api_route_method")
+    private String selectNumberApiRouteMethod;
+
 
     // --- 核心API请求类型配置 ---
 

@@ -14,10 +14,7 @@ import com.wzz.smscode.dto.EntityDTO.LedgerDTO;
 import com.wzz.smscode.dto.EntityDTO.UserDTO;
 import com.wzz.smscode.dto.LoginDTO.AdminLoginDTO;
 import com.wzz.smscode.dto.update.UpdateUserDto;
-import com.wzz.smscode.entity.ErrorLog;
-import com.wzz.smscode.entity.NumberRecord;
-import com.wzz.smscode.entity.SystemConfig;
-import com.wzz.smscode.entity.User;
+import com.wzz.smscode.entity.*;
 import com.wzz.smscode.enums.AuthType;
 import com.wzz.smscode.enums.RequestType;
 import com.wzz.smscode.exception.BusinessException;
@@ -28,6 +25,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.util.CollectionUtils;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
@@ -630,4 +628,86 @@ public class AdminController {
 
         return Result.success(aa);
     }
+
+    @Autowired
+    private UserProjectLineService userProjectLineService;
+    /**
+     * 获取所有用户及其项目价格配置
+     * @return 返回一个包含所有用户项目配置的列表，按用户分组
+     */
+    @GetMapping("/user-project-prices")
+    public Result<?> getAllUserProjectPrices() {
+        try {
+            // 1. 获取所有有效的项目线路配置
+            List<UserProjectLine> allProjectLines = userProjectLineService.list();
+            if (CollectionUtils.isEmpty(allProjectLines)) {
+                return Result.success("查询成功", Collections.emptyList());
+            }
+
+            // 2. 按 userId 进行分组
+            Map<Long, List<UserProjectLine>> groupedByUserId = allProjectLines.stream()
+                    .collect(Collectors.groupingBy(UserProjectLine::getUserId));
+
+            // 3. 提取所有相关的用户ID
+            Set<Long> userIds = groupedByUserId.keySet();
+
+            // 4. 一次性查询所有相关用户信息，以提高效率
+            List<User> users = userService.listByIds(userIds);
+            Map<Long, String> userIdToNameMap = users.stream()
+                    .collect(Collectors.toMap(User::getId, User::getUserName));
+
+            // 5. 组装成 SubUserProjectPriceDTO 列表作为最终返回结果
+            List<SubUserProjectPriceDTO> resultList = new ArrayList<>();
+            for (Map.Entry<Long, List<UserProjectLine>> entry : groupedByUserId.entrySet()) {
+                Long userId = entry.getKey();
+                List<UserProjectLine> userLines = entry.getValue();
+
+                SubUserProjectPriceDTO subUserDto = new SubUserProjectPriceDTO();
+                subUserDto.setUserId(userId);
+                subUserDto.setUserName(userIdToNameMap.getOrDefault(userId, "未知用户")); // 提供默认值以防用户被删除
+
+                // 将 UserProjectLine 列表转换为 ProjectPriceInfoDTO 列表
+                List<ProjectPriceInfoDTO> priceInfoList = userLines.stream().map(line -> {
+                    ProjectPriceInfoDTO priceDto = new ProjectPriceInfoDTO();
+                    priceDto.setId(line.getProjectTableId()); // 项目配置表id
+                    priceDto.setProjectName(line.getProjectName());
+                    priceDto.setProjectId(line.getProjectId());
+                    priceDto.setLineId(line.getLineId());
+                    priceDto.setPrice(line.getAgentPrice()); // 用户自定义售价
+                    priceDto.setCostPrice(line.getCostPrice());
+                    // maxPrice 和 minPrice 在此表中不存在，保持为 null
+                    return priceDto;
+                }).collect(Collectors.toList());
+
+                subUserDto.setProjectPrices(priceInfoList);
+                resultList.add(subUserDto);
+            }
+
+            return Result.success("查询成功", resultList);
+        } catch (Exception e) {
+            log.error("获取所有用户项目配置失败", e);
+            return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，查询配置失败");
+        }
+    }
+
+    /**
+     * 编辑或更新指定用户的项目价格配置
+     * @param subUserProjectPriceDTO 包含用户ID和该用户全新的项目价格配置列表
+     * @return 返回操作结果
+     */
+    @PostMapping("/user-project-prices/update")
+    public Result<?> updateUserProjectPrices(@RequestBody SubUserProjectPriceDTO subUserProjectPriceDTO) {
+        try {
+            // 调用包含事务处理的 Service 方法
+            boolean success = userProjectLineService.updateUserProjectLines(subUserProjectPriceDTO);
+            return success ? Result.success("更新成功") : Result.error("更新失败或数据无变化");
+        } catch (BusinessException e) {
+            log.warn("编辑用户项目配置业务校验失败: {}", e.getMessage());
+            return Result.error(e.getMessage());
+        } catch (Exception e) {
+            log.error("编辑用户项目配置时发生系统内部错误", e);
+            return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，更新失败");
+        }
+    }
+
 }

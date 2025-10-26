@@ -3,14 +3,18 @@ package com.wzz.smscode.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.CollectionUtils;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.wzz.smscode.dto.ProjectPriceInfoDTO;
+import com.wzz.smscode.dto.SubUserProjectPriceDTO;
 import com.wzz.smscode.entity.UserProjectLine;
 import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.mapper.UserProjectLineMapper;
 import com.wzz.smscode.service.UserProjectLineService;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * 用户项目线路表实现类
@@ -65,6 +69,48 @@ public class UserProjectLineServiceImpl extends ServiceImpl<UserProjectLineMappe
         }
 
         return projectLine;
+    }
+
+    /**
+     * [新增] 更新用户的项目线路配置
+     * 采用“先删除后新增”的策略，确保操作的原子性
+     * @param dto 包含用户ID和新的项目配置列表
+     * @return 是否成功
+     */
+    @Transactional(rollbackFor = Exception.class)
+    @Override
+    public boolean updateUserProjectLines(SubUserProjectPriceDTO dto) {
+        if (dto == null || dto.getUserId() == null) {
+            throw new BusinessException("用户信息不能为空");
+        }
+
+        Long userId = dto.getUserId();
+
+        // 1. 删除该用户所有旧的配置
+        this.remove(new LambdaQueryWrapper<UserProjectLine>().eq(UserProjectLine::getUserId, userId));
+
+        // 2. 如果新的配置列表不为空，则批量插入
+        List<ProjectPriceInfoDTO> newProjectPrices = dto.getProjectPrices();
+        if (CollectionUtils.isNotEmpty(newProjectPrices)) {
+            List<UserProjectLine> newUserLines = newProjectPrices.stream().map(priceDto -> {
+                UserProjectLine line = new UserProjectLine();
+                line.setUserId(userId);
+                // 注意字段映射关系
+                line.setProjectTableId(priceDto.getId()); // DTO的id对应实体类的 project_table_id
+                line.setProjectName(priceDto.getProjectName());
+                line.setProjectId(priceDto.getProjectId());
+                line.setLineId(priceDto.getLineId());
+                line.setAgentPrice(priceDto.getPrice()); // DTO的price对应实体类的 agent_price
+                line.setCostPrice(priceDto.getCostPrice());
+                return line;
+            }).collect(Collectors.toList());
+
+            // 批量保存
+            return this.saveBatch(newUserLines);
+        }
+
+        // 如果新列表为空，删除操作执行后即为成功
+        return true;
     }
 
 }
