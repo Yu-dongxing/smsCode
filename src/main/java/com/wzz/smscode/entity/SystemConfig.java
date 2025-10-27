@@ -90,6 +90,10 @@ public class SystemConfig implements Serializable {
     private Integer enableBanMode;
 
     /**
+     * 是否开启筛选号码
+     */
+
+    /**
      * 24小时最低回码率限制值
      */
     @ColumnComment("24小时最低回码率")
