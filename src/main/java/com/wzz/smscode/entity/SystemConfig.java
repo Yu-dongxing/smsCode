@@ -7,6 +7,7 @@ import com.baomidou.mybatisplus.annotation.TableName;
 import com.wzz.smscode.annotation.ColumnComment;
 import com.wzz.smscode.annotation.DefaultValue;
 import com.wzz.smscode.annotation.TableComment;
+import com.wzz.smscode.enums.RequestType;
 import lombok.Data;
 
 import java.io.Serial;
@@ -42,6 +43,36 @@ public class SystemConfig implements Serializable {
     @ColumnComment("号码筛选API的URL")
     @TableField("filter_api_url")
     private String filterApiUrl;
+
+    /**
+     * 筛选号码的api的接口请求参数类型
+     */
+    @ColumnComment("筛选号码的api的接口请求参数类型")
+    @TableField("select_number_api_reauest_type")
+    @DefaultValue("'PARAM'")
+    private RequestType selectNumberApiReauestType;
+
+    /**
+     * 筛选号码的api的接口请求方法
+     */
+    @ColumnComment("筛选号码的api的接口请求方法")
+    @TableField("select_number_api_route_method")
+    @DefaultValue("'GET'")
+    private String selectNumberApiRouteMethod;
+
+    /**
+     * 筛选号码的api的接口请求字段
+     */
+    @ColumnComment("筛选号码的api的接口请求字段")
+    @TableField("select_number_api_reauest_value")
+    private String selectNumberApiReauestValue;
+
+    /**
+     * 筛选号码的api的接口数据返回字段
+     */
+    @ColumnComment("筛选号码的api的接口请求字段")
+    @TableField("response_select_number_api_field")
+    private String responseSelectNumberApiField;
 
     /**
      * 筛选API所需的鉴权密钥或卡密

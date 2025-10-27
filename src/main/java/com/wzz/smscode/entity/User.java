@@ -63,10 +63,10 @@ public class User extends BaseEntity {
     private BigDecimal balance;
 
     /**
-     * 项目价格配置的 JSON 字符串。
+     * 项目价格配置的 JSON 字符串。(无效参数)
      * 例如：{"id0001-1": 5.0, "id0002-1": 3.5}
      */
-    @ColumnComment("项目价格配置JSON")
+    @ColumnComment("项目价格配置JSON(无效参数)")
     @TableField("project_prices")
     private String projectPrices; // 数据库中建议使用 TEXT 或 JSON 类型
 //    private List<ProjectPriceDTO> projectPrices;

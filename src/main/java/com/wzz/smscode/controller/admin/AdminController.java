@@ -22,10 +22,12 @@ import com.wzz.smscode.service.*;
 import com.wzz.smscode.service.impl.UserServiceImpl;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
@@ -90,16 +92,20 @@ public class AdminController {
     @RequestMapping(value = "/listUsers", method = {RequestMethod.GET, RequestMethod.POST})
     public Result<?> listUsers(
             @RequestParam(required = false) Long parentId,
+            @RequestParam(required = false) String userName,
             @RequestParam(defaultValue = "1") long page,
             @RequestParam(defaultValue = "10") long size) {
 
-        if (parentId != null) {
-            return Result.success(userService.listSubUsers(parentId, new Page<>(page, size)));
-        }
-        // 如果未提供 parentId，则查询所有用户
         IPage<User> pageRequest = new Page<>(page, size);
-        IPage<User> userPage = userService.page(pageRequest, new LambdaQueryWrapper<User>().orderByDesc(User::getId));
-//        return Result.success("查询成功", userPage.convert(((UserServiceImpl) userService)::convertToDTO));
+        LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
+        if (parentId != null) {
+            queryWrapper.eq(User::getParentId, parentId);
+        }
+        if (StringUtils.hasText(userName)){
+            queryWrapper.like(User::getUserName, userName);
+        }
+        queryWrapper.orderByDesc(User::getCreateTime);
+        IPage<User> userPage = userService.page(pageRequest,queryWrapper);
         return Result.success("查询成功", userPage);
     }
 
@@ -632,31 +638,80 @@ public class AdminController {
     @Autowired
     private UserProjectLineService userProjectLineService;
     /**
-     * 获取所有用户及其项目价格配置
-     * @return 返回一个包含所有用户项目配置的列表，按用户分组
+     * 分页并按条件筛选获取用户及其项目价格配置
+     *
+     * @param pageNum   当前页码
+     * @param pageSize  每页数量
+     * @param userName  用户名 (可选, 模糊查询)
+     * @param projectId 项目ID (可选, 精确查询)
+     * @param lineId    线路ID (可选, 精确查询)
+     * @return 返回一个包含分页和筛选结果的用户项目配置列表
      */
     @GetMapping("/user-project-prices")
-    public Result<?> getAllUserProjectPrices() {
+    public Result<?> getAllUserProjectPrices(
+            @RequestParam(defaultValue = "1") long pageNum,
+            @RequestParam(defaultValue = "10") long pageSize,
+            @RequestParam(required = false) String userName,
+            @RequestParam(required = false) Long projectId,
+            @RequestParam(required = false) Long lineId
+    ) {
         try {
-            // 1. 获取所有有效的项目线路配置
-            List<UserProjectLine> allProjectLines = userProjectLineService.list();
-            if (CollectionUtils.isEmpty(allProjectLines)) {
-                return Result.success("查询成功", Collections.emptyList());
+            // 1. 创建 MyBatis-Plus 分页对象
+            IPage<UserProjectLine> page = new Page<>(pageNum, pageSize);
+
+            // 2. 构建动态查询条件
+            QueryWrapper<UserProjectLine> queryWrapper = new QueryWrapper<>();
+
+            // 2.1 处理用户名筛选
+            if (StringUtils.hasText(userName)) {
+                // 根据用户名模糊查询出对应的用户ID列表
+                QueryWrapper<User> userQueryWrapper = new QueryWrapper<>();
+                userQueryWrapper.lambda().like(User::getUserName, userName);
+                List<User> matchedUsers = userService.list(userQueryWrapper);
+
+                // 如果没有找到匹配的用户，直接返回空结果，避免查询 user_project_line 表
+                if (CollectionUtils.isEmpty(matchedUsers)) {
+                    return Result.success("查询成功", new Page<>(pageNum, pageSize, 0));
+                }
+
+                Set<Long> userIds = matchedUsers.stream().map(User::getId).collect(Collectors.toSet());
+                queryWrapper.lambda().in(UserProjectLine::getUserId, userIds);
             }
 
-            // 2. 按 userId 进行分组
-            Map<Long, List<UserProjectLine>> groupedByUserId = allProjectLines.stream()
+            // 2.2 处理项目ID筛选
+            if (projectId != null) {
+                queryWrapper.lambda().eq(UserProjectLine::getProjectId, projectId);
+            }
+
+            // 2.3 处理线路ID筛选
+            if (lineId != null) {
+                queryWrapper.lambda().eq(UserProjectLine::getLineId, lineId);
+            }
+
+            // 可选：添加默认排序，让结果更稳定
+            queryWrapper.lambda().orderByDesc(UserProjectLine::getCreateTime);
+
+            // 3. 执行带条件的分页查询
+            IPage<UserProjectLine> pagedResult = userProjectLineService.page(page, queryWrapper);
+            List<UserProjectLine> currentPageLines = pagedResult.getRecords();
+
+            if (CollectionUtils.isEmpty(currentPageLines)) {
+                return Result.success("查询成功", pagedResult); // 返回空的分页结果
+            }
+
+            // 4. 按 userId 进行分组
+            Map<Long, List<UserProjectLine>> groupedByUserId = currentPageLines.stream()
                     .collect(Collectors.groupingBy(UserProjectLine::getUserId));
 
-            // 3. 提取所有相关的用户ID
-            Set<Long> userIds = groupedByUserId.keySet();
+            // 5. 提取当前页所有相关的用户ID
+            Set<Long> userIdsOnPage = groupedByUserId.keySet();
 
-            // 4. 一次性查询所有相关用户信息，以提高效率
-            List<User> users = userService.listByIds(userIds);
+            // 6. 一次性查询所有相关用户信息
+            List<User> users = userService.listByIds(userIdsOnPage);
             Map<Long, String> userIdToNameMap = users.stream()
                     .collect(Collectors.toMap(User::getId, User::getUserName));
 
-            // 5. 组装成 SubUserProjectPriceDTO 列表作为最终返回结果
+            // 7. 组装成 SubUserProjectPriceDTO 列表
             List<SubUserProjectPriceDTO> resultList = new ArrayList<>();
             for (Map.Entry<Long, List<UserProjectLine>> entry : groupedByUserId.entrySet()) {
                 Long userId = entry.getKey();
@@ -664,18 +719,17 @@ public class AdminController {
 
                 SubUserProjectPriceDTO subUserDto = new SubUserProjectPriceDTO();
                 subUserDto.setUserId(userId);
-                subUserDto.setUserName(userIdToNameMap.getOrDefault(userId, "未知用户")); // 提供默认值以防用户被删除
+                subUserDto.setUserName(userIdToNameMap.getOrDefault(userId, "未知用户"));
 
-                // 将 UserProjectLine 列表转换为 ProjectPriceInfoDTO 列表
                 List<ProjectPriceInfoDTO> priceInfoList = userLines.stream().map(line -> {
                     ProjectPriceInfoDTO priceDto = new ProjectPriceInfoDTO();
-                    priceDto.setId(line.getProjectTableId()); // 项目配置表id
+                    priceDto.setId(line.getId());
+                    priceDto.setUserProjectLineTableId(line.getId());
                     priceDto.setProjectName(line.getProjectName());
                     priceDto.setProjectId(line.getProjectId());
                     priceDto.setLineId(line.getLineId());
-                    priceDto.setPrice(line.getAgentPrice()); // 用户自定义售价
+                    priceDto.setPrice(line.getAgentPrice());
                     priceDto.setCostPrice(line.getCostPrice());
-                    // maxPrice 和 minPrice 在此表中不存在，保持为 null
                     return priceDto;
                 }).collect(Collectors.toList());
 
@@ -683,9 +737,13 @@ public class AdminController {
                 resultList.add(subUserDto);
             }
 
-            return Result.success("查询成功", resultList);
+            // 8. 创建新的分页结果对象，返回处理后的数据
+            IPage<SubUserProjectPriceDTO> finalPageResult = new Page<>(pageNum, pageSize, pagedResult.getTotal());
+            finalPageResult.setRecords(resultList);
+
+            return Result.success("查询成功", finalPageResult);
         } catch (Exception e) {
-            log.error("获取所有用户项目配置失败", e);
+            log.error("分页并筛选用户项目配置失败", e);
             return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，查询配置失败");
         }
     }
@@ -709,5 +767,61 @@ public class AdminController {
             return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，更新失败");
         }
     }
+
+    /**
+     * 更新用户项目价格配置表
+     */
+    @PostMapping("/userProjectLine/update/")
+    public Result<?> updateByUserProjectLine(@RequestBody ProjectPriceInfoDTO projectPriceInfoDTO) {
+        try {
+            if (projectPriceInfoDTO.getUserProjectLineTableId() == null) {
+                return Result.error("更新失败：缺少必要的配置ID");
+            }
+            UserProjectLine userProjectLineToUpdate = new UserProjectLine();
+            BeanUtils.copyProperties(projectPriceInfoDTO, userProjectLineToUpdate);
+
+            // 手动设置不一致或需要特殊处理的属性
+            userProjectLineToUpdate.setId(projectPriceInfoDTO.getUserProjectLineTableId());
+             userProjectLineToUpdate.setAgentPrice(projectPriceInfoDTO.getPrice());
+
+            // 3. 调用 Service 层进行更新
+            boolean isSuccess = userProjectLineService.updateUserProjectLinesById(userProjectLineToUpdate);
+
+            // 4. 返回结果
+            if (isSuccess) {
+                return Result.success("更新成功");
+            } else {
+                return Result.error("更新失败");
+            }
+        } catch (BusinessException e) {
+            return Result.error(e.getMessage());
+        } catch (Exception e) {
+            log.error("更新用户项目价格配置失败", e);
+            return Result.error("系统内部错误，更新失败");
+        }
+    }
+
+    /**
+     * 根据用户id分页查询账本记录
+     */
+    @GetMapping("/get/user-id/leader/")
+    public Result<?> getUserProjectLineById(@RequestParam(defaultValue = "1") long pageNum,
+                                            @RequestParam(defaultValue = "10") long pageSize,
+                                            @RequestParam(required = false) Long userId) {
+        try {
+//            StpUtil.checkLogin();
+//            if (StpUtil.getLoginIdAsLong() != 0){
+//                return Result.error("权限不够！");
+//            }
+//            if (userId == null) {
+//                return Result.error("传入用户id不正确！");
+//            }
+        }catch (BusinessException e) {
+            return Result.error(e.getMessage());
+        }
+        Page<UserLedger> page = new Page<>(pageNum, pageSize);
+        return Result.success(userLedgerService.listUserLedgerByUSerId(userId,page));
+    }
+
 
 }

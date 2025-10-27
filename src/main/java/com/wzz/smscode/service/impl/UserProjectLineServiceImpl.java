@@ -113,4 +113,13 @@ public class UserProjectLineServiceImpl extends ServiceImpl<UserProjectLineMappe
         return true;
     }
 
+    @Override
+    public Boolean updateUserProjectLinesById(UserProjectLine userProjectLine) {
+        if (userProjectLine == null || userProjectLine.getId() == null) {
+            throw new BusinessException(0, "传入的更新参数无效，ID不能为空");
+        }
+        int updatedRows = this.baseMapper.updateById(userProjectLine);
+        return updatedRows > 0;
+    }
+
 }

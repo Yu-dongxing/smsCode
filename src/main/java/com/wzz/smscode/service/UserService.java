@@ -12,6 +12,7 @@ import com.wzz.smscode.dto.LoginDTO.UserLoginDto;
 import com.wzz.smscode.dto.ResultDTO.UserResultDTO;
 import com.wzz.smscode.dto.SubUserProjectPriceDTO;
 import com.wzz.smscode.dto.update.UpdateUserDto;
+import com.wzz.smscode.dto.update.UserUpdateDtoByUser;
 import com.wzz.smscode.dto.update.UserUpdatePasswardDTO;
 import com.wzz.smscode.entity.User;
 import com.wzz.smscode.entity.UserProjectLine;
@@ -66,6 +67,8 @@ public interface UserService extends IService<User> {
     User AgentLogin(String username, String password);
 
     boolean updateUserByEn(User userDTO, long l);
+
+    boolean updateUserByAgent(UserUpdateDtoByUser userDTO, long l);
 
     Boolean updatePassWardByUserId(UpdateUserDto id);
 

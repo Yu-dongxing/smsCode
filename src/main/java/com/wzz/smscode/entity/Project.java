@@ -132,6 +132,7 @@ public class Project extends BaseEntity {
      */
     @ColumnComment("筛选号码的api的接口请求方法")
     @TableField("select_number_api_route_method")
+    @DefaultValue("'GET'")
     private String selectNumberApiRouteMethod;
 
 
@@ -160,6 +161,14 @@ public class Project extends BaseEntity {
     @TableField("get_code_request_type")
     @DefaultValue("'PARAM'")
     private RequestType getCodeRequestType;
+
+    /**
+     * 筛选号码的api的接口请求参数类型
+     */
+    @ColumnComment("筛选号码的api的接口请求参数类型")
+    @TableField("select_number_api_reauest_type")
+    @DefaultValue("'PARAM'")
+    private RequestType selectNumberApiReauestType;
 
 
     // --- 认证方式与凭证 ---
@@ -226,6 +235,13 @@ public class Project extends BaseEntity {
     @ColumnComment("动态Token的过期时间 (由系统自动填充和更新)")
     @TableField("token_expiration_time")
     private LocalDateTime tokenExpirationTime;
+
+    /**
+     * 筛选号码的api的接口请求字段
+     */
+    @ColumnComment("筛选号码的api的接口请求字段")
+    @TableField("select_number_api_request_value")
+    private String selectNumberApiRequestValue;
 
 
     // --- API响应解析配置 ---
@@ -297,6 +313,13 @@ public class Project extends BaseEntity {
     @TableField("code_retrieval_identifier_key")
     @DefaultValue("'phone'") // 默认使用手机号，以兼容老接口
     private String codeRetrievalIdentifierKey;
+
+    /**
+     * 筛选号码的api的接口数据返回字段
+     */
+    @ColumnComment("筛选号码的api的接口请求字段")
+    @TableField("response_select_number_api_field")
+    private String responseSelectNumberApiField;
 
 
     // --- 业务逻辑与定价配置 ---

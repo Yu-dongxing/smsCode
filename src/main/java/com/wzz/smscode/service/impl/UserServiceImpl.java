@@ -4,7 +4,6 @@ import cn.hutool.core.bean.BeanUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
-import com.baomidou.mybatisplus.extension.repository.AbstractRepository;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wzz.smscode.common.CommonResultDTO;
@@ -16,6 +15,7 @@ import com.wzz.smscode.dto.EntityDTO.UserDTO;
 import com.wzz.smscode.dto.LoginDTO.UserLoginDto;
 import com.wzz.smscode.dto.ResultDTO.UserResultDTO;
 import com.wzz.smscode.dto.update.UpdateUserDto;
+import com.wzz.smscode.dto.update.UserUpdateDtoByUser;
 import com.wzz.smscode.dto.update.UserUpdatePasswardDTO;
 import com.wzz.smscode.entity.Project;
 import com.wzz.smscode.entity.User;
@@ -35,6 +35,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 //import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.interceptor.TransactionAspectSupport;
@@ -161,7 +162,26 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
 
     @Override
     public boolean updateUserByEn(User userDTO, long l) {
+        if (userDTO.getId() == null) {
+            throw new BusinessException(0,"传入参数，用户id不正确");
+        }
         return updateById(userDTO);
+    }
+
+    @Override
+    public boolean updateUserByAgent(UserUpdateDtoByUser userDTO, long l) {
+        if (userDTO.getId() == null) {
+            throw new BusinessException(0,"传入参数，用户id不正确");
+        }
+        User user = this.getById(userDTO.getId());
+        if (user == null) {
+            throw new BusinessException(0,"该用户不存在！");
+        }
+        user.setUserName(userDTO.getUsername());
+        user.setPassword(userDTO.getPassword());
+        user.setIsAgent(userDTO.isAgent() ? 1 : 0);
+        user.setStatus(userDTO.getStatus());
+        return updateById(user);
     }
 
     @Override
@@ -233,18 +253,10 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     @Autowired
     private UserProjectLineService userProjectLineService;
 
-    /**
-     * [重构] 创建用户并处理初始余额
-     * 1. 创建用户实体，初始余额设置为0。
-     * 2. 保存用户实体以获取ID。
-     * 3. 如果提供了初始余额，则调用统一的资金服务接口 `createLedgerAndUpdateBalance` 为新用户充值。
-     * 4. 如果操作者是代理，则再次调用该接口从代理账户扣款。
-     * 整个过程由 @Transactional 注解保证事务一致性。
-     */
     @Transactional(rollbackFor = Exception.class)
     @Override
     public boolean createUser(UserCreateDTO dto, Long operatorId) {
-        // 1. 校验操作员身份
+        // 1. 校验操作员身份 (与您之前的代码相同)
         boolean isAdmin = (operatorId == 0L);
         User operator;
         if (isAdmin) {
@@ -256,77 +268,32 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             if (operator.getIsAgent() != 1) throw new BusinessException("无权创建用户");
         }
 
-        // 2. 构造用户实体，余额初始化为0，后续通过账本服务更新
+        // 2. 构造用户实体，余额初始化为0
         User user = new User();
         user.setUserName(dto.getUsername());
-        user.setPassword(dto.getPassword());
+        user.setPassword(dto.getPassword()); // 注意：密码应该加密存储
         user.setParentId(operatorId);
         user.setIsAgent(dto.getIsAgent() ? 1 : 0);
-        user.setStatus(0); // 默认正常状态
-        user.setBalance(BigDecimal.ZERO); // 初始化余额为0
+        user.setStatus(0);
+        user.setBalance(BigDecimal.ZERO);
 
-//        // 3. 处理价格配置
-//        Map<String, BigDecimal> finalPrices = dto.getProjectPrices();
-//        if (finalPrices == null || finalPrices.isEmpty()) {
-//            finalPrices = generateInitialPricesFor(operator);
-//        } else {
-//            validateProjectPrices(finalPrices, operator);
-//        }
-//        try {
-//            user.setProjectPrices(objectMapper.writeValueAsString(finalPrices));
-//        } catch (Exception e) {
-//            throw new RuntimeException("序列化价格JSON失败", e);
-//        }
-
-        // 4. 保存用户
-        boolean saved = this.save(user);
-        if (!saved) {
+        // 3. 保存用户，以获取新用户的ID
+        if (!this.save(user)) {
             throw new RuntimeException("创建用户基础信息失败");
         }
 
-        // 4. [核心改造] 处理价格配置并存入新表
-        List<ProjectPriceDTO> priceSettings = dto.getProjectPrices();
-        if (CollectionUtils.isEmpty(priceSettings)) {
-            priceSettings = generateInitialPricesFor(operator);
-        } else {
-            validateProjectPrices(priceSettings, operator);
-        }
-        log.info("处理价格配置并存入新表{}",priceSettings);
+        // 4. [核心改造] 处理价格配置
+        processAndSaveUserPrices(user, dto.getProjectPrices(), operator);
 
-        if (!CollectionUtils.isEmpty(priceSettings)) {
-            List<UserProjectLine> linesToInsert = new ArrayList<>();
-            Map<String, ProjMeta> projMetaMap = projectService.list().stream()
-                    .collect(Collectors.toMap(
-                            p -> p.getProjectId() + "-" + p.getLineId(),
-                            p -> new ProjMeta(p.getProjectName(), p.getCostPrice()),
-                            (a, b) -> a));   // 重复 key 取第一个
-
-            for (ProjectPriceDTO priceDto : priceSettings) {
-                UserProjectLine upl = new UserProjectLine();
-                upl.setUserId(user.getId());
-                upl.setProjectId(String.valueOf(priceDto.getProjectId()));
-                upl.setLineId(String.valueOf(priceDto.getLineId()));
-
-                ProjMeta meta = projMetaMap.get(priceDto.getProjectId() + "-" + priceDto.getLineId());
-                upl.setProjectName(meta.getProjectName());
-                upl.setCostPrice(meta.getCostPrice());   // <-- 新增
-                upl.setAgentPrice(priceDto.getPrice());
-
-                linesToInsert.add(upl);
-            }
-            userProjectLineService.saveBatch(linesToInsert);
-        }
-
-
-        // 5. [核心改造] 通过统一的账本服务处理初始余额
+        // 5. [核心改造] 通过统一的账本服务处理初始余额 (与您之前的代码相同)
         BigDecimal initialBalance = dto.getInitialBalance();
         if (initialBalance != null && initialBalance.compareTo(BigDecimal.ZERO) > 0) {
             try {
                 // 5.1 为新用户充值
                 LedgerCreationDTO userRechargeDto = LedgerCreationDTO.builder()
                         .userId(user.getId())
-                        .amount(initialBalance) // 金额统一为正数
-                        .ledgerType(1)          // 1-入账
+                        .amount(initialBalance)
+                        .ledgerType(1)
                         .fundType(FundType.AGENT_RECHARGE)
                         .remark("新用户初始充值")
                         .build();
@@ -336,26 +303,87 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
                 if (!isAdmin) {
                     LedgerCreationDTO operatorDeductDto = LedgerCreationDTO.builder()
                             .userId(operatorId)
-                            .amount(initialBalance) // 金额统一为正数
-                            .ledgerType(0)          // 0-出账
+                            .amount(initialBalance)
+                            .ledgerType(0)
                             .fundType(FundType.AGENT_DEDUCTION)
                             .remark("为下级用户 " + user.getUserName() + " 充值")
                             .build();
                     ledgerService.createLedgerAndUpdateBalance(operatorDeductDto);
                 }
             } catch (BusinessException e) {
-                // 回滚事务并向上抛出业务异常，例如“余额不足”
                 TransactionAspectSupport.currentTransactionStatus().setRollbackOnly();
                 log.error("为新用户 {} 分配初始资金失败: {}", user.getUserName(), e.getMessage());
                 throw new BusinessException("为新用户分配初始资金失败: " + e.getMessage());
             } catch (Exception e) {
-                // 回滚事务并记录未知异常
                 TransactionAspectSupport.currentTransactionStatus().setRollbackOnly();
                 log.error("为新用户 {} 分配初始资金时发生系统错误", user.getUserName(), e);
                 throw new RuntimeException("系统错误，创建用户资金记录失败", e);
             }
         }
         return true;
+    }
+
+    /**
+     * [重构] 处理并保存用户的项目价格配置
+     *
+     * @param user          新创建的用户实体
+     * @param priceSettings 来自DTO的价格配置列表
+     * @param operator      操作员实体
+     */
+    private void processAndSaveUserPrices(User user, List<ProjectPriceDTO> priceSettings, User operator) {
+        // 如果前端未提供价格配置，则为其生成默认配置
+        if (CollectionUtils.isEmpty(priceSettings)) {
+            priceSettings = generateInitialPricesFor(operator); // 沿用您之前的默认价格生成逻辑
+        } else {
+            validateProjectPrices(priceSettings, operator); // 沿用您之前的价格校验逻辑
+        }
+
+        if (CollectionUtils.isEmpty(priceSettings)) {
+            log.warn("用户 {} 创建时没有配置任何项目价格。", user.getUserName());
+            return; // 如果没有价格，直接返回
+        }
+
+        // 1. [性能优化] 从传入的价格配置中提取所有不重复的 Project ID
+        Set<Long> projectIds = priceSettings.stream()
+                .map(ProjectPriceDTO::getProjectId)
+                .collect(Collectors.toSet());
+
+        // 2. [性能优化] 一次性查询所有相关的项目元数据，而不是加载全表
+        Map<String, Project> projMetaMap = projectService.lambdaQuery()
+                .in(Project::getProjectId, projectIds)
+                .list()
+                .stream()
+                .collect(Collectors.toMap(
+                        p -> p.getProjectId() + "-" + p.getLineId(), // 使用复合键
+                        p -> p,
+                        (existing, replacement) -> existing // 处理重复键（理论上不应发生）
+                ));
+
+        List<UserProjectLine> linesToInsert = new ArrayList<>();
+        for (ProjectPriceDTO priceDto : priceSettings) {
+            String compositeKey = priceDto.getProjectId() + "-" + priceDto.getLineId();
+            Project meta = projMetaMap.get(compositeKey);
+
+            // 3. [健壮性] 校验每个价格配置对应的项目是否存在
+            if (meta == null) {
+                // 如果找不到对应的项目元数据，说明传入了无效的ID，应抛出异常终止操作
+                throw new BusinessException("配置失败：项目ID " + priceDto.getProjectId() + " 或线路ID " + priceDto.getLineId() + " 无效。");
+            }
+
+            UserProjectLine upl = new UserProjectLine();
+            upl.setUserId(user.getId());
+            upl.setProjectId(String.valueOf(priceDto.getProjectId()));
+            upl.setLineId(String.valueOf(priceDto.getLineId()));
+            upl.setAgentPrice(priceDto.getPrice()); // 这是为新用户设置的售价
+            upl.setProjectName(meta.getProjectName()); // 从元数据中获取
+            upl.setCostPrice(meta.getCostPrice());   // 从元数据中获取成本价
+
+            linesToInsert.add(upl);
+        }
+
+        // 4. 批量保存，提高效率
+        userProjectLineService.saveBatch(linesToInsert);
+        log.info("成功为用户 {} 批量插入 {} 条项目价格配置。", user.getUserName(), linesToInsert.size());
     }
 
 
@@ -441,6 +469,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     }
 
 
+
+
     /**
      * [无需修改] 此方法已正确使用统一资金服务接口
      */
@@ -524,17 +554,39 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     public void updateUserStatsForNewNumber(Long userId, boolean codeReceived) {
         // 使用原子更新，性能更高且避免并发问题
         LambdaUpdateWrapper<User> updateWrapper = new LambdaUpdateWrapper<User>()
-                .setSql("daily_get_count = daily_get_count + 1, total_get_count = total_get_count + 1")
                 .eq(User::getId, userId);
 
         if (codeReceived) {
-            updateWrapper.setSql("daily_code_count = daily_code_count + 1, total_code_count = total_code_count + 1");
+            // 成功获取到验证码
+            // 1. 每日和总获取次数 +1
+            // 2. 每日和总成功次数 +1
+            // 3. 基于更新后的计数值，重新计算每日和总回码率
+            updateWrapper.setSql(
+                    "daily_get_count = daily_get_count + 1, " +
+                            "total_get_count = total_get_count + 1, " +
+                            "daily_code_count = daily_code_count + 1, " +
+                            "total_code_count = total_code_count + 1, " +
+                            "daily_code_rate = (daily_code_count + 1) * 1.0 / (daily_get_count + 1), " +
+                            "total_code_rate = (total_code_count + 1) * 1.0 / (total_get_count + 1)"
+            );
+        } else {
+            // 未获取到验证码
+            // 1. 每日和总获取次数 +1
+            // 2. 成功次数不变
+            // 3. 基于更新后的获取次数，重新计算每日和总回码率
+            updateWrapper.setSql(
+                    "daily_get_count = daily_get_count + 1, " +
+                            "total_get_count = total_get_count + 1, " +
+                            "daily_code_rate = daily_code_count * 1.0 / (daily_get_count + 1), " +
+                            "total_code_rate = total_code_count * 1.0 / (total_get_count + 1)"
+            );
         }
 
         this.update(updateWrapper);
     }
 
     @Override
+    @Scheduled(cron = "0 0 0 * * ?")
     public void resetDailyStatsAllUsers() {
         log.info("开始执行每日统计数据重置任务...");
         boolean success = this.update(new LambdaUpdateWrapper<User>()

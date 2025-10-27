@@ -124,6 +124,12 @@
             <version>5.8.36</version>
         </dependency>
 
+        <dependency>
+            <groupId>com.jayway.jsonpath</groupId>
+            <artifactId>json-path</artifactId>
+            <version>2.9.0</version>  <!-- 这是一个稳定且较新的版本，你也可以选择其他版本 -->
+        </dependency>
+
 <!--        密码加密-->
 <!--        <dependency>-->
 <!--            <groupId>org.springframework.boot</groupId>-->

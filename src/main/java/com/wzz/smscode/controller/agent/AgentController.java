@@ -16,6 +16,7 @@ import com.wzz.smscode.dto.EntityDTO.LedgerDTO;
 import com.wzz.smscode.dto.EntityDTO.UserDTO;
 import com.wzz.smscode.dto.LoginDTO.AgentLoginDTO;
 import com.wzz.smscode.dto.SubUserProjectPriceDTO;
+import com.wzz.smscode.dto.update.UserUpdateDtoByUser;
 import com.wzz.smscode.entity.SystemConfig;
 import com.wzz.smscode.entity.User;
 import com.wzz.smscode.entity.UserLedger;
@@ -113,8 +114,11 @@ public class AgentController {
      */
     @SaCheckLogin
     @PostMapping("/createUser")
-    public Result<?> createUser( @RequestBody UserCreateDTO userCreateDTO) {
+    public Result<?> createUserbyAgent( @RequestBody UserCreateDTO userCreateDTO) {
         long agentId = StpUtil.getLoginIdAsLong();
+        if (userCreateDTO.getUsername() == null || userCreateDTO.getPassword() == null) {
+            return Result.error("用户名或者密码参数为空");
+        }
         try {
             boolean success = userService.createUser(userCreateDTO, agentId);
             return success ? Result.success("创建成功") : Result.error("创建失败，请稍后重试");
@@ -134,11 +138,11 @@ public class AgentController {
      */
     @SaCheckLogin
     @PostMapping("/updateUser")
-    public Result<?> updateUser(@RequestBody UserDTO userDTO) {
+    public Result<?> updateUser(@RequestBody UserUpdateDtoByUser userDTO) {
         long agentId = StpUtil.getLoginIdAsLong();
         try {
             // 权限校验已转移到 Service 层，Service 层需要使用 agentId 来判断权限
-            boolean success = userService.updateUser(userDTO, agentId);
+            boolean success = userService.updateUserByAgent(userDTO, agentId);
             return success ? Result.success("修改成功") : Result.error("信息无变化或修改失败");
         } catch (IllegalArgumentException | SecurityException e) {
             log.warn("修改用户信息业务校验失败: {}", e.getMessage());

@@ -34,8 +34,6 @@ public class ProjectController {
     @GetMapping("/find/all")
     public Result<?> findAll(@RequestParam(required = false) Long pageNum,
                              @RequestParam(required = false) Long pageSize) {
-
-        // 1. 参数为空 → 查全部
         if (pageNum == null || pageSize == null) {
             pageNum = 1L;
             pageSize = -1L;          // -1 表示不分页，MP 会查全部

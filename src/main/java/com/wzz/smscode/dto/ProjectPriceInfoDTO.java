@@ -10,6 +10,11 @@ public class ProjectPriceInfoDTO {
      * 项目配置表id
      */
     private Long id;
+
+    /**
+     * 用户项目线路配置表id
+     */
+    private Long userProjectLineTableId;
     /**
      * 项目名
      */

@@ -1,12 +1,15 @@
 package com.wzz.smscode.moduleService;
 
 import com.wzz.smscode.entity.Project;
+import com.wzz.smscode.entity.SystemConfig;
 import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.moduleService.strategy.AuthStrategy;
 import com.wzz.smscode.moduleService.strategy.AuthStrategyFactory;
+import com.wzz.smscode.service.SystemConfigService;
 import com.wzz.smscode.util.ResponseParser;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -19,6 +22,7 @@ import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
 import java.util.Map;
 import java.util.Optional;
+import com.jayway.jsonpath.JsonPath;
 
 @Service
 @RequiredArgsConstructor
@@ -28,6 +32,7 @@ public class SmsApiService {
     private final AuthStrategyFactory authStrategyFactory;
     private final ResponseParser responseParser;
     private final WebClient webClient; // 从WebClientConfig注入
+    private final SystemConfigService systemConfigService;
 
     /**
      * 【核心修改点】 增加 String... params 参数
@@ -180,6 +185,145 @@ public class SmsApiService {
         } catch (DateTimeParseException e) {
             log.error("无法使用标准格式 'yyyy-MM-dd HH:mm:ss' 解析时间戳: '{}'", timestampStr, e);
             return Optional.empty();
+        }
+    }
+
+    /**
+     * 调用外部API检查手机号码是否可用。
+     * @param project     项目配置，包含API的认证和路由信息。
+     * @param phoneNumber 需要检查的手机号码。
+     * @return 返回一个 Mono<Boolean>。如果号码可用，发射 true；否则发射 false。
+     *         如果项目未开启号码筛选功能，默认视为可用，直接返回 true。
+     *         如果开启了筛选但项目和全局配置均无效，则视为不可用，返回 false。
+     */
+    public Mono<Boolean> checkPhoneNumberAvailability(Project project, String phoneNumber) {
+        // 1. 检查项目是否开启了号码筛选功能
+        if (project.getEnableFilter() == null || !project.getEnableFilter()) {
+            log.info("项目 [{}] 未开启号码筛选功能，默认号码 [{}] 可用。", project.getProjectName(), phoneNumber);
+            return Mono.just(true); // 功能未开启，默认可用
+        }
+
+        // 2. 决定使用哪个配置 (项目自身配置 或 全局系统配置)
+        Project effectiveProject = resolveEffectiveProjectConfig(project);
+
+        // 如果连有效的配置都找不到，直接判定为不可用
+        if (effectiveProject == null) {
+            log.warn("项目 [{}] 开启了筛选，但自身和系统全局均未提供有效的筛选API配置。号码 [{}] 将被视为不可用。", project.getProjectName(), phoneNumber);
+            return Mono.just(false);
+        }
+
+        log.info("项目 [{}] 开始使用有效配置筛选号码 [{}]...", project.getProjectName(), phoneNumber);
+
+        try {
+            // 3. 从工厂获取对应的认证策略
+            // 注意：认证信息总是使用原始项目(effectiveProject)的，因为全局配置不包含认证
+            AuthStrategy strategy = authStrategyFactory.getStrategy(effectiveProject.getAuthType().getValue());
+
+            // 4. 使用策略构建并执行请求 (传入的是包含正确API信息的 effectiveProject)
+            return strategy.buildCheckNumberRequest(webClient, effectiveProject, phoneNumber)
+                    .flatMap(responseBody -> {
+                        // 5. 解析响应结果
+                        log.debug("项目 [{}] 的号码筛选API响应: {}", effectiveProject.getProjectName(), responseBody);
+                        try {
+                            boolean isAvailable = parseAvailabilityResponse(responseBody, effectiveProject.getResponseSelectNumberApiField());
+                            log.info("号码 [{}] 筛选结果: {}", phoneNumber, isAvailable ? "可用" : "不可用");
+                            return Mono.just(isAvailable);
+                        } catch (Exception e) {
+                            log.error("解析项目 [{}] 的号码筛选响应失败: {}", effectiveProject.getProjectName(), e.getMessage());
+                            return Mono.error(new BusinessException("解析API响应失败"));
+                        }
+                    })
+                    .onErrorResume(e -> {
+                        // 6. 处理请求过程中的异常
+                        log.error("调用项目 [{}] 的号码筛选API失败: {}", effectiveProject.getProjectName(), e.getMessage());
+                        return Mono.just(false); // 出现任何错误，都视为号码不可用
+                    });
+
+        } catch (UnsupportedOperationException e) {
+            log.error("获取认证策略失败: {}", e.getMessage());
+            return Mono.error(e);
+        }
+    }
+
+    /**
+     * 【新增辅助方法】
+     * 解析并返回最终用于API请求的有效Project配置。
+     *
+     * @param originalProject 原始的项目配置
+     * @return 如果项目自身配置有效，则返回原始对象；如果需要回退，则返回一个合并了全局配置的新对象；如果两者都无效，返回 null。
+     */
+    private Project resolveEffectiveProjectConfig(Project originalProject) {
+        // 优先使用项目自身的API配置
+        if (StringUtils.hasText(originalProject.getSelectNumberApiRoute())) {
+            log.debug("项目 [{}] 使用其自身的号码筛选API配置。", originalProject.getProjectName());
+            return originalProject;
+        }
+
+        // 项目自身配置为空，尝试回退到系统全局配置
+        log.info("项目 [{}] 未配置筛选API，尝试使用系统全局配置进行回退。", originalProject.getProjectName());
+        SystemConfig systemConfig = systemConfigService.getConfig();
+
+        // 检查全局配置是否有效
+        if (systemConfig != null && StringUtils.hasText(systemConfig.getFilterApiUrl())) {
+            log.info("成功回退到系统全局筛选API: {}", systemConfig.getFilterApiUrl());
+
+            // 创建一个新的Project对象，避免修改原始传入的project实例 (这是一个好习惯)
+            Project mergedProject = new Project();
+            BeanUtils.copyProperties(originalProject, mergedProject);
+
+            // 用系统配置覆盖筛选相关的字段
+            // **重要提示:** SystemConfig中的 filterApiUrl 对应 Project中的 selectNumberApiRoute
+            mergedProject.setSelectNumberApiRoute(systemConfig.getFilterApiUrl());
+            mergedProject.setSelectNumberApiRouteMethod(systemConfig.getSelectNumberApiRouteMethod());
+            mergedProject.setSelectNumberApiReauestType(systemConfig.getSelectNumberApiReauestType());
+
+            if (systemConfig.getSelectNumberApiReauestValue() != null) {
+                mergedProject.setSelectNumberApiRequestValue(systemConfig.getSelectNumberApiReauestValue());
+            }
+
+            mergedProject.setResponseSelectNumberApiField(systemConfig.getResponseSelectNumberApiField());
+
+            return mergedProject;
+        }
+
+        // 项目和全局配置都无效
+        return null;
+    }
+
+    /**
+     * 解析API响应，判断号码是否可用。
+     *
+     * @param responseBody API返回的JSON字符串。
+     * @param jsonPathExpression 用于从JSON中提取状态字段的JSONPath表达式。
+     * @return 如果可用，返回 true，否则返回 false。
+     */
+    private boolean parseAvailabilityResponse(String responseBody, String jsonPathExpression) {
+        if (!StringUtils.hasText(responseBody) || !StringUtils.hasText(jsonPathExpression)) {
+            // 如果响应体或解析路径为空，无法判断，视为不可用
+            return false;
+        }
+
+        try {
+            // 使用 Jayway JsonPath 来解析，因为它在你提供的 Project 实体注释中提到了
+            Object status = JsonPath.read(responseBody, jsonPathExpression);
+            if (status instanceof Boolean) {
+                return (Boolean) status;
+            }
+            if (status instanceof String) {
+                // 例如，API可能返回 "success", "ok", "true", "AVAILABLE" 等字符串
+                String statusStr = ((String) status).toLowerCase();
+                return statusStr.equals("true") || statusStr.equals("success") || statusStr.equals("ok") || statusStr.equals("available");
+            }
+            if (status instanceof Number) {
+                // 例如，API可能返回 1 代表成功/可用, 0 代表失败/不可用
+                return ((Number) status).intValue() == 1;
+            }
+
+            return false; // 其他未知类型，均视为不可用
+
+        } catch (Exception e) {
+            log.error("使用JsonPath解析响应失败，表达式: '{}'，响应体: '{}'。错误: {}", jsonPathExpression, responseBody, e.getMessage());
+            return false;
         }
     }
 }
