@@ -63,20 +63,21 @@ public class ResponseParser {
     }
 
     /**
-     * 【已实现】根据项目配置，智能解析手机号和唯一ID。
+     * 【已优化】根据项目配置，智能解析手机号和唯一ID。
      * <p>
      * 业务逻辑:
      * 1.  如果 project 中配置了 `responsePhoneNumberField`，则根据该字段名解析手机号。
      * 2.  如果 project 中配置了 `responsePhoneIdField`，则根据该字段名解析唯一ID。
      * 3.  如果 `responsePhoneNumberField` 未配置，则回退到使用通用正则表达式解析响应体中的手机号。
      * 4.  `responsePhoneIdField` 的解析与手机号解析相互独立。
+     * 5.  【优化点】确保不会将 null 或空字符串存入返回的 Map 中，增强代码健壮性。
      *
      * @param project      项目配置实体
      * @param responseBody API接口返回的响应体字符串
-     * @return 一个Map，可能包含 "phone" 和 "id" 两个键。如果解析不到任何信息，则返回空Map。
+     * @return 一个Map，可能包含 "phone" 和 "id" 两个键，其值保证为非空字符串。如果解析不到任何信息，则返回空Map。
      */
     public Map<String, String> parsePhoneNumberByType(Project project, String responseBody) {
-        // 为空校验，返回一个空Map比抛出异常更便于调用方处理
+        // 1. 入参校验：为空的响应体直接返回空Map，便于调用方处理
         if (!StringUtils.hasText(responseBody)) {
             return new HashMap<>();
         }
@@ -87,22 +88,28 @@ public class ResponseParser {
 
         boolean isPhoneNumberFieldDefined = StringUtils.hasText(phoneNumberField);
 
-        // 优先策略：如果定义了手机号字段，则根据字段解析
+        // 2. 优先策略：如果定义了手机号字段，则根据字段解析
         if (isPhoneNumberFieldDefined) {
             parseJsonFieldValue(responseBody, phoneNumberField)
+                    // 【关键优化点】: 使用 filter 过滤掉 null 和空字符串
+                    .filter(StringUtils::hasText)
                     .ifPresent(phone -> result.put("phone", phone));
         }
 
-        // 无论是否定义了手机号字段，都尝试解析ID字段（如果已定义）
+        // 3. 独立解析ID字段：无论手机号是否解析成功，都尝试解析ID
         if (StringUtils.hasText(phoneIdField)) {
             parseJsonFieldValue(responseBody, phoneIdField)
+                    // 【关键优化点】: 同样增加 filter 保证ID的有效性
+                    .filter(StringUtils::hasText)
                     .ifPresent(id -> result.put("id", id));
         }
 
-        // 回退策略：仅当未定义手机号字段时，才使用通用正则进行解析
-        if (!isPhoneNumberFieldDefined) {
+        // 4. 回退策略：仅当未定义手机号字段 且 Map中尚无手机号时，才使用通用正则进行解析
+        //    增加 !result.containsKey("phone") 是为了避免在某些边缘情况下覆盖已解析到的值
+        if (!isPhoneNumberFieldDefined && !result.containsKey("phone")) {
             Matcher matcher = PHONE_NUMBER_PATTERN.matcher(responseBody);
             if (matcher.find()) {
+                // matcher.group(1) 在 find() 成功后保证不为 null
                 result.put("phone", matcher.group(1));
             }
         }

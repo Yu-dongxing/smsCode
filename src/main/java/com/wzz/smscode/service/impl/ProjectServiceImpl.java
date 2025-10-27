@@ -7,16 +7,19 @@ import com.wzz.smscode.dto.ProjectPriceDetailsDTO;
 import com.wzz.smscode.dto.ProjectPriceSummaryDTO;
 import com.wzz.smscode.dto.SelectProjectDTO;
 import com.wzz.smscode.entity.Project;
+import com.wzz.smscode.entity.User;
 import com.wzz.smscode.entity.UserProjectLine;
 import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.mapper.ProjectMapper;
 import com.wzz.smscode.service.ProjectService;
 import com.wzz.smscode.service.UserProjectLineService;
+import com.wzz.smscode.service.UserService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.CollectionUtils;
 
 import java.math.BigDecimal;
 import java.util.Collections;
@@ -28,6 +31,14 @@ import java.util.stream.Collectors;
 @Slf4j
 @Service
 public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> implements ProjectService {
+
+
+    @Autowired
+    private UserService userService;
+
+    // 注入 UserProjectLineService 用于批量保存数据
+    @Autowired
+    private UserProjectLineService userProjectLineService;
 
     @Transactional
     @Override
@@ -157,15 +168,117 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
                 .collect(Collectors.toMap(ProjectPriceSummaryDTO::getProjectId, Function.identity(), (a, b) -> a));
     }
 
+    /**
+     * 重写 save 方法，在创建新项目后，为所有用户生成对应的项目线路配置
+     * @param project 要保存的项目实体
+     * @return 是否成功
+     */
     @Override
-    public Boolean deleteByID(long id) {
-        LambdaQueryWrapper<Project> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(Project::getId, id);
-        return this.remove(wrapper);
+    @Transactional(rollbackFor = Exception.class) // *** 关键：确保整个方法是事务性的 ***
+    public boolean save(Project project) {
+        // 1. 首先，保存项目自身，这样项目就会获得一个数据库自增ID
+        boolean projectSaved = super.save(project);
+        if (!projectSaved) {
+            log.error("创建项目基础信息失败: {}", project.getProjectName());
+            return false;
+        }
+        log.info("项目 '{}' 已成功保存，ID为: {}", project.getProjectName(), project.getId());
+
+        // 2. 获取系统中所有的用户
+        List<User> allUsers = userService.list();
+        if (CollectionUtils.isEmpty(allUsers)) {
+            // 如果系统中没有任何用户，那么记录一条日志，直接返回成功，因为项目已经创建了
+            log.warn("项目 '{}' 创建成功，但系统中没有找到任何用户，无需分配项目线路。", project.getProjectName());
+            return true;
+        }
+
+        // 3. 根据您的定价规则，确定要为用户设置的默认售价 (AgentPrice)
+        BigDecimal defaultPrice;
+        if (project.getPriceMax() != null && project.getPriceMax().compareTo(BigDecimal.ZERO) > 0) {
+            defaultPrice = project.getPriceMax();
+        } else if (project.getPriceMin() != null && project.getPriceMin().compareTo(BigDecimal.ZERO) > 0) {
+            defaultPrice = project.getPriceMin();
+        } else {
+            defaultPrice = project.getCostPrice();
+        }
+        // 安全校验，防止所有价格都为空
+        if (defaultPrice == null) {
+            log.warn("项目 '{}' 的最高价、最低价和成本价均未设置，将为用户分配的默认售价设置为0。", project.getProjectName());
+            defaultPrice = BigDecimal.ZERO;
+        }
+
+        // 4. 为每一个用户构建 UserProjectLine 实体
+        final BigDecimal finalDefaultPrice = defaultPrice; // Lambda表达式中需要final变量
+        List<UserProjectLine> linesToInsert = allUsers.stream().map(user -> {
+            UserProjectLine line = new UserProjectLine();
+            line.setUserId(user.getId());
+
+            // 关联刚刚创建的 Project 的主键 ID
+            line.setProjectTableId(project.getId());
+
+            line.setProjectName(project.getProjectName());
+            line.setProjectId(project.getProjectId());
+            line.setLineId(project.getLineId());
+
+            // 设置成本价
+            line.setCostPrice(project.getCostPrice());
+
+            // 设置根据规则计算出的代理售价
+            line.setAgentPrice(finalDefaultPrice);
+
+            return line;
+        }).collect(Collectors.toList());
+
+        // 5. 批量插入所有用户的项目线路配置
+        log.info("准备为 {} 个用户批量插入项目 '{}' 的线路配置...", linesToInsert.size(), project.getProjectName());
+        boolean linesSaved = userProjectLineService.saveBatch(linesToInsert);
+        if (!linesSaved) {
+            // 如果批量插入失败，抛出异常，触发事务回滚，刚才保存的Project也会被删除
+            throw new BusinessException("为用户批量创建项目线路配置失败，项目创建操作已回滚。");
+        }
+
+        log.info("成功为 {} 个用户创建了项目 '{}' 的线路配置。", linesToInsert.size(), project.getProjectName());
+        return true;
     }
 
-    @Autowired
-    private UserProjectLineService userProjectLineService;
+    /**
+     * [重构] 删除项目时，一并删除所有用户的相关项目线路价格配置
+     * @param id 要删除的项目的数据库主键ID
+     * @return 是否成功
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class) // *** 关键：确保操作的原子性 ***
+    public Boolean deleteByID(long id) {
+        Project projectToDelete = this.getById(id);
+        // 2. 校验项目是否存在
+        if (projectToDelete == null) {
+            log.warn("尝试删除一个不存在的项目，ID: {}", id);
+            throw new BusinessException("删除失败：找不到ID为 " + id + " 的项目。");
+        }
+
+        String projectId = projectToDelete.getProjectId();
+        String lineId = projectToDelete.getLineId();
+
+        // 3. 构建查询条件，删除所有用户关于此项目的线路配置
+        log.info("正在删除项目 '{}' (ID: {})，将同步删除所有用户关联的线路配置 (projectId: {}, lineId: {})...",
+                projectToDelete.getProjectName(), id, projectId, lineId);
+
+        LambdaQueryWrapper<UserProjectLine> deleteWrapper = new LambdaQueryWrapper<>();
+        deleteWrapper.eq(UserProjectLine::getProjectId, projectId);
+        deleteWrapper.eq(UserProjectLine::getLineId, lineId);
+
+        boolean linesRemoved = userProjectLineService.remove(deleteWrapper);
+        log.info("项目 '{}' 关联的用户线路配置已清理完毕。", projectToDelete.getProjectName());
+
+        // 4. 最后，删除项目本身
+        boolean projectRemoved = this.removeById(id);
+        if (!projectRemoved) {
+            throw new BusinessException("删除项目主体记录失败，操作已回滚。");
+        }
+
+        log.info("项目 '{}' (ID: {}) 已被成功删除。", projectToDelete.getProjectName(), id);
+        return true;
+    }
     /**
      * 新增：根据用户ID查询其有权访问的项目列表
      * @param userId 用户ID
@@ -189,4 +302,7 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
 //                .collect(Collectors.toList());
         return userProjectLineService.getLinesByUserId(userId);
     }
+
+
+
 }

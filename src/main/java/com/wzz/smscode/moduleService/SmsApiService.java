@@ -59,12 +59,9 @@ public class SmsApiService {
                 String phoneId = parsedResult.get("id");
                 if (StringUtils.hasText(phoneId)) {
                     log.info("为项目 [{} - {}] 解析到手机号唯一ID: {}", project.getProjectId(), project.getLineId(), phoneId);
-                    // TODO: 在这里添加对 phoneId 的处理逻辑，比如异步保存
                 }
-
                 return parsedResult;
             }
-
             // 如果没有解析到手机号，则按原逻辑返回整个响应体作为操作ID
             log.warn("在响应中未解析到手机号，将返回原始响应体作为操作ID。响应: {}", responseBody);
             parsedResult.put("responseBody", responseBody);
