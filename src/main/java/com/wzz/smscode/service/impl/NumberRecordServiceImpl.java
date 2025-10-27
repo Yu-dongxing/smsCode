@@ -242,7 +242,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             return CommonResultDTO.success("验证码获取成功", record.getCode());
         }
 
-        if (record.getStatus() == 0 || record.getStatus() == 1 || record.getStatus() == 3) {
+        if (record.getStatus() == 4 || record.getStatus() == 3) {
             log.info("记录 {} 状态为进行中，用户主动查询，触发一次即时验证码获取...", record.getId());
             Project project = projectService.getProject(record.getProjectId(), record.getLineId());
             if (project != null) {
