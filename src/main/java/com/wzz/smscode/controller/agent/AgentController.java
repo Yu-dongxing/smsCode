@@ -384,7 +384,7 @@ public class AgentController {
      * 更新当前代理用户的项目线路配置（如价格、备注等）传入的是项目配置表的id不是项目id和线路id
      */
     @PostMapping("/update/by-agent/project-config")
-    public Result<?> updateAgentProjectConfig(@Validated @RequestBody AgentProjectLineUpdateDTO updateDTO) {
+    public Result<?> updateAgentProjectConfig(@RequestBody AgentProjectLineUpdateDTO updateDTO) {
         try {
             StpUtil.checkLogin();
             Long agentId = StpUtil.getLoginIdAsLong();

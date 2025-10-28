@@ -211,9 +211,11 @@ public class AdminController {
         userDTO.setStatus(-1); // -1 代表禁用
         try {
             // + 管理员操作，operatorId 直接传入 0L
-            boolean success = userService.updateUser(userDTO, 0L);
-            return success ? Result.success("用户已禁用") : Result.error(-5, "操作失败");
-        } catch (Exception e) {
+//            boolean success = userService.updateUser(userDTO, 0L);
+            boolean success = userService.delectByuserId(userDTO.getUserId());
+
+            return success ? Result.success("用户删除成功") : Result.error(-5, "删除失败");
+        } catch (BusinessException e) {
             return Result.error(-5, e.getMessage());
         }
     }

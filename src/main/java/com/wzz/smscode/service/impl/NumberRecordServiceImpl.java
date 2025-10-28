@@ -192,7 +192,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             // 成功获取验证码
             latestRecord.setStatus(2);
             latestRecord.setCode(result.getCode());
-            latestRecord.setCharged(0); // 标记为已扣费
+            latestRecord.setCharged(0);
 
             // 【关键】如果API返回了手机号（例如UUID查询场景），则更新记录中的手机号
             if (result.getPhoneNumber() != null && !result.getPhoneNumber().equals(latestRecord.getPhoneNumber())) {
@@ -256,13 +256,18 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
 
                 if (codeOpt.isPresent()) {
                     String code = codeOpt.get();
-                    log.info("即时获取成功！为记录 {} 获取到验证码: {}", record.getId(), code);
-                    CodeResult codeResult = new CodeResult();
-                    codeResult.setCode(code);
-                    codeResult.setPhoneNumber(record.getPhoneNumber());
-                    codeResult.setSuccess(true);
-                    self.updateRecordAfterRetrieval(record, codeResult);
-                    return CommonResultDTO.success("验证码获取成功", code);
+                    if (!code.isEmpty()){
+                        log.info("即时获取成功！为记录 {} 获取到验证码: {}", record.getId(), code);
+//                        CodeResult codeResult = new CodeResult();
+//                        codeResult.setCode(code);
+//                        codeResult.setPhoneNumber(record.getPhoneNumber());
+//                        codeResult.setSuccess(true);
+
+//                        self.updateRecordAfterRetrieval(record, code);
+                        updateRecordAfterRetrieval(record, code);
+                        return CommonResultDTO.success("验证码获取成功", code);
+                    }
+                    return CommonResultDTO.error(Constants.ERROR_NO_CODE,"没有获取到验证码");
                 } else {
                     log.info("即时获取未返回有效验证码，继续等待异步任务结果。");
                     return CommonResultDTO.error(Constants.ERROR_NO_CODE,"验证码获取失败");
@@ -299,6 +304,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             latestRecord.setStatus(2);
             latestRecord.setCode(code);
             latestRecord.setCharged(1);
+            this.updateById(latestRecord);
             User user = userService.getById(latestRecord.getUserId());
 
             // 使用统一的账本创建服务来处理扣费和记账

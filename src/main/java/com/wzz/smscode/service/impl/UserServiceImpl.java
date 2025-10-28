@@ -1056,4 +1056,14 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         // 从用户列表中提取ID
         return users.stream().map(User::getId).collect(Collectors.toList());
     }
+
+    @Override
+    public boolean delectByuserId(Long userId) {
+        User user = getById(userId);
+        if (user == null) {
+            throw new BusinessException(0,"查询不到要删除的用户");
+        }
+
+        return userMapper.deleteById(user) >0;
+    }
 }

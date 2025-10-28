@@ -90,4 +90,6 @@ public interface UserService extends IService<User> {
     List<SubUserProjectPriceDTO> getSubUsersProjectPrices(Long agentId);
 
     List<Long> findUserIdsByUsernameLike(String username);
+
+    boolean delectByuserId(Long userId);
 }
