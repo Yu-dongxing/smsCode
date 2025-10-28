@@ -98,6 +98,7 @@ public class SmsApiService {
                 String responseBody = strategy.buildGetCodeRequest(webClient, project, identifier).block();
                 log.info("轮询获取验证码响应: {}", responseBody);
 
+                //todo 上线需要删除
                 if (responseBody != null && (responseBody.contains("错误") || responseBody.contains("失败"))) {
                     log.info("响应体中检测到错误信息，将立即停止轮询。响应内容: {}", responseBody);
                     // 抛出业务异常，并将完整的响应体作为错误信息返回给调用方
@@ -186,12 +187,15 @@ public class SmsApiService {
     }
 
     /**
+     * 【重要修改】
      * 调用外部API检查手机号码是否可用。
-     * @param project     项目配置，包含API的认证和路由信息。
+     * 此实现现在完全依赖于系统配置中的筛选API信息，不再使用项目自身的筛选配置。
+     *
+     * @param project     项目配置，主要用于获取是否启用筛选的开关以及认证信息。
      * @param phoneNumber 需要检查的手机号码。
      * @return 返回一个 Mono<Boolean>。如果号码可用，发射 true；否则发射 false。
      *         如果项目未开启号码筛选功能，默认视为可用，直接返回 true。
-     *         如果开启了筛选但项目和全局配置均无效，则视为不可用，返回 false。
+     *         如果系统未配置全局筛选API，则视为不可用，返回 false。
      */
     public Mono<Boolean> checkPhoneNumberAvailability(Project project, String phoneNumber) {
         // 1. 检查项目是否开启了号码筛选功能
@@ -200,39 +204,53 @@ public class SmsApiService {
             return Mono.just(true); // 功能未开启，默认可用
         }
 
-        // 2. 决定使用哪个配置 (项目自身配置 或 全局系统配置)
-        Project effectiveProject = resolveEffectiveProjectConfig(project);
+        // 2. 直接获取系统全局配置
+        log.info("项目 [{}] 已开启号码筛选，将强制使用系统全局配置进行检查。", project.getProjectName());
+        SystemConfig systemConfig = systemConfigService.getConfig();
 
-        // 如果连有效的配置都找不到，直接判定为不可用
-        if (effectiveProject == null) {
-            log.warn("项目 [{}] 开启了筛选，但自身和系统全局均未提供有效的筛选API配置。号码 [{}] 将被视为不可用。", project.getProjectName(), phoneNumber);
-            return Mono.just(false);
+        // 3. 检查全局配置是否有效
+        if (systemConfig == null || !StringUtils.hasText(systemConfig.getFilterApiUrl())) {
+            log.warn("号码筛选功能已开启，但系统未提供有效的全局筛选API配置。号码 [{}] 将被视为不可用。", phoneNumber);
+            return Mono.just(false); // 全局配置无效，视为不可用
         }
 
-        log.info("项目 [{}] 开始使用有效配置筛选号码 [{}]...", project.getProjectName(), phoneNumber);
+        // 4. 创建一个临时的Project对象，用于传递给策略方法。
+        // 它继承了原始项目的认证等信息，但筛选API相关的配置被系统全局配置覆盖。
+        Project filterExecutionConfig = new Project();
+        BeanUtils.copyProperties(project, filterExecutionConfig);
+
+        // 使用系统配置覆盖筛选相关的字段
+        filterExecutionConfig.setSelectNumberApiRoute(systemConfig.getFilterApiUrl());
+        filterExecutionConfig.setSelectNumberApiRouteMethod(systemConfig.getSelectNumberApiRouteMethod());
+        filterExecutionConfig.setSelectNumberApiReauestType(systemConfig.getSelectNumberApiReauestType());
+        if (systemConfig.getSelectNumberApiReauestValue() != null) {
+            filterExecutionConfig.setSelectNumberApiRequestValue(systemConfig.getSelectNumberApiReauestValue());
+        }
+        filterExecutionConfig.setResponseSelectNumberApiField(systemConfig.getResponseSelectNumberApiField());
+
+        log.info("开始使用全局配置筛选号码 [{}]...", phoneNumber);
 
         try {
-            // 3. 从工厂获取对应的认证策略
-            // 注意：认证信息总是使用原始项目(effectiveProject)的，因为全局配置不包含认证
-            AuthStrategy strategy = authStrategyFactory.getStrategy(effectiveProject.getAuthType().getValue());
+            // 5. 从工厂获取对应的认证策略 (认证类型仍遵循项目本身的设置)
+            AuthStrategy strategy = authStrategyFactory.getStrategy(String.valueOf(filterExecutionConfig.getAuthType()));
 
-            // 4. 使用策略构建并执行请求 (传入的是包含正确API信息的 effectiveProject)
-            return strategy.buildCheckNumberRequest(webClient, effectiveProject, phoneNumber)
+            // 6. 使用策略构建并执行请求 (传入的是合并了全局配置的 filterExecutionConfig)
+            return strategy.buildCheckNumberRequest(webClient, filterExecutionConfig, phoneNumber)
                     .flatMap(responseBody -> {
-                        // 5. 解析响应结果
-                        log.debug("项目 [{}] 的号码筛选API响应: {}", effectiveProject.getProjectName(), responseBody);
+                        // 7. 解析响应结果
+                        log.debug("号码筛选API响应: {}", responseBody);
                         try {
-                            boolean isAvailable = parseAvailabilityResponse(responseBody, effectiveProject.getResponseSelectNumberApiField());
+                            boolean isAvailable = parseAvailabilityResponse(responseBody, filterExecutionConfig.getResponseSelectNumberApiField());
                             log.info("号码 [{}] 筛选结果: {}", phoneNumber, isAvailable ? "可用" : "不可用");
                             return Mono.just(isAvailable);
                         } catch (Exception e) {
-                            log.error("解析项目 [{}] 的号码筛选响应失败: {}", effectiveProject.getProjectName(), e.getMessage());
+                            log.error("解析号码筛选响应失败: {}", e.getMessage());
                             return Mono.error(new BusinessException("解析API响应失败"));
                         }
                     })
                     .onErrorResume(e -> {
-                        // 6. 处理请求过程中的异常
-                        log.error("调用项目 [{}] 的号码筛选API失败: {}", effectiveProject.getProjectName(), e.getMessage());
+                        // 8. 处理请求过程中的异常
+                        log.error("调用号码筛选API失败: {}", e.getMessage());
                         return Mono.just(false); // 出现任何错误，都视为号码不可用
                     });
 
@@ -242,50 +260,50 @@ public class SmsApiService {
         }
     }
 
-    /**
-     * 【新增辅助方法】
-     * 解析并返回最终用于API请求的有效Project配置。
-     *
-     * @param originalProject 原始的项目配置
-     * @return 如果项目自身配置有效，则返回原始对象；如果需要回退，则返回一个合并了全局配置的新对象；如果两者都无效，返回 null。
-     */
-    private Project resolveEffectiveProjectConfig(Project originalProject) {
-        // 优先使用项目自身的API配置
-        if (StringUtils.hasText(originalProject.getSelectNumberApiRoute())) {
-            log.debug("项目 [{}] 使用其自身的号码筛选API配置。", originalProject.getProjectName());
-            return originalProject;
-        }
-
-        // 项目自身配置为空，尝试回退到系统全局配置
-        log.info("项目 [{}] 未配置筛选API，尝试使用系统全局配置进行回退。", originalProject.getProjectName());
-        SystemConfig systemConfig = systemConfigService.getConfig();
-
-        // 检查全局配置是否有效
-        if (systemConfig != null && StringUtils.hasText(systemConfig.getFilterApiUrl())) {
-            log.info("成功回退到系统全局筛选API: {}", systemConfig.getFilterApiUrl());
-
-            // 创建一个新的Project对象，避免修改原始传入的project实例 (这是一个好习惯)
-            Project mergedProject = new Project();
-            BeanUtils.copyProperties(originalProject, mergedProject);
-
-            // 用系统配置覆盖筛选相关的字段
-            // **重要提示:** SystemConfig中的 filterApiUrl 对应 Project中的 selectNumberApiRoute
-            mergedProject.setSelectNumberApiRoute(systemConfig.getFilterApiUrl());
-            mergedProject.setSelectNumberApiRouteMethod(systemConfig.getSelectNumberApiRouteMethod());
-            mergedProject.setSelectNumberApiReauestType(systemConfig.getSelectNumberApiReauestType());
-
-            if (systemConfig.getSelectNumberApiReauestValue() != null) {
-                mergedProject.setSelectNumberApiRequestValue(systemConfig.getSelectNumberApiReauestValue());
-            }
-
-            mergedProject.setResponseSelectNumberApiField(systemConfig.getResponseSelectNumberApiField());
-
-            return mergedProject;
-        }
-
-        // 项目和全局配置都无效
-        return null;
-    }
+//    /**
+//     * 【新增辅助方法】
+//     * 解析并返回最终用于API请求的有效Project配置。
+//     *
+//     * @param originalProject 原始的项目配置
+//     * @return 如果项目自身配置有效，则返回原始对象；如果需要回退，则返回一个合并了全局配置的新对象；如果两者都无效，返回 null。
+//     */
+//    private Project resolveEffectiveProjectConfig(Project originalProject) {
+//        // 优先使用项目自身的API配置
+//        if (StringUtils.hasText(originalProject.getSelectNumberApiRoute())) {
+//            log.debug("项目 [{}] 使用其自身的号码筛选API配置。", originalProject.getProjectName());
+//            return originalProject;
+//        }
+//
+//        // 项目自身配置为空，尝试回退到系统全局配置
+//        log.info("项目 [{}] 未配置筛选API，尝试使用系统全局配置进行回退。", originalProject.getProjectName());
+//        SystemConfig systemConfig = systemConfigService.getConfig();
+//
+//        // 检查全局配置是否有效
+//        if (systemConfig != null && StringUtils.hasText(systemConfig.getFilterApiUrl())) {
+//            log.info("成功回退到系统全局筛选API: {}", systemConfig.getFilterApiUrl());
+//
+//            // 创建一个新的Project对象，避免修改原始传入的project实例 (这是一个好习惯)
+//            Project mergedProject = new Project();
+//            BeanUtils.copyProperties(originalProject, mergedProject);
+//
+//            // 用系统配置覆盖筛选相关的字段
+//            // **重要提示:** SystemConfig中的 filterApiUrl 对应 Project中的 selectNumberApiRoute
+//            mergedProject.setSelectNumberApiRoute(systemConfig.getFilterApiUrl());
+//            mergedProject.setSelectNumberApiRouteMethod(systemConfig.getSelectNumberApiRouteMethod());
+//            mergedProject.setSelectNumberApiReauestType(systemConfig.getSelectNumberApiReauestType());
+//
+//            if (systemConfig.getSelectNumberApiReauestValue() != null) {
+//                mergedProject.setSelectNumberApiRequestValue(systemConfig.getSelectNumberApiReauestValue());
+//            }
+//
+//            mergedProject.setResponseSelectNumberApiField(systemConfig.getResponseSelectNumberApiField());
+//
+//            return mergedProject;
+//        }
+//
+//        // 项目和全局配置都无效
+//        return null;
+//    }
 
     /**
      * 解析API响应，判断号码是否可用。
@@ -301,7 +319,7 @@ public class SmsApiService {
         }
 
         try {
-            // 使用 Jayway JsonPath 来解析，因为它在你提供的 Project 实体注释中提到了
+            // 使用 Jayway JsonPath 来解析
             Object status = JsonPath.read(responseBody, jsonPathExpression);
             if (status instanceof Boolean) {
                 return (Boolean) status;

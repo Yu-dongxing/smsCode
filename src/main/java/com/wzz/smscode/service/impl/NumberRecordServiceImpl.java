@@ -116,7 +116,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         record.setPhoneNumber(identifier.get("phone"));
         record.setApiPhoneId(identifier.get("id"));
         record.setStatus(0); // 待取码
-        record.setCharged(1); // 默认未扣费
+        record.setCharged(0); // 默认未扣费
         record.setPrice(price);
         record.setBalanceBefore(user.getBalance());
         record.setBalanceAfter(user.getBalance());
@@ -298,7 +298,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         if (code != null) {
             latestRecord.setStatus(2);
             latestRecord.setCode(code);
-            latestRecord.setCharged(0);
+            latestRecord.setCharged(1);
             User user = userService.getById(latestRecord.getUserId());
 
             // 使用统一的账本创建服务来处理扣费和记账
@@ -308,6 +308,10 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                     .ledgerType(0) // 0-出账
                     .fundType(FundType.BUSINESS_DEDUCTION) // 资金业务类型为业务扣费
                     .remark("业务扣费") // 备注
+                    .phoneNumber(record.getPhoneNumber())
+                    .code(code)
+                    .lineId(record.getLineId())
+                    .projectId(record.getProjectId())
                     .build();
 
             // 调用统一的账本服务，该方法内部会处理用户余额的更新和账本记录的创建
@@ -317,6 +321,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             userService.updateUserStatsForNewNumber(user.getId(), true);
         } else {
             latestRecord.setStatus(3);
+            latestRecord.setCharged(0);
         }
         latestRecord.setRemark(record.getRemark());
         this.updateById(latestRecord);

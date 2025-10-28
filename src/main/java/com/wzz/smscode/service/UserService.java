@@ -88,4 +88,6 @@ public interface UserService extends IService<User> {
     void updateAgentProjectConfig(Long agentId, AgentProjectLineUpdateDTO updateDTO);
 
     List<SubUserProjectPriceDTO> getSubUsersProjectPrices(Long agentId);
+
+    List<Long> findUserIdsByUsernameLike(String username);
 }

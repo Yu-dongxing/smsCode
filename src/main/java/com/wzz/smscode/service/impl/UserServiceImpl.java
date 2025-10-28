@@ -1034,4 +1034,26 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             return dto;
         }).collect(Collectors.toList());
     }
+
+
+    /**
+     * 【新增】根据用户名模糊查询用户ID列表
+     * @param username 用户名
+     * @return 匹配的用户ID列表
+     */
+    @Override
+    public List<Long> findUserIdsByUsernameLike(String username) {
+        if (username == null || username.trim().isEmpty()) {
+            return Collections.emptyList();
+        }
+        LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
+        // 使用 like 实现模糊查询，并只 select id 字段以提高效率
+        queryWrapper.like(User::getUserName, username).select(User::getId);
+        List<User> users = this.list(queryWrapper);
+        if (CollectionUtils.isEmpty(users)) {
+            return Collections.emptyList();
+        }
+        // 从用户列表中提取ID
+        return users.stream().map(User::getId).collect(Collectors.toList());
+    }
 }

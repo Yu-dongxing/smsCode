@@ -220,6 +220,9 @@ public class AdminController {
 
     // --- 账本与记录查询 ---
 
+
+
+
     /**
      * 查看指定用户的账本明细
      * @param targetUserId 目标用户 ID
@@ -241,7 +244,7 @@ public class AdminController {
 
         Page pageRequest = new Page<>(page, size);
         // + 管理员可无密码查询任意用户，传入 adminId=0L, password=null
-        IPage<LedgerDTO> resultPage = userLedgerService.listAllLedger(0L, null, targetUserId, startTime, endTime, pageRequest);
+        IPage<LedgerDTO> resultPage = userLedgerService.listAllLedger(0L, null, null,targetUserId, startTime, endTime, pageRequest,null);
         return Result.success("查询成功", resultPage);
     }
 
@@ -255,16 +258,19 @@ public class AdminController {
      */
     @RequestMapping(value = "/viewAllLedger", method = {RequestMethod.GET, RequestMethod.POST})
     public Result<IPage<LedgerDTO>> viewAllLedger(
-            //- @RequestParam Long adminId,
-            //- @RequestParam String password,
+            @RequestParam(required = false) String username, // 新增了 username
+            @RequestParam(required = false) Long filterByUserId, // 新增了 filterByUserId
+            @RequestParam(required = false) String remark,
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") Date startTime,
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") Date endTime,
             @RequestParam(defaultValue = "1") long page,
             @RequestParam(defaultValue = "10") long size) {
 
-        Page pageRequest = new Page<>(page, size);
-        // + 传入 adminId=0L, password=null
-        IPage<LedgerDTO> resultPage = userLedgerService.listAllLedger(0L, null, null, startTime, endTime, pageRequest);
+        Page<UserLedger> pageRequest = new Page<>(page, size);
+
+        // 调用的是我们修改过的 service 方法
+        IPage<LedgerDTO> resultPage = userLedgerService.listAllLedger(0L, null,username, filterByUserId, startTime, endTime, pageRequest,remark);
+
         return Result.success("查询成功", resultPage);
     }
 

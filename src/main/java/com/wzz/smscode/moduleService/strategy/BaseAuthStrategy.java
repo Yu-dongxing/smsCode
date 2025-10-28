@@ -124,28 +124,30 @@ public abstract class BaseAuthStrategy implements AuthStrategy {
     }
 
     /**
-     * 【新增的通用实现】
+     * 【重要修改】
      * 构建并执行筛选号码API请求的通用实现。
-     * 该方法从 Project 配置中读取所有必要信息来构建和发送请求。
-     *
-     * 注意：Project 实体中的字段 selectNumberApiReauestValue 的类型应为 String，
-     * 代表请求参数的字段名（例如 "phone" 或 "phoneNumber"）。
-     * 这里我们假设它是一个 String 类型的字段。
+     * 修改了URL构建逻辑，以兼容从SystemConfig传入的完整URL。
      */
     @Override
     public Mono<String> buildCheckNumberRequest(WebClient webClient, Project project, String phoneNumber) {
         // 构造请求参数
         Map<String, Object> params = new HashMap<>();
-        // 假设 selectNumberApiReauestValue 存储的是请求字段名
-        // **注意：** 原始代码中此字段为 RequestType，可能是一个笔误。这里我们将其视为 String。
-        // 如果字段确实有其他含义，请相应调整此处的逻辑。
         if (project.getSelectNumberApiRequestValue() != null) {
-            // 将字段名和手机号放入参数 map
-            params.put(String.valueOf(project.getSelectNumberApiRequestValue()), phoneNumber);
+            params.put(project.getSelectNumberApiRequestValue(), phoneNumber);
         }
 
-        // 构建请求 URI
-        String fullUrl = normalizeDomain(project.getDomain()) + project.getSelectNumberApiRoute();
+        // 【修改】构建请求 URI，智能处理 project.getSelectNumberApiRoute() 可能为完整URL的情况
+        String fullUrl;
+        String route = project.getSelectNumberApiRoute();
+
+        if (StringUtils.hasText(route) && (route.toLowerCase().startsWith("http://") || route.toLowerCase().startsWith("https://"))) {
+            // 如果 route 字段本身就是一个完整的URL（例如从SystemConfig中获取），则直接使用它
+            fullUrl = route;
+        } else {
+            // 否则，将其与项目域名拼接（兼容旧的、仅路径的配置方式）
+            fullUrl = normalizeDomain(project.getDomain()) + route;
+        }
+
         URI uri;
 
         // 如果是 PARAM 类型，需要将参数附加到 URI 上

@@ -133,6 +133,7 @@ public class NumberRecord extends BaseEntity {
      */
     @ColumnComment("取号时间")
     @TableField("get_number_time")
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
     private LocalDateTime getNumberTime;
 
     /**

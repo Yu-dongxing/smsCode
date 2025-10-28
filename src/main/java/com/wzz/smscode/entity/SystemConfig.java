@@ -46,6 +46,8 @@ public class SystemConfig implements Serializable {
 
     /**
      * 筛选号码的api的接口请求参数类型
+     * - PARAM: 参数将以 a=1&b=2 的形式附加到URL或表单中<br/>
+     * - JSON: 参数将以 JSON 格式放在请求体中发送
      */
     @ColumnComment("筛选号码的api的接口请求参数类型")
     @TableField("select_number_api_reauest_type")
@@ -61,16 +63,16 @@ public class SystemConfig implements Serializable {
     private String selectNumberApiRouteMethod;
 
     /**
-     * 筛选号码的api的接口请求字段
+     * 筛选号码的api的接口请求字段 输入请求的参数，可使用 %s 作为手机号占位符
      */
-    @ColumnComment("筛选号码的api的接口请求字段")
+    @ColumnComment("筛选号码的api的接口请求字段值")
     @TableField("select_number_api_reauest_value")
     private String selectNumberApiReauestValue;
 
     /**
-     * 筛选号码的api的接口数据返回字段
+     * 筛选号码的api的接口数据返回字段 哪个字段代表筛选结果。例如：data.status
      */
-    @ColumnComment("筛选号码的api的接口请求字段")
+    @ColumnComment("筛选号码的api的接口数据返回字段")
     @TableField("response_select_number_api_field")
     private String responseSelectNumberApiField;
 
@@ -90,8 +92,12 @@ public class SystemConfig implements Serializable {
     private Integer enableBanMode;
 
     /**
-     * 是否开启筛选号码
+     * 是否开启号码筛选功能 (0=关闭, 1=开启)
      */
+    @ColumnComment("是否开启号码筛选功能")
+    @TableField("enable_number_filtering")
+    @DefaultValue("0")
+    private Boolean enableNumberFiltering;
 
     /**
      * 24小时最低回码率限制值

@@ -23,6 +23,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -95,10 +96,12 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
     public IPage<LedgerDTO> listAllLedger(
             Long adminId,
             String adminPassword,
+            String username,
             Long filterByUserId,
             Date startTime,
             Date endTime,
-            Page<UserLedger> page) {
+            Page<UserLedger> page,
+            String remark) {
         // 1. 管理员身份验证
 //        User admin = userService.authenticate(adminId, adminPassword);
         // TODO: 此处应增加更严格的管理员角色判断
@@ -109,16 +112,36 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
 
         // 2. 构建查询条件
         LambdaQueryWrapper<UserLedger> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(filterByUserId != null && filterByUserId > 0, UserLedger::getUserId, filterByUserId); // 可选的用户筛选
+
+        // 优先根据 username 进行模糊查询
+        if (username != null && !username.trim().isEmpty()) {
+            List<Long> userIds = userService.findUserIdsByUsernameLike(username);
+
+            // 如果根据用户名模糊查询没有找到任何用户，直接返回空的分页结果，避免无效的数据库查询
+            if (CollectionUtils.isEmpty(userIds)) {
+                return new Page<LedgerDTO>(page.getCurrent(), page.getSize(), 0).setRecords(Collections.emptyList());
+            }
+            wrapper.in(UserLedger::getUserId, userIds);
+
+        } else if (filterByUserId != null && filterByUserId > 0) {
+            // 只有在 username 未提供时，才使用 filterByUserId
+            wrapper.eq(UserLedger::getUserId, filterByUserId);
+        }
+        if (remark != null && !remark.trim().isEmpty()) {
+            wrapper.like(UserLedger::getRemark, remark);
+        }
+
+        // 4. 添加其他筛选条件
         wrapper.ge(startTime != null, UserLedger::getTimestamp, startTime);
         wrapper.le(endTime != null, UserLedger::getTimestamp, endTime);
         wrapper.orderByDesc(UserLedger::getTimestamp);
 
-        // 3. 执行分页查询
+        // 5. 执行分页查询
         Page<UserLedger> ledgerPage = this.page(page, wrapper);
 
-        // 4. 转换 DTO
+        // 6. 转换 DTO
         return ledgerPage.convert(this::convertToDTO);
+
     }
 
     /**
@@ -245,6 +268,10 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
         ledger.setFundType(request.getFundType().getCode());
         ledger.setTimestamp(LocalDateTime.now());
         ledger.setRemark(request.getRemark());
+        ledger.setPhoneNumber(request.getPhoneNumber());
+        ledger.setCode(request.getCode());
+        ledger.setLineId(request.getLineId());
+        ledger.setProjectId(request.getProjectId());
 
         return this.save(ledger);
     }

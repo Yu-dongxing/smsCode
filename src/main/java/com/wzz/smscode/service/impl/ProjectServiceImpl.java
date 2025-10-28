@@ -17,6 +17,7 @@ import com.wzz.smscode.service.UserService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.CollectionUtils;
@@ -34,6 +35,7 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
 
 
     @Autowired
+    @Lazy
     private UserService userService;
 
     // 注入 UserProjectLineService 用于批量保存数据
