@@ -9,6 +9,7 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Date;
+import java.util.List;
 
 public interface NumberRecordService extends IService<NumberRecord> {
 
@@ -34,4 +35,6 @@ public interface NumberRecordService extends IService<NumberRecord> {
     );
 
     NumberRecord getRecordByPhone(String phone);
+
+    List<String> getPhoneNumbersByProjectId(String projectId);
 }

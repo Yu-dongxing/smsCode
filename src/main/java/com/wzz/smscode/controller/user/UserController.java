@@ -13,10 +13,12 @@ import com.wzz.smscode.dto.number.NumberDTO;
 import com.wzz.smscode.dto.update.UserUpdatePasswardDTO;
 import com.wzz.smscode.entity.*;
 import com.wzz.smscode.exception.BusinessException;
+import com.wzz.smscode.moduleService.PhoneNumberFilterService;
 import com.wzz.smscode.service.*;
 import com.wzz.smscode.service.impl.UserServiceImpl;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.RestTemplate;
 
@@ -289,6 +291,42 @@ public class UserController {
             return responseBody;
         } catch (Exception e) {
             return "代理请求失败: " + e.getMessage();
+        }
+    }
+
+    @Autowired
+    private PhoneNumberFilterService phoneNumberFilterService;
+    /**
+     * 直接查询手机号码状态 (原始数据)
+     * <p>
+     * 该接口不依赖于项目配置，直接调用底层的号码筛选服务。
+     * 适用于需要获取号码原始状态（如 "新号", "封禁" 等）的场景。
+     */
+    @PostMapping("/checkPhoneNumberState")
+    public CommonResultDTO<String> checkPhoneNumberState(@RequestBody RequestUrlDTO requestUrlDTO) {
+        // 1. 身份验证
+//        User user = userService.authenticateUserByUserName(requestUrlDTO.getUserName(), requestUrlDTO.getPassword());
+//        if (user == null) {
+//            return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED, "用户ID或密码错误");
+//        }
+
+        // 2. 获取系统配置中的全局API Token
+//        SystemConfig systemConfig = systemConfigService.getConfig();
+//        String token = systemConfig.getFilterApiKey();
+//        if (!StringUtils.hasText(token)) {
+//            return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR,"系统配置错误：未找到号码筛选服务的API Token");
+//        }
+
+        try {
+            String state = phoneNumberFilterService.checkPhoneNumberState(requestUrlDTO.getToken(), requestUrlDTO.getCpid(), requestUrlDTO.getPhone(), "86")
+                    .block(); // 阻塞等待异步操作完成
+            if (state != null) {
+                return CommonResultDTO.success("查询成功", state);
+            } else {
+                return CommonResultDTO.error(Constants.ERROR_NO_CODE,"查询失败，未能从任何服务器获取到有效的号码状态");
+            }
+        } catch (Exception e) {
+            return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR,"查询过程中发生错误: " + e.getMessage());
         }
     }
 }

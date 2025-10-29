@@ -32,6 +32,7 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Date;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -54,6 +55,24 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
     // 2. 注入我们统一的API服务
     @Autowired private SmsApiService smsApiService;
     @Autowired private UserProjectLineService userProjectLineService;
+
+
+    /**
+     * 检查指定的手机号是否已经存在于特定项目的记录中。
+     *
+     * @param projectId   项目ID
+     * @param phoneNumber 要检查的手机号
+     * @return 如果存在，返回 true；否则返回 false
+     */
+    private boolean isPhoneNumberExistsInProject(String projectId, String phoneNumber) {
+        // 使用 count 方法，这比查询整个列表要高效得多
+        // 它会生成类似 SELECT COUNT(*) ... 的 SQL 语句
+        long count = this.count(new LambdaQueryWrapper<NumberRecord>()
+                .eq(NumberRecord::getProjectId, projectId)
+                .eq(NumberRecord::getPhoneNumber, phoneNumber)
+        );
+        return count > 0;
+    }
 
     @Transactional
     @Override
@@ -112,9 +131,20 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                 log.error("重试等待时线程被中断", e);
                 return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, "系统线程中断");
             }
+            String phoneNumber = currentIdentifier.get("phone");
+            if (isPhoneNumberExistsInProject(projectId, phoneNumber)) {
+                log.warn("号码 [{}] 在项目 [{}] 的记录中已存在，将丢弃并重新获取...", phoneNumber, projectId);
+                // 可以在这里加一个短暂的延时，避免过于频繁地请求上游
+                try {
+                    if (attempt < MAX_ATTEMPTS) Thread.sleep(200);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                continue; // 跳过当前号码，进行下一次尝试
+            }
             if (config.getEnableNumberFiltering() && projectT.getEnableFilter()) {
                 try {
-                    String phoneNumber = currentIdentifier.get("phone");
+//                    String phoneNumber = currentIdentifier.get("phone");
                     log.info("号码筛选已开启，正在检查号码 [{}] 可用性...", phoneNumber);
 
                     Boolean isAvailable = smsApiService.checkPhoneNumberAvailability(projectT, phoneNumber, null)
@@ -502,4 +532,24 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         BeanUtils.copyProperties(record, dto);
         return dto;
     }
+
+
+    /**
+     * 根据项目ID查询所有关联的手机号码
+     *
+     * @param projectId 项目的唯一标识
+     * @return 包含该项目所有手机号的字符串列表
+     */
+    @Override
+    public List<String> getPhoneNumbersByProjectId(String projectId) {
+        // 1. 创建查询条件构造器
+        LambdaQueryWrapper<NumberRecord> wrapper = new LambdaQueryWrapper<>();
+        wrapper.select(NumberRecord::getPhoneNumber);
+        wrapper.eq(NumberRecord::getProjectId, projectId);
+        List<NumberRecord> records = this.list(wrapper);
+        return records.stream()
+                .map(NumberRecord::getPhoneNumber)
+                .collect(java.util.stream.Collectors.toList());
+    }
+
 }
