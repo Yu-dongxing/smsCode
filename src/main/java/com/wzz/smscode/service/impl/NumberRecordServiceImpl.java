@@ -1,7 +1,6 @@
 package com.wzz.smscode.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -10,7 +9,7 @@ import com.wzz.smscode.common.Constants;
 import com.wzz.smscode.common.CommonResultDTO;
 import com.wzz.smscode.dto.CodeResult;
 import com.wzz.smscode.dto.CreatDTO.LedgerCreationDTO;
-import com.wzz.smscode.dto.NumberDTO;
+import com.wzz.smscode.dto.number.NumberDTO;
 import com.wzz.smscode.entity.*;
 import com.wzz.smscode.enums.FundType;
 import com.wzz.smscode.exception.BusinessException;
@@ -30,6 +29,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Date;
 import java.util.Map;
@@ -49,10 +49,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
     @Autowired
     private SystemConfigService systemConfigService;
 
-    @Override
-    public CommonResultDTO<String> getNumber(Long userId, String password, String projectId, Integer lineId) {
-        return null;
-    }
+
 
     // 2. 注入我们统一的API服务
     @Autowired private SmsApiService smsApiService;
@@ -91,20 +88,61 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         if (!BalanceUtil.canGetNumber(user, hasOngoingRecord)) {
             return CommonResultDTO.error(Constants.ERROR_INSUFFICIENT_BALANCE, "余额不足或已有进行中的任务");
         }
+        final int MAX_ATTEMPTS = 3; // 定义最大尝试次数
+        Map<String, String> successfulIdentifier = null;
+        boolean numberFoundAndVerified = false;
 
-        // 3. 【核心改造】调用统一服务获取号码或操作ID
-        Map<String,String>  identifier;
-        try {
-            String numForApi = "1";
-             identifier = smsApiService.getPhoneNumber(projectT, numForApi);
-             log.info("获取到手机号的信息：{}",identifier);
-            if (!StringUtils.hasText(identifier.get("phone"))) {
-                return CommonResultDTO.error(Constants.ERROR_NO_NUMBER, "未获取到有效号码或ID");
+        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            log.info("正在进行第 {}/{} 次获取并验证手机号...", attempt, MAX_ATTEMPTS);
+            Map<String, String> currentIdentifier;
+            try {
+                String numForApi = "1";
+                currentIdentifier = smsApiService.getPhoneNumber(projectT, numForApi);
+                log.info("第 {} 次尝试，获取到手机号信息：{}", attempt, currentIdentifier);
+                if (!StringUtils.hasText(currentIdentifier.get("phone"))) {
+                    log.warn("第 {} 次尝试，上游平台未返回有效手机号，即将重试...", attempt);
+                    if (attempt < MAX_ATTEMPTS) Thread.sleep(500);
+                    continue; // 继续下一次循环
+                }
+            } catch (BusinessException e) {
+                log.error("调用接口获取号码失败 (尝试 {}/{})，这是一个致命错误，终止流程: {}", attempt, MAX_ATTEMPTS, e.getMessage());
+                return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, "上游接口错误: " + e.getMessage());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.error("重试等待时线程被中断", e);
+                return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, "系统线程中断");
             }
-        } catch (BusinessException e) {
-            log.error("调用统一接口服务获取号码失败: projectId={}, lineId={}. Error: {}", projectId, lineId, e.getMessage());
-            // 将底层的详细错误信息返回，方便排查
-            return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, "接口错误: " + e.getMessage());
+            if (config.getEnableNumberFiltering() && projectT.getEnableFilter()) {
+                try {
+                    String phoneNumber = currentIdentifier.get("phone");
+                    log.info("号码筛选已开启，正在检查号码 [{}] 可用性...", phoneNumber);
+
+                    Boolean isAvailable = smsApiService.checkPhoneNumberAvailability(projectT, phoneNumber, null)
+                            .block(Duration.ofSeconds(60)); // 60秒超时保护
+
+                    if (Boolean.TRUE.equals(isAvailable)) {
+                        log.info("号码 [{}] 筛选通过！成功获取可用号码。", phoneNumber);
+                        successfulIdentifier = currentIdentifier;
+                        numberFoundAndVerified = true;
+                        break; // 成功，跳出循环
+                    } else {
+                        log.warn("号码 [{}] 筛选结果为不可用。即将尝试获取下一个号码...", phoneNumber);
+                        // 让循环自然进入下一次迭代
+                    }
+                } catch (Exception e) {
+                    log.error("号码筛选过程中发生异常 (尝试 {}/{})，将视为号码不可用: {}", attempt, MAX_ATTEMPTS, e.getMessage());
+                }
+            } else {
+                // 步骤 C: 如果不需要筛选，获取到的第一个号码即为成功
+                log.info("号码筛选未开启，默认获取的号码可用。");
+                successfulIdentifier = currentIdentifier;
+                numberFoundAndVerified = true;
+                break; // 成功，跳出循环
+            }
+        }
+        if (!numberFoundAndVerified) {
+            log.error("在 {} 次尝试后，未能获取到一个可用的手机号。", MAX_ATTEMPTS);
+            return CommonResultDTO.error(Constants.ERROR_NO_CODE, "获取可用号码失败，请稍后重试");
         }
 
         // 4. 写入号码记录并启动取码线程
@@ -112,9 +150,8 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         record.setUserId(user.getId());
         record.setProjectId(projectId);
         record.setLineId(lineId);
-        // 注意：这里存入的是 identifier，它可能是手机号，也可能是一个操作ID(UUID)
-        record.setPhoneNumber(identifier.get("phone"));
-        record.setApiPhoneId(identifier.get("id"));
+        record.setPhoneNumber(successfulIdentifier.get("phone"));
+        record.setApiPhoneId(successfulIdentifier.get("id"));
         record.setStatus(0); // 待取码
         record.setCharged(0); // 默认未扣费
         record.setPrice(price);
@@ -124,8 +161,8 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         this.save(record);
 
         final String finalIdentifierId = projectT.getResponsePhoneField() != null
-                ? identifier.get("id")
-                : identifier.get("phone");
+                ? successfulIdentifier.get("id")
+                : successfulIdentifier.get("phone");
 
         final Long recordId = record.getId();
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronizationAdapter() {
@@ -136,17 +173,14 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             }
         });
 
-        // 6. 更新统计
+        // 5. 更新统计 (保持不变)
         userService.updateUserStatsForNewNumber(user.getId(), false);
 
-        // 7. 返回操作ID或部分号码给用户
-        return CommonResultDTO.success("取号成功，请稍后查询验证码", identifier.get("phone"));
+        // 6. 返回操作ID或部分号码给用户 (使用最终成功的 `successfulIdentifier`)
+        return CommonResultDTO.success("取号成功，请稍后查询验证码", successfulIdentifier.get("phone"));
     }
 
-    @Override
-    public void retrieveCode(Long numberId) {
-        return;
-    }
+
 
     @Async("taskExecutor")
     @Override
@@ -182,39 +216,45 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
 
     @Transactional
     @Override
-    public void updateRecordAfterRetrieval(NumberRecord record, CodeResult result) {
+    public void updateRecordAfterRetrieval(NumberRecord record, boolean is, String result) {
+        // 重新从数据库获取记录，确保数据最新
         NumberRecord latestRecord = this.getById(record.getId());
-        if (latestRecord.getStatus() != 1) return; // 防止重复处理
+        if (latestRecord.getStatus() != 1) { // 防止重复处理
+            return;
+        }
 
         latestRecord.setCodeReceivedTime(LocalDateTime.now());
 
-        if (result.isSuccess()) {
-            // 成功获取验证码
+        if (result != null) {
             latestRecord.setStatus(2);
-            latestRecord.setCode(result.getCode());
-            latestRecord.setCharged(0);
-
-            // 【关键】如果API返回了手机号（例如UUID查询场景），则更新记录中的手机号
-            if (result.getPhoneNumber() != null && !result.getPhoneNumber().equals(latestRecord.getPhoneNumber())) {
-                log.info("回填手机号 for record {}: old={}, new={}", latestRecord.getId(), latestRecord.getPhoneNumber(), result.getPhoneNumber());
-                latestRecord.setPhoneNumber(result.getPhoneNumber());
-            }
-
-            // 执行扣费
+            latestRecord.setCode(result);
+            latestRecord.setCharged(1);
+            this.updateById(latestRecord);
             User user = userService.getById(latestRecord.getUserId());
-            BigDecimal newBalance = user.getBalance().subtract(latestRecord.getPrice());
-            latestRecord.setBalanceAfter(newBalance);
-            userService.update(null, new LambdaUpdateWrapper<User>()
-                    .set(User::getBalance, newBalance)
-                    .eq(User::getId, user.getId()));
 
-            ledgerService.createLedgerEntry(user.getId(), FundType.BUSINESS_DEDUCTION, latestRecord.getPrice().negate(), newBalance, "业务扣费");
+            // 使用统一的账本创建服务来处理扣费和记账
+            LedgerCreationDTO ledgerDto = LedgerCreationDTO.builder()
+                    .userId(user.getId())
+                    .amount(latestRecord.getPrice()) // 统一方法要求金额为正数
+                    .ledgerType(0) // 0-出账
+                    .fundType(FundType.BUSINESS_DEDUCTION) // 资金业务类型为业务扣费
+                    .remark("业务扣费") // 备注
+                    .phoneNumber(record.getPhoneNumber())
+                    .code(result)
+                    .lineId(record.getLineId())
+                    .projectId(record.getProjectId())
+                    .build();
+
+            // 调用统一的账本服务，该方法内部会处理用户余额的更新和账本记录的创建
+            ledgerService.createLedgerAndUpdateBalance(ledgerDto);
+            User updatedUser = userService.getById(user.getId());
+            latestRecord.setBalanceAfter(updatedUser.getBalance());
             userService.updateUserStatsForNewNumber(user.getId(), true);
         } else {
-            // 超时或失败
             latestRecord.setStatus(3);
+            latestRecord.setCharged(0);
         }
-
+        latestRecord.setRemark(record.getRemark());
         this.updateById(latestRecord);
     }
 
@@ -264,7 +304,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
 //                        codeResult.setSuccess(true);
 
 //                        self.updateRecordAfterRetrieval(record, code);
-                        updateRecordAfterRetrieval(record, code);
+                        self.updateRecordAfterRetrieval(record,true, code);
                         return CommonResultDTO.success("验证码获取成功", code);
                     }
                     return CommonResultDTO.error(Constants.ERROR_NO_CODE,"没有获取到验证码");

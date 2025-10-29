@@ -1,10 +1,9 @@
-package com.wzz.smscode.dto;
+package com.wzz.smscode.dto.number;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
 import lombok.Data;
 
 import java.time.LocalDateTime;
-import java.util.Date;
 
 /**
  * 号码记录传输对象

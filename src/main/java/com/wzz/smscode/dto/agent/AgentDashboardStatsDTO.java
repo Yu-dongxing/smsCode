@@ -1,4 +1,4 @@
-package com.wzz.smscode.dto;
+package com.wzz.smscode.dto.agent;
 
 import lombok.Data;
 import java.math.BigDecimal;

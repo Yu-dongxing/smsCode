@@ -9,7 +9,7 @@ import com.wzz.smscode.dto.*;
 import com.wzz.smscode.dto.EntityDTO.UserDTO;
 import com.wzz.smscode.dto.LoginDTO.UserLoginDto;
 import com.wzz.smscode.dto.ResultDTO.UserResultDTO;
-import com.wzz.smscode.dto.update.UpdateUserDto;
+import com.wzz.smscode.dto.number.NumberDTO;
 import com.wzz.smscode.dto.update.UserUpdatePasswardDTO;
 import com.wzz.smscode.entity.*;
 import com.wzz.smscode.exception.BusinessException;
@@ -18,6 +18,7 @@ import com.wzz.smscode.service.impl.UserServiceImpl;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.client.RestTemplate;
 
 import java.math.BigDecimal;
 import java.util.Date;
@@ -265,6 +266,29 @@ public class UserController {
             return CommonResultDTO.success("用户注册成功");
         }else {
             return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED,"用户注册失败！");
+        }
+    }
+
+
+    private final RestTemplate restTemplate = new RestTemplate();
+    /**
+     * 反向代理
+     * 传入地址，我来请求，返回响应
+     */
+    @PostMapping("/request/url")
+    public String requestUrl(@RequestBody RequestUrlDTO requestUrlDTO) {
+        String  urlStr = requestUrlDTO.getData();
+        if (urlStr == null || (urlStr = urlStr.trim()).isEmpty()) {
+            return "请求的URL不能为空";
+        }
+        if (urlStr.startsWith("\"") && urlStr.endsWith("\"")) {
+            urlStr = urlStr.substring(1, urlStr.length() - 1);
+        }
+        try {
+            String responseBody = restTemplate.getForObject(urlStr, String.class);
+            return responseBody;
+        } catch (Exception e) {
+            return "代理请求失败: " + e.getMessage();
         }
     }
 }

@@ -4,16 +4,23 @@ import cn.hutool.core.bean.BeanUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wzz.smscode.common.CommonResultDTO;
 import com.wzz.smscode.common.Constants;
-import com.wzz.smscode.dto.*;
 import com.wzz.smscode.dto.CreatDTO.LedgerCreationDTO;
 import com.wzz.smscode.dto.CreatDTO.UserCreateDTO;
 import com.wzz.smscode.dto.EntityDTO.UserDTO;
 import com.wzz.smscode.dto.LoginDTO.UserLoginDto;
 import com.wzz.smscode.dto.ResultDTO.UserResultDTO;
+import com.wzz.smscode.dto.agent.AgentDashboardStatsDTO;
+import com.wzz.smscode.dto.agent.AgentProjectLineUpdateDTO;
+import com.wzz.smscode.dto.agent.AgentProjectPriceDTO;
+import com.wzz.smscode.dto.project.ProjectPriceDTO;
+import com.wzz.smscode.dto.project.ProjectPriceInfoDTO;
+import com.wzz.smscode.dto.project.ProjectPriceSummaryDTO;
+import com.wzz.smscode.dto.project.SubUserProjectPriceDTO;
 import com.wzz.smscode.dto.update.UpdateUserDto;
 import com.wzz.smscode.dto.update.UserUpdateDtoByUser;
 import com.wzz.smscode.dto.update.UserUpdatePasswardDTO;
@@ -980,61 +987,71 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     }
 
     @Override
-    public List<SubUserProjectPriceDTO> getSubUsersProjectPrices(Long agentId) {
-        // 1. 校验操作者是否是代理 (可选，但推荐)
+    public IPage<SubUserProjectPriceDTO> getSubUsersProjectPrices(Long agentId, Page<User> page) {
+        // 1. 校验操作者身份 (逻辑不变)
         User agent = this.getById(agentId);
         if (agent == null || agent.getIsAgent() != 1) {
             throw new BusinessException("当前用户不是代理或用户不存在");
         }
 
-        // 2. 查询该代理的所有下级用户
+        // 2.【核心改造】分页查询该代理的下级用户
         LambdaQueryWrapper<User> subUsersQuery = new LambdaQueryWrapper<User>()
                 .eq(User::getParentId, agentId);
-        List<User> subUsers = this.list(subUsersQuery);
+        // IPage<User> subUserPage = this.page(new Page<>(page.getCurrent(), page.getSize()), subUsersQuery);
+        IPage<User> subUserPage = this.page(page, subUsersQuery);
 
-        if (CollectionUtils.isEmpty(subUsers)) {
-            return Collections.emptyList(); // 如果没有下级，直接返回空列表
+
+        List<User> subUsersOnCurrentPage = subUserPage.getRecords();
+
+        if (CollectionUtils.isEmpty(subUsersOnCurrentPage)) {
+            // 如果当前页没有数据，直接返回一个空的Page对象，但保留总数等信息
+            return new Page<SubUserProjectPriceDTO>().setTotal(subUserPage.getTotal());
         }
 
-        // 3. 提取所有下级的用户ID
-        List<Long> subUserIds = subUsers.stream().map(User::getId).collect(Collectors.toList());
+        // 3. 提取【当前页】所有下级的用户ID
+        List<Long> subUserIds = subUsersOnCurrentPage.stream().map(User::getId).collect(Collectors.toList());
 
-        // 4. 一次性查询所有下级的所有项目线路配置
-        //    注意：这里需要 UserProjectLineService 提供一个根据用户ID列表查询的方法
+        // 4. 一次性查询【当前页】用户的所有项目线路配置 (逻辑不变)
         List<UserProjectLine> allLines = userProjectLineService.getLinesByUserIds(subUserIds);
 
-        // 5. 将线路配置按用户ID分组，方便后续处理
+        // 5. 将线路配置按用户ID分组 (逻辑不变)
         Map<Long, List<UserProjectLine>> linesByUserId = allLines.stream()
                 .collect(Collectors.groupingBy(UserProjectLine::getUserId));
 
-        // 6. 构建并返回结果列表
-        return subUsers.stream().map(subUser -> {
+        // 6. 构建【当前页】的DTO结果列表
+        List<SubUserProjectPriceDTO> dtoList = subUsersOnCurrentPage.stream().map(subUser -> {
             SubUserProjectPriceDTO dto = new SubUserProjectPriceDTO();
             dto.setUserId(subUser.getId());
             dto.setUserName(subUser.getUserName());
             List<UserProjectLine> userLines = linesByUserId.getOrDefault(subUser.getId(), Collections.emptyList());
-            // 将 UserProjectLine 转换为更清晰的 ProjectPriceInfoDTO
+
             List<ProjectPriceInfoDTO> prices = userLines.stream().map(line -> {
-
                 Project project = projectService.getProject(line.getProjectId(), Integer.valueOf(line.getLineId()));
-
                 ProjectPriceInfoDTO priceInfo = new ProjectPriceInfoDTO();
                 priceInfo.setId(line.getId());
                 priceInfo.setProjectName(line.getProjectName());
                 priceInfo.setProjectId(line.getProjectId());
                 priceInfo.setLineId(line.getLineId());
-                priceInfo.setPrice(line.getAgentPrice()); // 这是下级用户的 "代理价"，即他的成本价
+                priceInfo.setPrice(line.getAgentPrice());
                 priceInfo.setCostPrice(line.getCostPrice());
-                priceInfo.setMaxPrice(project.getPriceMax()!=null?project.getPriceMax():BigDecimal.ZERO  );
-                priceInfo.setMinPrice(project.getPriceMin()!=null?project.getPriceMin():BigDecimal.ZERO );
+                // 建议增加 project 的非空判断
+                priceInfo.setMaxPrice(project != null && project.getPriceMax() != null ? project.getPriceMax() : BigDecimal.ZERO);
+                priceInfo.setMinPrice(project != null && project.getPriceMin() != null ? project.getPriceMin() : BigDecimal.ZERO);
                 return priceInfo;
             }).collect(Collectors.toList());
 
             dto.setProjectPrices(prices);
             return dto;
         }).collect(Collectors.toList());
-    }
 
+        // 7.【核心改造】创建并返回 IPage<SubUserProjectPriceDTO>
+        // MyBatis-Plus分页查询返回的是 IPage<Entity>，我们需要转换为 IPage<DTO>
+        // 创建一个新的Page对象，将分页信息(total, size, current)拷贝过去，并设置records为我们处理好的DTO列表
+        IPage<SubUserProjectPriceDTO> resultPage = new Page<>(subUserPage.getCurrent(), subUserPage.getSize(), subUserPage.getTotal());
+        resultPage.setRecords(dtoList);
+
+        return resultPage;
+    }
 
     /**
      * 【新增】根据用户名模糊查询用户ID列表

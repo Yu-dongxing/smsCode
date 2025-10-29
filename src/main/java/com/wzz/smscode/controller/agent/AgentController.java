@@ -8,14 +8,12 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.wzz.smscode.common.Constants;
 import com.wzz.smscode.common.Result;
-import com.wzz.smscode.dto.AgentDashboardStatsDTO;
-import com.wzz.smscode.dto.AgentProjectLineUpdateDTO;
-import com.wzz.smscode.dto.AgentProjectPriceDTO;
 import com.wzz.smscode.dto.CreatDTO.UserCreateDTO;
 import com.wzz.smscode.dto.EntityDTO.LedgerDTO;
-import com.wzz.smscode.dto.EntityDTO.UserDTO;
 import com.wzz.smscode.dto.LoginDTO.AgentLoginDTO;
-import com.wzz.smscode.dto.SubUserProjectPriceDTO;
+import com.wzz.smscode.dto.agent.AgentDashboardStatsDTO;
+import com.wzz.smscode.dto.agent.AgentProjectLineUpdateDTO;
+import com.wzz.smscode.dto.project.SubUserProjectPriceDTO;
 import com.wzz.smscode.dto.update.UserUpdateDtoByUser;
 import com.wzz.smscode.entity.SystemConfig;
 import com.wzz.smscode.entity.User;
@@ -28,12 +26,10 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.format.annotation.DateTimeFormat;
-import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
 import java.util.Date;
-import java.util.List;
 import java.util.Objects;
 
 /**
@@ -147,9 +143,6 @@ public class AgentController {
         } catch (IllegalArgumentException | SecurityException e) {
             log.warn("修改用户信息业务校验失败: {}", e.getMessage());
             return Result.error("修改失败，提交的数据不合法或无权操作");
-        } catch (Exception e) {
-            log.error("修改用户信息时发生系统内部错误", e);
-            return Result.error(Constants.ERROR_SYSTEM_ERROR, "修改用户信息时发生系统内部错误，请联系管理员");
         }
     }
 
@@ -172,11 +165,6 @@ public class AgentController {
         }catch (BusinessException e){
             return Result.success("充值失败",e.getMessage());
         }
-        catch(Exception e) {
-            // 记录异常信息
-            log.error("代理 {} 为用户 {} 充值 {} 元时失败", agentId, targetUserId, amount, e);
-            return Result.error("充值失败，请稍后重试");
-        }
     }
 
     /**
@@ -195,10 +183,6 @@ public class AgentController {
         }
         catch (BusinessException e){
             return Result.success("扣款失败",e.getMessage());
-        }
-        catch (Exception e) {
-            log.error("代理 {} 为用户 {} 扣款 {} 元时失败", agentId, targetUserId, amount, e);
-            return Result.error("扣款失败，请稍后重试");
         }
     }
 
@@ -310,9 +294,6 @@ public class AgentController {
         } catch (SecurityException e) {
             log.warn("代理 {} 尝试查询不属于自己的下级 {} 的流水: {}", agentId, targetUserId, e.getMessage());
             return Result.error( "权限不足，无法查询该用户的流水");
-        } catch (Exception e) {
-            log.error("代理 {} 查询所有下级流水分页时发生系统内部错误", agentId, e);
-            return Result.error(Constants.ERROR_SYSTEM_ERROR, "查询流水失败，请稍后重试");
         }
     }
 
@@ -331,9 +312,6 @@ public class AgentController {
         } catch (BusinessException e) {
             log.warn("获取代理 {} 仪表盘数据业务异常: {}", agentId, e.getMessage());
             return Result.error(e.getMessage());
-        } catch (Exception e) {
-            log.error("获取代理 {} 的仪表盘数据时发生系统内部错误", agentId, e);
-            return Result.error(Constants.ERROR_SYSTEM_ERROR, "获取统计数据失败，请稍后重试");
         }
     }
     /**
@@ -355,28 +333,33 @@ public class AgentController {
 //    }
 
     /**
-     * 查询当前代理用户的所有下级的项目价格配置
+     * 分页查询代理商下级用户的项目价格
+     * 前端请求示例: /user/get/by-agent/project?page=1&size=10
+     * @return Result<?> 包含分页数据
      */
     @GetMapping("/get/by-agent/project")
-    public Result<?> getSubUsersProjectPrices() {
+    public Result<?> getSubUsersProjectPrices(@RequestParam(defaultValue = "1") long page,
+                                              @RequestParam(defaultValue = "10") long size) {
         try {
-            // 假设你使用了 Sa-Token 或类似框架进行登录校验
+            // 登录校验
             StpUtil.checkLogin();
             Long agentId = StpUtil.getLoginIdAsLong();
 
-            List<SubUserProjectPriceDTO> result = userService.getSubUsersProjectPrices(agentId);
+            // 1. 手动创建 MyBatis-Plus 的 Page 对象
+            //    将前端传递的 DTO 参数转换成 Service 层需要的 Page 对象
+            Page<User> pagea = new Page<>(page, size);
 
-            if (result.isEmpty()) {
-                return Result.success("查询成功，暂无下级用户或价格数据");
+            // 2. 调用 Service 层，方法签名保持不变
+            IPage<SubUserProjectPriceDTO> resultPage = userService.getSubUsersProjectPrices(agentId, pagea);
+
+            if (resultPage.getTotal() == 0) {
+                return Result.success("查询成功，暂无下级用户或价格数据", resultPage);
             }
-            return Result.success("查询成功", result);
+            return Result.success("查询成功", resultPage);
 
         } catch (BusinessException e) {
             log.error("查询下级项目价格失败: {}", e.getMessage());
             return Result.error(e.getMessage());
-        } catch (Exception e) {
-            log.error("查询下级项目价格时发生未知错误", e);
-            return Result.error("系统错误，请联系管理员");
         }
     }
 
@@ -392,9 +375,6 @@ public class AgentController {
             return Result.success("配置更新成功");
         } catch (BusinessException e) {
             return Result.error(e.getMessage());
-        } catch (Exception e) {
-            log.error("更新代理项目配置时发生未知错误", e);
-            return Result.error("更新失败，系统内部错误");
         }
     }
 }

@@ -1,7 +1,7 @@
 package com.wzz.smscode.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
-import com.wzz.smscode.dto.ProjectPriceSummaryDTO;
+import com.wzz.smscode.dto.project.ProjectPriceSummaryDTO;
 import com.wzz.smscode.entity.Project;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Select;

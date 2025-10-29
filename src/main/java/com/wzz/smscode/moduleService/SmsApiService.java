@@ -13,13 +13,20 @@ import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.util.UriComponentsBuilder;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.net.URI;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import com.jayway.jsonpath.JsonPath;
@@ -187,158 +194,142 @@ public class SmsApiService {
     }
 
     /**
-     * 【重要修改】
      * 调用外部API检查手机号码是否可用。
-     * 此实现现在完全依赖于系统配置中的筛选API信息，不再使用项目自身的筛选配置。
+     * 此实现现在完全依赖于系统配置中的筛选API信息，并增加了服务器轮询和动态参数构建。
      *
-     * @param project     项目配置，主要用于获取是否启用筛选的开关以及认证信息。
+     * @param project     项目配置。
      * @param phoneNumber 需要检查的手机号码。
-     * @return 返回一个 Mono<Boolean>。如果号码可用，发射 true；否则发射 false。
-     *         如果项目未开启号码筛选功能，默认视为可用，直接返回 true。
-     *         如果系统未配置全局筛选API，则视为不可用，返回 false。
+     * @param countryCode 国家区号，如果为null或空，则默认为 "86"。
+     * @return 返回一个 Mono<Boolean>。如果号码可用，返回 true；否则返回 false。
      */
-    public Mono<Boolean> checkPhoneNumberAvailability(Project project, String phoneNumber) {
-        // 1. 检查项目是否开启了号码筛选功能
-        if (project.getEnableFilter() == null || !project.getEnableFilter()) {
-            log.info("项目 [{}] 未开启号码筛选功能，默认号码 [{}] 可用。", project.getProjectName(), phoneNumber);
+    public Mono<Boolean> checkPhoneNumberAvailability(Project project, String phoneNumber, String countryCode) {
+        // 1. 获取系统配置并检查功能总开关
+        SystemConfig systemConfig = systemConfigService.getConfig();
+        if (project.getEnableFilter() == null || !project.getEnableFilter() || !systemConfig.getEnableNumberFiltering()) {
+            log.info("系统配置：{},项目 [{}] 未开启号码筛选功能，默认号码 [{}] 可用。",systemConfig.getEnableNumberFiltering(), project.getProjectName(), phoneNumber);
             return Mono.just(true); // 功能未开启，默认可用
         }
 
-        // 2. 直接获取系统全局配置
-        log.info("项目 [{}] 已开启号码筛选，将强制使用系统全局配置进行检查。", project.getProjectName());
-        SystemConfig systemConfig = systemConfigService.getConfig();
-
-        // 3. 检查全局配置是否有效
-        if (systemConfig == null || !StringUtils.hasText(systemConfig.getFilterApiUrl())) {
-            log.warn("号码筛选功能已开启，但系统未提供有效的全局筛选API配置。号码 [{}] 将被视为不可用。", phoneNumber);
-            return Mono.just(false); // 全局配置无效，视为不可用
+        // 2. 从系统配置中获取服务器地址列表
+        List<String> servers = getServerList();
+        if (servers.isEmpty()) {
+            log.info("号码筛选功能已开启，但系统未配置任何有效的筛选服务器地址。号码 [{}] 将被视为不可用。", phoneNumber);
+            return Mono.just(false);
         }
 
-        // 4. 创建一个临时的Project对象，用于传递给策略方法。
-        // 它继承了原始项目的认证等信息，但筛选API相关的配置被系统全局配置覆盖。
-        Project filterExecutionConfig = new Project();
-        BeanUtils.copyProperties(project, filterExecutionConfig);
+        String token = systemConfig.getFilterApiKey();
+        String cpid = project.getSelectNumberApiRequestValue();
 
-        // 使用系统配置覆盖筛选相关的字段
-        filterExecutionConfig.setSelectNumberApiRoute(systemConfig.getFilterApiUrl());
-        filterExecutionConfig.setSelectNumberApiRouteMethod(systemConfig.getSelectNumberApiRouteMethod());
-        filterExecutionConfig.setSelectNumberApiReauestType(systemConfig.getSelectNumberApiReauestType());
-        if (systemConfig.getSelectNumberApiReauestValue() != null) {
-            filterExecutionConfig.setSelectNumberApiRequestValue(systemConfig.getSelectNumberApiReauestValue());
+        if (!StringUtils.hasText(token) || !StringUtils.hasText(cpid)) {
+            log.info("项目 [{}] 配置错误：缺少必要的API Token或CPID。", project.getProjectName());
+            return Mono.error(new BusinessException("项目配置不完整，无法进行号码筛选"));
         }
-        filterExecutionConfig.setResponseSelectNumberApiField(systemConfig.getResponseSelectNumberApiField());
 
-        log.info("开始使用全局配置筛选号码 [{}]...", phoneNumber);
-
-        try {
-            // 5. 从工厂获取对应的认证策略 (认证类型仍遵循项目本身的设置)
-            AuthStrategy strategy = authStrategyFactory.getStrategy(String.valueOf(filterExecutionConfig.getAuthType()));
-
-            // 6. 使用策略构建并执行请求 (传入的是合并了全局配置的 filterExecutionConfig)
-            return strategy.buildCheckNumberRequest(webClient, filterExecutionConfig, phoneNumber)
-                    .flatMap(responseBody -> {
-                        // 7. 解析响应结果
-                        log.debug("号码筛选API响应: {}", responseBody);
-                        try {
-                            boolean isAvailable = parseAvailabilityResponse(responseBody, filterExecutionConfig.getResponseSelectNumberApiField());
-                            log.info("号码 [{}] 筛选结果: {}", phoneNumber, isAvailable ? "可用" : "不可用");
-                            return Mono.just(isAvailable);
-                        } catch (Exception e) {
-                            log.error("解析号码筛选响应失败: {}", e.getMessage());
-                            return Mono.error(new BusinessException("解析API响应失败"));
-                        }
-                    })
-                    .onErrorResume(e -> {
-                        // 8. 处理请求过程中的异常
-                        log.error("调用号码筛选API失败: {}", e.getMessage());
-                        return Mono.just(false); // 出现任何错误，都视为号码不可用
-                    });
-
-        } catch (UnsupportedOperationException e) {
-            log.error("获取认证策略失败: {}", e.getMessage());
-            return Mono.error(e);
-        }
+        final String finalCountryCode = StringUtils.hasText(countryCode) ? countryCode : "86";
+        // 4. 【核心逻辑】响应式服务器轮询与请求
+        return Flux.fromIterable(servers)
+                .concatMapDelayError(serverIp -> {
+                    // 为当前服务器构建请求
+                    URI requestUri = buildRequestUri(serverIp, phoneNumber, token, cpid, finalCountryCode);
+                    log.info("正在尝试服务器 [{}] 筛选号码 [{}]...", serverIp, phoneNumber);
+                    return webClient.get()
+                            .uri(requestUri)
+                            .retrieve()
+                            .bodyToMono(String.class)
+                            .timeout(Duration.ofSeconds(50)) // 根据建议设置45-60秒超时
+                            .flatMap(responseBody -> {
+                                // 请求成功，解析响应体
+                                log.info("服务器 [{}] 响应: {}", serverIp, responseBody);
+                                boolean isAvailable = parseAvailabilityResponse(responseBody, cpid);
+                                log.info("号码 [{}] 在服务器 [{}] 的筛选结果: {}", phoneNumber, serverIp, isAvailable ? "可用" : "不可用");
+                                return Mono.just(isAvailable);
+                            })
+                            .doOnError(e -> log.warn("访问服务器 [{}] 失败: {}. 正在尝试下一个...", serverIp, e.getMessage()))
+                            .onErrorResume(e -> Mono.empty()); // 如果当前服务器请求失败，返回空Mono，以便concatMap继续处理下一个服务器
+                })
+                .next() // 只取第一个成功的结果
+                .defaultIfEmpty(false); // 如果所有服务器都尝试失败，则默认返回 false (不可用)
     }
 
-//    /**
-//     * 【新增辅助方法】
-//     * 解析并返回最终用于API请求的有效Project配置。
-//     *
-//     * @param originalProject 原始的项目配置
-//     * @return 如果项目自身配置有效，则返回原始对象；如果需要回退，则返回一个合并了全局配置的新对象；如果两者都无效，返回 null。
-//     */
-//    private Project resolveEffectiveProjectConfig(Project originalProject) {
-//        // 优先使用项目自身的API配置
-//        if (StringUtils.hasText(originalProject.getSelectNumberApiRoute())) {
-//            log.debug("项目 [{}] 使用其自身的号码筛选API配置。", originalProject.getProjectName());
-//            return originalProject;
-//        }
-//
-//        // 项目自身配置为空，尝试回退到系统全局配置
-//        log.info("项目 [{}] 未配置筛选API，尝试使用系统全局配置进行回退。", originalProject.getProjectName());
-//        SystemConfig systemConfig = systemConfigService.getConfig();
-//
-//        // 检查全局配置是否有效
-//        if (systemConfig != null && StringUtils.hasText(systemConfig.getFilterApiUrl())) {
-//            log.info("成功回退到系统全局筛选API: {}", systemConfig.getFilterApiUrl());
-//
-//            // 创建一个新的Project对象，避免修改原始传入的project实例 (这是一个好习惯)
-//            Project mergedProject = new Project();
-//            BeanUtils.copyProperties(originalProject, mergedProject);
-//
-//            // 用系统配置覆盖筛选相关的字段
-//            // **重要提示:** SystemConfig中的 filterApiUrl 对应 Project中的 selectNumberApiRoute
-//            mergedProject.setSelectNumberApiRoute(systemConfig.getFilterApiUrl());
-//            mergedProject.setSelectNumberApiRouteMethod(systemConfig.getSelectNumberApiRouteMethod());
-//            mergedProject.setSelectNumberApiReauestType(systemConfig.getSelectNumberApiReauestType());
-//
-//            if (systemConfig.getSelectNumberApiReauestValue() != null) {
-//                mergedProject.setSelectNumberApiRequestValue(systemConfig.getSelectNumberApiReauestValue());
-//            }
-//
-//            mergedProject.setResponseSelectNumberApiField(systemConfig.getResponseSelectNumberApiField());
-//
-//            return mergedProject;
-//        }
-//
-//        // 项目和全局配置都无效
-//        return null;
-//    }
+    /**
+     * 根据文档构建请求URI
+     */
+    private URI buildRequestUri(String serverIp, String phone, String token, String cpid, String cnty) {
+        // 确保服务器地址以 http:// 开头
+        String baseUrl = serverIp.startsWith("http") ? serverIp : "http://" + serverIp;
+        UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl(baseUrl)
+                .path("/check")
+                .queryParam("phone", phone)
+                .queryParam("token", token)
+                .queryParam("cpid", cpid);
+        if (StringUtils.hasText(cnty) && !"86".equals(cnty)) {
+            builder.queryParam("cnty", cnty);
+        }
+
+        return builder.build().toUri();
+    }
+
 
     /**
      * 解析API响应，判断号码是否可用。
      *
      * @param responseBody API返回的JSON字符串。
-     * @param jsonPathExpression 用于从JSON中提取状态字段的JSONPath表达式。
+     * @param cpid         项目ID，用于特殊逻辑判断（如快手）。
      * @return 如果可用，返回 true，否则返回 false。
      */
-    private boolean parseAvailabilityResponse(String responseBody, String jsonPathExpression) {
-        if (!StringUtils.hasText(responseBody) || !StringUtils.hasText(jsonPathExpression)) {
-            // 如果响应体或解析路径为空，无法判断，视为不可用
+    private boolean parseAvailabilityResponse(String responseBody, String cpid) {
+        if (!StringUtils.hasText(responseBody)) {
+            log.info("API响应体为空，判定为不可用。");
             return false;
         }
 
         try {
-            // 使用 Jayway JsonPath 来解析
-            Object status = JsonPath.read(responseBody, jsonPathExpression);
-            if (status instanceof Boolean) {
-                return (Boolean) status;
+            // 使用 Jayway JsonPath 解析JSON
+            Map<String, Object> responseJson = JsonPath.parse(responseBody).read("$");
+            // 1. 检查 'code' 字段
+            Object codeObj = responseJson.get("code");
+            if (!(codeObj instanceof Number) || ((Number) codeObj).intValue() != 0) {
+                log.info("API返回的code不为0 (value: {}), 判定为不可用。响应: {}", codeObj, responseBody);
+                return false;
             }
-            if (status instanceof String) {
-                // 例如，API可能返回 "success", "ok", "true", "AVAILABLE" 等字符串
-                String statusStr = ((String) status).toLowerCase();
-                return statusStr.equals("true") || statusStr.equals("success") || statusStr.equals("ok") || statusStr.equals("available");
-            }
-            if (status instanceof Number) {
-                // 例如，API可能返回 1 代表成功/可用, 0 代表失败/不可用
-                return ((Number) status).intValue() == 1;
-            }
+            // 2. 检查 'state' 字段
+            Object stateObj = responseJson.get("state");
 
-            return false; // 其他未知类型，均视为不可用
+            if (!(stateObj instanceof String)) {
+                log.info("API响应中缺少有效的 'state' 字符串, 判定为不可用。响应: {}", responseBody);
+                return false;
+            }
+            String encodedState = (String) stateObj;
+            String state = URLDecoder.decode(encodedState, StandardCharsets.UTF_8.name());
 
+            log.info("解码后的state值为: '{}'", state); // 增加一条日志，方便调试
+            if ("ks".equalsIgnoreCase(cpid)) {
+                if (state.contains("封禁")) {
+                    return false;
+                }
+                return true;
+            }
+            return "新号".equals(state);
         } catch (Exception e) {
-            log.error("使用JsonPath解析响应失败，表达式: '{}'，响应体: '{}'。错误: {}", jsonPathExpression, responseBody, e.getMessage());
-            return false;
+            log.error("解析API响应JSON失败，响应体: '{}'。错误: {}", responseBody, e.getMessage());
+            return false; // 解析失败，安全起见，视为不可用
         }
+    }
+
+    /**
+     * 从系统配置中获取服务器列表
+     * @return 服务器地址列表
+     */
+    private List<String> getServerList() {
+        //后：根据系统配置中是否使用系统内置服务器列表-》否；在系统配置
+        return Arrays.asList(
+                "api.rqddjc.com:1030",
+                "27.25.156.161:1030",
+                "103.7.141.114:1030",
+                "api.ddrqjc.com:1031",
+                "103.7.141.111:1031",
+                "nb.rqjiance.com:1032",
+                "103.7.141.39:1032"
+        );
     }
 }

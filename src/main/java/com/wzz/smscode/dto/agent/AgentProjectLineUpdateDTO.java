@@ -1,4 +1,4 @@
-package com.wzz.smscode.dto;
+package com.wzz.smscode.dto.agent;
 
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotNull;

@@ -1,5 +1,8 @@
 server:
   port: 8026
+  servlet:
+    session:
+      timeout: 600
 spring:
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver

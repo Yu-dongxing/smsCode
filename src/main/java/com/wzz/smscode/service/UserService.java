@@ -1,16 +1,17 @@
 package com.wzz.smscode.service;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.wzz.smscode.common.CommonResultDTO;
-import com.wzz.smscode.dto.AgentDashboardStatsDTO;
-import com.wzz.smscode.dto.AgentProjectLineUpdateDTO;
-import com.wzz.smscode.dto.AgentProjectPriceDTO;
+import com.wzz.smscode.dto.agent.AgentDashboardStatsDTO;
+import com.wzz.smscode.dto.agent.AgentProjectLineUpdateDTO;
+import com.wzz.smscode.dto.agent.AgentProjectPriceDTO;
 import com.wzz.smscode.dto.CreatDTO.UserCreateDTO;
 import com.wzz.smscode.dto.EntityDTO.UserDTO;
 import com.wzz.smscode.dto.LoginDTO.UserLoginDto;
 import com.wzz.smscode.dto.ResultDTO.UserResultDTO;
-import com.wzz.smscode.dto.SubUserProjectPriceDTO;
+import com.wzz.smscode.dto.project.SubUserProjectPriceDTO;
 import com.wzz.smscode.dto.update.UpdateUserDto;
 import com.wzz.smscode.dto.update.UserUpdateDtoByUser;
 import com.wzz.smscode.dto.update.UserUpdatePasswardDTO;
@@ -87,7 +88,7 @@ public interface UserService extends IService<User> {
     @Transactional
     void updateAgentProjectConfig(Long agentId, AgentProjectLineUpdateDTO updateDTO);
 
-    List<SubUserProjectPriceDTO> getSubUsersProjectPrices(Long agentId);
+    IPage<SubUserProjectPriceDTO> getSubUsersProjectPrices(Long agentId, Page<User> page);
 
     List<Long> findUserIdsByUsernameLike(String username);
 

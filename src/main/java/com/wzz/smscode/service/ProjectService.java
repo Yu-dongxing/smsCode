@@ -2,9 +2,8 @@ package com.wzz.smscode.service;
 
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.wzz.smscode.dto.EntityDTO.ProjectDTO;
-import com.wzz.smscode.dto.ProjectPriceDetailsDTO;
-import com.wzz.smscode.dto.ProjectPriceSummaryDTO;
-import com.wzz.smscode.dto.SelectProjectDTO;
+import com.wzz.smscode.dto.project.ProjectPriceDetailsDTO;
+import com.wzz.smscode.dto.project.ProjectPriceSummaryDTO;
 import com.wzz.smscode.entity.Project;
 import com.wzz.smscode.entity.UserProjectLine;
 import org.springframework.transaction.annotation.Transactional;

@@ -1,4 +1,4 @@
-package com.wzz.smscode.dto;
+package com.wzz.smscode.dto.project;
 
 import lombok.Data;
 import java.util.List;

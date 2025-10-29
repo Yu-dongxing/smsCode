@@ -1,6 +1,6 @@
 package com.wzz.smscode.dto.CreatDTO;
 
-import com.wzz.smscode.dto.ProjectPriceDTO; // 确保引入了 ProjectPriceDTO
+import com.wzz.smscode.dto.project.ProjectPriceDTO; // 确保引入了 ProjectPriceDTO
 import lombok.Data;
 import java.math.BigDecimal;
 import java.util.List; // 引入 List
