@@ -33,7 +33,7 @@ public class TokenParamStrategy extends BaseAuthStrategy {
 
         // 使用修正后的 buildUriFromRoute 方法
         URI finalUri = buildUriFromRoute(project.getDomain(), project.getGetNumberRoute());
-        log.info("构建的获取手机号请求 URI: {}", finalUri);
+//        log.info("构建的获取手机号请求 URI: {}", finalUri);
 
         Consumer<WebClient.RequestHeadersSpec<?>> authApplier = spec -> {};
 

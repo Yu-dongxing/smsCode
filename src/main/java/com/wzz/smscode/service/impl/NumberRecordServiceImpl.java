@@ -2,6 +2,7 @@ package com.wzz.smscode.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -112,14 +113,14 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         boolean numberFoundAndVerified = false;
 
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-            log.info("正在进行第 {}/{} 次获取并验证手机号...", attempt, MAX_ATTEMPTS);
+//            log.info("正在进行第 {}/{} 次获取并验证手机号...", attempt, MAX_ATTEMPTS);
             Map<String, String> currentIdentifier;
             try {
                 String numForApi = "1";
                 currentIdentifier = smsApiService.getPhoneNumber(projectT, numForApi);
-                log.info("第 {} 次尝试，获取到手机号信息：{}", attempt, currentIdentifier);
+//                log.info("第 {} 次尝试，获取到手机号信息：{}", attempt, currentIdentifier);
                 if (!StringUtils.hasText(currentIdentifier.get("phone"))) {
-                    log.warn("第 {} 次尝试，上游平台未返回有效手机号，即将重试...", attempt);
+//                    log.warn("第 {} 次尝试，上游平台未返回有效手机号，即将重试...", attempt);
                     if (attempt < MAX_ATTEMPTS) Thread.sleep(500);
                     continue; // 继续下一次循环
                 }
@@ -145,13 +146,13 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             if (config.getEnableNumberFiltering() && projectT.getEnableFilter()) {
                 try {
 //                    String phoneNumber = currentIdentifier.get("phone");
-                    log.info("号码筛选已开启，正在检查号码 [{}] 可用性...", phoneNumber);
+//                    log.info("号码筛选已开启，正在检查号码 [{}] 可用性...", phoneNumber);
 
                     Boolean isAvailable = smsApiService.checkPhoneNumberAvailability(projectT, phoneNumber, null)
                             .block(Duration.ofSeconds(60)); // 60秒超时保护
 
                     if (Boolean.TRUE.equals(isAvailable)) {
-                        log.info("号码 [{}] 筛选通过！成功获取可用号码。", phoneNumber);
+//                        log.info("号码 [{}] 筛选通过！成功获取可用号码。", phoneNumber);
                         successfulIdentifier = currentIdentifier;
                         numberFoundAndVerified = true;
                         break; // 成功，跳出循环
@@ -164,14 +165,14 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                 }
             } else {
                 // 步骤 C: 如果不需要筛选，获取到的第一个号码即为成功
-                log.info("号码筛选未开启，默认获取的号码可用。");
+//                log.info("号码筛选未开启，默认获取的号码可用。");
                 successfulIdentifier = currentIdentifier;
                 numberFoundAndVerified = true;
                 break; // 成功，跳出循环
             }
         }
         if (!numberFoundAndVerified) {
-            log.error("在 {} 次尝试后，未能获取到一个可用的手机号。", MAX_ATTEMPTS);
+//            log.error("在 {} 次尝试后，未能获取到一个可用的手机号。", MAX_ATTEMPTS);
             return CommonResultDTO.error(Constants.ERROR_NO_CODE, "获取可用号码失败，请稍后重试");
         }
 
@@ -198,7 +199,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronizationAdapter() {
             @Override
             public void afterCommit() {
-                log.info("事务已提交，开始为记录ID {} 异步获取验证码...", recordId);
+//                log.info("事务已提交，开始为记录ID {} 异步获取验证码...", recordId);
                 self.retrieveCode(recordId, finalIdentifierId);
             }
         });
@@ -217,7 +218,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
     public void retrieveCode(Long numberId, String identifier) { // 接收 identifier
         NumberRecord record = this.getById(numberId);
         if (record == null || record.getStatus() != 0) {
-            log.info("号码记录 {} 无需取码，状态: {}", numberId, record != null ? record.getStatus() : "null");
+//            log.info("号码记录 {} 无需取码，状态: {}", numberId, record != null ? record.getStatus() : "null");
             return;
         }
 
@@ -444,12 +445,51 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
     }
     @Override
     public IPage<NumberDTO> listUserNumbersByUSerName(String userName, String password, Integer statusFilter, Date startTime, Date endTime, IPage<NumberRecord> page) {
-        User user =  userService.authenticateUserByUserName(userName, password);
-        if ( user== null) return null;
+        User user = userService.authenticateUserByUserName(userName, password);
+        if (user == null) {
+            return null;
+        }
+
         LambdaQueryWrapper<NumberRecord> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(NumberRecord::getUserId, user.getId());
-        addCommonFilters(wrapper, statusFilter, startTime, endTime, null, null, null, null,null);
+        addCommonFilters(wrapper, statusFilter, startTime, endTime, null, null, null, null, null);
+
+        // ------------------- 核心修改逻辑开始 -------------------
+
+        final long MAX_RECORDS_LIMIT = 50;
+
+        // 1. 先查询符合条件的总记录数 (真实总数)
+        //    使用 wrapper.clone() 避免影响后续的查询
+        long actualTotal = this.count(wrapper.clone());
+
+        // 2. 确定最终要告诉前端的总数是多少 (不能超过50)
+        long effectiveTotal = Math.min(actualTotal, MAX_RECORDS_LIMIT);
+
+        // 3. 检查用户请求的页是否超出了我们的限制范围
+        //    page.offset() 会计算出起始记录的索引，例如 page=2, size=10, offset=10
+        if (page.offset() >= MAX_RECORDS_LIMIT) {
+            // 如果请求的起始位置已经超过或等于50，直接返回一个空的分页结果
+            // 但需要设置正确的总数，以便前端分页组件显示正确
+            IPage<NumberRecord> resultPage = new Page<>(page.getCurrent(), page.getSize(), effectiveTotal);
+            resultPage.setRecords(java.util.Collections.emptyList()); // 设置记录为空列表
+            return resultPage.convert(this::convertToDTO);
+        }
+
+        // 4. 如果请求的页面大小会跨越50条的界限，需要调整查询的size
+        //    例如：offset=40, size=20 (想查第41-60条)，我们只让他查第41-50条 (size=10)
+        long remainingRecords = MAX_RECORDS_LIMIT - page.offset();
+        if (page.getSize() > remainingRecords) {
+            page.setSize(remainingRecords);
+        }
+
+        // 5. 执行正常的分页查询，此时page对象的参数已经是安全且调整过的
         IPage<NumberRecord> recordPage = this.page(page, wrapper);
+
+        // 6. 最后，修正分页结果中的总数，确保前端拿到的总数不会超过50
+        recordPage.setTotal(effectiveTotal);
+
+        // ------------------- 核心修改逻辑结束 -------------------
+
         return recordPage.convert(this::convertToDTO);
     }
 
@@ -461,8 +501,6 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                                               Long userId, String projectId, String phoneNumber, Integer charged,
                                               IPage<NumberRecord> page,String lineId) {
         LambdaQueryWrapper<NumberRecord> wrapper = new LambdaQueryWrapper<>();
-
-        // 调用包含所有过滤逻辑的辅助方法
         addCommonFilters(wrapper, statusFilter, startTime, endTime, userId, projectId, phoneNumber, charged,lineId);
 
         return this.page(page, wrapper);

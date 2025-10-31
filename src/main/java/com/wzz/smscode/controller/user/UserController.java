@@ -16,6 +16,8 @@ import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.moduleService.PhoneNumberFilterService;
 import com.wzz.smscode.service.*;
 import com.wzz.smscode.service.impl.UserServiceImpl;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.util.StringUtils;
@@ -37,6 +39,7 @@ import java.util.List;
 @RequestMapping("/api/user")
 public class UserController {
 
+    private static final Logger log = LogManager.getLogger(UserController.class);
     @Autowired
     private NumberRecordService numberRecordService;
 
@@ -186,8 +189,8 @@ public class UserController {
             @RequestParam String password,
             @RequestParam(required = false) Integer status,
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") Date startTime,
-             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") Date endTime,
-             @RequestParam(defaultValue = "1") long page,
+            @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") Date endTime,
+            @RequestParam(defaultValue = "1") long page,
             @RequestParam(defaultValue = "10") long size) {
 
         IPage<NumberRecord> pageRequest = new Page<>(page, size);
@@ -215,11 +218,7 @@ public class UserController {
         if (user == null) {
             return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED, "用户ID或密码错误");
         }
-
-        // 2. 调用服务查询项目列表
         List<UserProjectLine> projects = projectService.listUserProjects(user.getId());
-
-        // 3. 返回结果
         return CommonResultDTO.success("查询成功", projects);
     }
 
@@ -323,10 +322,11 @@ public class UserController {
             if (state != null) {
                 return CommonResultDTO.success("查询成功", state);
             } else {
-                return CommonResultDTO.error(Constants.ERROR_NO_CODE,"查询失败，未能从任何服务器获取到有效的号码状态");
+                return CommonResultDTO.error(Constants.ERROR_NO_CODE,"检测失败");
             }
-        } catch (Exception e) {
-            return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR,"查询过程中发生错误: " + e.getMessage());
+        } catch (BusinessException e) {
+            log.info(e.getMessage());
+            return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR,"检测失败");
         }
     }
 }
