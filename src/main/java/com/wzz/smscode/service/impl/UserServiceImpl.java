@@ -629,21 +629,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         UserDTO dto = new UserDTO();
         BeanUtils.copyProperties(user, dto);
         dto.setUserId(user.getId());
-        dto.setIsAgent(Boolean.parseBoolean(user.getIsAgent().toString()));
-        // 从 user_project_line 表获取价格信息
-//        List<UserProjectLine> userLines = userProjectLineService.getLinesByUserId(user.getId());
-//        if (!CollectionUtils.isEmpty(userLines)) {
-//            Map<String, BigDecimal> pricesMap = userLines.stream()
-//                    .collect(Collectors.toMap(
-//                            line -> line.getProjectId() + "-" + line.getLineId(),
-//                            UserProjectLine::getAgentPrice,
-//                            (price1, price2) -> price1 // 如果有重复key，保留第一个
-//                    ));
-//            dto.setProjectPrices(pricesMap);
-//        } else {
-//            dto.setProjectPrices(Collections.emptyMap());
-//        }
-
+        dto.setIsAgent(user.getIsAgent() != null && user.getIsAgent() == 1);
         return dto;
     }
 
