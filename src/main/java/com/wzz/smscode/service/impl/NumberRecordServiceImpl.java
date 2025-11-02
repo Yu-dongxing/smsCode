@@ -94,8 +94,9 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         UserProjectLine userProjectLine = userProjectLineService.getByProjectIdLineID(projectId,lineId,user.getId());
         if (userProjectLine == null) return CommonResultDTO.error(-5, "项目线路不存在用户项目中");
 
+        BigDecimal price = userProjectLine.getAgentPrice();
 
-        BigDecimal price = getUserPriceForProject(user, projectId, lineId, userProjectLine.getAgentPrice());
+        if (price == null) return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, "项目价格设置错误");
 
 
         Project projectT = projectService.getProject(projectId, lineId);
@@ -205,7 +206,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         });
 
         // 5. 更新统计 (保持不变)
-        userService.updateUserStatsForNewNumber(user.getId(), false);
+//        userService.updateUserStatsForNewNumber(user.getId(), false);
 
         // 6. 返回操作ID或部分号码给用户 (使用最终成功的 `successfulIdentifier`)
         return CommonResultDTO.success("取号成功，请稍后查询验证码", successfulIdentifier.get("phone"));
@@ -238,6 +239,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             result = null; // 视作失败
             record.setRemark(e.getMessage());
             record.setStatus(3);
+            userService.updateUserStatsForNewNumber(record.getUserId(), false);
 
         }
 
