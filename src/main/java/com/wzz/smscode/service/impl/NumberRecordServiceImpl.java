@@ -953,8 +953,13 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         wrapper.like(StringUtils.hasText(queryDTO.getPhoneNumber()), NumberRecord::getPhoneNumber, queryDTO.getPhoneNumber());
         wrapper.eq(queryDTO.getStatus() != null, NumberRecord::getStatus, queryDTO.getStatus());
         wrapper.eq(queryDTO.getCharged() != null, NumberRecord::getCharged, queryDTO.getCharged());
-        wrapper.ge(queryDTO.getStartTime() != null, NumberRecord::getGetNumberTime, queryDTO.getStartTime());
-        wrapper.le(queryDTO.getEndTime() != null, NumberRecord::getGetNumberTime, queryDTO.getEndTime());
+        // 使用 parseAndAdjustDateTime 方法处理字符串类型的日期时间
+        LocalDateTime startTime = parseAndAdjustDateTime(queryDTO.getStartTime(), false);
+        LocalDateTime endTime = parseAndAdjustDateTime(queryDTO.getEndTime(), true);
+
+        wrapper.ge(startTime != null, NumberRecord::getGetNumberTime, startTime);
+        wrapper.le(endTime != null, NumberRecord::getGetNumberTime, endTime);
+        // =======================================================
 
         // 步骤 5: 设置排序规则
         wrapper.orderByDesc(NumberRecord::getGetNumberTime);

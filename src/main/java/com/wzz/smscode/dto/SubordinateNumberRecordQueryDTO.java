@@ -15,6 +15,6 @@ public class SubordinateNumberRecordQueryDTO {
     private String phoneNumber;   // 按手机号（模糊）筛选
     private Integer status;       // 按记录状态筛选
     private Integer charged;      // 按扣费状态筛选
-    private Date startTime;       // 按取号时间范围筛选
-    private Date endTime;
+    private String startTime;     // 按取号时间范围筛选 (类型已修改)
+    private String endTime;       // (类型已修改)
 }
