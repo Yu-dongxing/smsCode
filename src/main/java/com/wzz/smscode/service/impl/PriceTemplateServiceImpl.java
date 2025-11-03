@@ -142,12 +142,14 @@ public class PriceTemplateServiceImpl extends ServiceImpl<PriceTemplateMapper, P
             throw new BusinessException("模板ID不能为空");
         }
 
-        // 修改点 8: 增加权限校验
-        PriceTemplate existingTemplate = this.getById(templateId);
-        if (existingTemplate == null || !existingTemplate.getCreatId().equals(operatorId)) {
-            throw new BusinessException("模板不存在或无权操作");
+        if (operatorId.equals(0L)) {
+            return this.removeById(templateId);
+        }else {
+            PriceTemplate existingTemplate = this.getById(templateId);
+            if (existingTemplate == null || !existingTemplate.getCreatId().equals(operatorId)) {
+                throw new BusinessException("模板不存在或无权操作");
+            }
         }
-
         // 由于设置了外键级联删除，理论上只需要删除主表即可。
         return this.removeById(templateId);
     }

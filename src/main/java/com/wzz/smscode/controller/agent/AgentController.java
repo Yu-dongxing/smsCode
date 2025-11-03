@@ -114,6 +114,7 @@ public class AgentController {
     @SaCheckLogin
     @PostMapping("/createUser")
     public Result<?> createUserbyAgent( @RequestBody UserCreateDTO userCreateDTO) {
+//        log.info("createUserbyAgent：：{}",userCreateDTO);
         long agentId = StpUtil.getLoginIdAsLong();
         if (userCreateDTO.getUsername() == null || userCreateDTO.getPassword() == null) {
             return Result.error("用户名或者密码参数为空");
@@ -121,11 +122,14 @@ public class AgentController {
         try {
             boolean success = userService.createUser(userCreateDTO, agentId);
             return success ? Result.success("创建成功") : Result.error("创建失败，请稍后重试");
-        } catch (IllegalArgumentException | SecurityException | IllegalStateException | BusinessException e) {
+        } catch (IllegalArgumentException | SecurityException | IllegalStateException e) {
             // 记录业务异常信息，但返回通用错误提示
             log.warn("创建用户业务校验失败: {}", e.getMessage());
             return Result.error("创建失败，输入信息有误或权限不足");
-        } catch (Exception e) {
+        }catch (BusinessException e){
+            return Result.error(e.getMessage());
+        }
+        catch (Exception e) {
             // 记录未预料到的系统异常
             log.error("创建用户时发生系统内部错误", e);
             return Result.error(Constants.ERROR_SYSTEM_ERROR, "创建用户时发生系统内部错误，请联系管理员");
@@ -342,17 +346,37 @@ public class AgentController {
      * @return Result<?> 包含分页数据
      */
     @GetMapping("/get/by-agent/project")
-    public Result<?> getSubUsersProjectPrices(@RequestParam(defaultValue = "1") long page,
+    public Result<?> getSubUsersProjectPrices(@RequestParam(required = false) String page, // 改为 String
                                               @RequestParam(required = false) String userName,
-                                              @RequestParam(defaultValue = "10") long size) {
+                                              @RequestParam(required = false) String size) {
         try {
             // 登录校验
             StpUtil.checkLogin();
             Long agentId = StpUtil.getLoginIdAsLong();
 
+            long pageNum = 1L;
+            if (page != null && !page.trim().isEmpty()) {
+                try {
+                    pageNum = Long.parseLong(page);
+                } catch (NumberFormatException e) {
+                    // 如果转换失败，可以记录警告并使用默认值
+                    log.warn("page 参数 '{}' 格式不正确，将使用默认值 1", page);
+                    pageNum = 1L; // 使用默认值
+                }
+            }
+
+            long pageSize = 10L;
+            if (size != null && !size.trim().isEmpty()) {
+                try {
+                    pageSize = Long.parseLong(size);
+                } catch (NumberFormatException e) {
+                    log.warn("size 参数 '{}' 格式不正确，将使用默认值 10", size);
+                    pageSize = 10L; // 使用默认值
+                }
+            }
             // 1. 手动创建 MyBatis-Plus 的 Page 对象
             //    将前端传递的 DTO 参数转换成 Service 层需要的 Page 对象
-            Page<User> pagea = new Page<>(page, size);
+            Page<User> pagea = new Page<>(pageNum, pageSize);
 
             // 2. 调用 Service 层，方法签名保持不变
             IPage<SubUserProjectPriceDTO> resultPage = userService.getSubUsersProjectPrices(userName,agentId, pagea);
@@ -408,6 +432,7 @@ public class AgentController {
      */
     @PostMapping("/get/data")
     public Result<?> getData(@RequestBody StatisticsQueryDTO queryDTO){
+//        log.info("查询参数：{}",queryDTO);
         try{
             StpUtil.checkLogin();
             Long id  = StpUtil.getLoginIdAsLong();

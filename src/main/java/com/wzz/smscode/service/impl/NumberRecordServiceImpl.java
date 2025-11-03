@@ -32,7 +32,9 @@ import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.time.Duration;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -204,8 +206,8 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             }
         });
 
-        // 5. 更新统计 (保持不变)
-//        userService.updateUserStatsForNewNumber(user.getId(), false);
+        //更新统计
+        userService.updateUserStats(user.getId());
 
         // 6. 返回操作ID或部分号码给用户 (使用最终成功的 `successfulIdentifier`)
         return CommonResultDTO.success("取号成功，请稍后查询验证码", successfulIdentifier.get("phone"));
@@ -238,7 +240,8 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             result = null; // 视作失败
             record.setRemark(e.getMessage());
             record.setStatus(3);
-            userService.updateUserStatsForNewNumber(record.getUserId(), false);
+//            userService.updateUserStatsForNewNumber(record.getUserId(), false);
+            userService.updateUserStats(record.getUserId());
 
         }
 
@@ -281,11 +284,13 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             ledgerService.createLedgerAndUpdateBalance(ledgerDto);
             User updatedUser = userService.getById(user.getId());
             latestRecord.setBalanceAfter(updatedUser.getBalance());
-            userService.updateUserStatsForNewNumber(user.getId(), true);
+//            userService.updateUserStatsForNewNumber(user.getId(), true);
+            userService.updateUserStats(user.getId());
         } else {
             latestRecord.setStatus(3);
             latestRecord.setCharged(0);
         }
+
         latestRecord.setRemark(record.getRemark());
         this.updateById(latestRecord);
     }
@@ -337,10 +342,13 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
 
 //                        self.updateRecordAfterRetrieval(record, code);
                         self.updateRecordAfterRetrieval(record,true, code);
+                        //userService.updateUserStats(user.getId());
                         return CommonResultDTO.success("验证码获取成功", code);
                     }
+                    //userService.updateUserStats(user.getId());
                     return CommonResultDTO.error(Constants.ERROR_NO_CODE,"没有获取到验证码");
                 } else {
+                    //userService.updateUserStats(user.getId());
 //                    log.info("即时获取未返回有效验证码，继续等待异步任务结果。");
                     return CommonResultDTO.error(Constants.ERROR_NO_CODE,"验证码获取失败");
                 }
@@ -369,6 +377,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         if (latestRecord.getStatus() != 1) { // 防止重复处理
             return;
         }
+        User user = userService.getById(latestRecord.getUserId());
 
         latestRecord.setCodeReceivedTime(LocalDateTime.now());
 
@@ -377,7 +386,6 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             latestRecord.setCode(code);
             latestRecord.setCharged(1);
             this.updateById(latestRecord);
-            User user = userService.getById(latestRecord.getUserId());
 
             // 使用统一的账本创建服务来处理扣费和记账
             LedgerCreationDTO ledgerDto = LedgerCreationDTO.builder()
@@ -396,12 +404,14 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             ledgerService.createLedgerAndUpdateBalance(ledgerDto);
             User updatedUser = userService.getById(user.getId());
             latestRecord.setBalanceAfter(updatedUser.getBalance());
-            userService.updateUserStatsForNewNumber(user.getId(), true);
+//            userService.updateUserStatsForNewNumber(user.getId(), true);
+            userService.updateUserStats(user.getId());
         } else {
             latestRecord.setStatus(3);
             latestRecord.setCharged(0);
         }
         latestRecord.setRemark(record.getRemark());
+        userService.updateUserStats(user.getId());
         this.updateById(latestRecord);
     }
 
@@ -632,7 +642,6 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         QueryWrapper<NumberRecord> wrapper = new QueryWrapper<>();
         applyFilters(wrapper, queryDTO); // 统一应用筛选逻辑
 
-        // ... (后续聚合、分页、处理数据的代码与之前完全相同)
 
         // 2. 构建聚合查询
         wrapper.groupBy("project_id", "line_id");
@@ -755,10 +764,56 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         if (StringUtils.hasText(queryDTO.getProjectId())) {
             wrapper.eq("project_id", queryDTO.getProjectId());
         }
-
         // 按线路ID筛选
         if (queryDTO.getLineId() != null) {
             wrapper.eq("line_id", queryDTO.getLineId());
+        }
+        LocalDateTime startTime = parseAndAdjustDateTime(queryDTO.getStartTime(), false);
+        if (startTime != null) {
+            wrapper.ge("get_number_time", startTime);
+        }
+
+        LocalDateTime endTime = parseAndAdjustDateTime(queryDTO.getEndTime(), true);
+        if (endTime != null) {
+            wrapper.le("get_number_time", endTime);
+        }
+    }
+
+    /**
+     * 解析并调整日期时间字符串。
+     * @param dateTimeStr 前端传入的日期时间字符串
+     * @param isEndDate   标记这是否是一个结束日期，用于处理仅日期的情况
+     * @return 格式化后的 LocalDateTime 对象，如果格式错误则返回 null
+     */
+    private LocalDateTime parseAndAdjustDateTime(String dateTimeStr, boolean isEndDate) {
+        if (!StringUtils.hasText(dateTimeStr)) {
+            return null;
+        }
+
+        try {
+            // 情况一：字符串包含空格，说明带有时间部分
+            if (dateTimeStr.contains(" ")) {
+                String standardizedStr = dateTimeStr;
+                // 如果格式是 "yyyy-MM-dd HH:mm"，补上秒
+                if (standardizedStr.length() == 16) {
+                    standardizedStr += ":00";
+                }
+                return LocalDateTime.parse(standardizedStr.replace(" ", "T"));
+            }
+            // 情况二：字符串不含空格，说明只有日期部分
+            else {
+                LocalDate date = LocalDate.parse(dateTimeStr);
+                if (isEndDate) {
+                    // 如果是结束日期，则设置为当天的 23:59:59
+                    return date.atTime(23, 59, 59);
+                } else {
+                    // 如果是开始日期，则设置为当天的 00:00:00
+                    return date.atStartOfDay();
+                }
+            }
+        } catch (DateTimeParseException e) {
+            log.warn("无法解析的日期时间格式: '{}'。该筛选条件将被忽略。", dateTimeStr, e);
+            return null;
         }
     }
 

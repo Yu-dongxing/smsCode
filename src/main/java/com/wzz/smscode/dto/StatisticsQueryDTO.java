@@ -30,4 +30,13 @@ public class StatisticsQueryDTO implements Serializable {
      * 筛选条件：线路ID
      */
     private Integer lineId;
+
+    /**
+     * 开始时间
+     */
+    private String startTime;
+    /**
+     * 结束时间
+     */
+    private String endTime;
 }

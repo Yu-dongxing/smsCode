@@ -104,4 +104,6 @@ public interface UserService extends IService<User> {
      * @param operatorId 操作员ID (0L 代表管理员, 其他为代理ID)
      */
     void addProjectPricesForUser(AddUserProjectPricesRequestDTO request, Long operatorId);
+
+    void updateUserStats(Long userId);
 }

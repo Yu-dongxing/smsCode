@@ -5,7 +5,6 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import com.baomidou.mybatisplus.extension.repository.AbstractRepository;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wzz.smscode.common.CommonResultDTO;
@@ -26,12 +25,10 @@ import com.wzz.smscode.dto.project.SubUserProjectPriceDTO;
 import com.wzz.smscode.dto.update.UpdateUserDto;
 import com.wzz.smscode.dto.update.UserUpdateDtoByUser;
 import com.wzz.smscode.dto.update.UserUpdatePasswardDTO;
-import com.wzz.smscode.entity.Project;
-import com.wzz.smscode.entity.User;
-import com.wzz.smscode.entity.UserLedger;
-import com.wzz.smscode.entity.UserProjectLine;
+import com.wzz.smscode.entity.*;
 import com.wzz.smscode.enums.FundType;
 import com.wzz.smscode.exception.BusinessException;
+import com.wzz.smscode.mapper.NumberRecordMapper;
 import com.wzz.smscode.mapper.UserMapper;
 import com.wzz.smscode.service.ProjectService;
 import com.wzz.smscode.service.UserLedgerService;
@@ -68,6 +65,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     @Autowired private ObjectMapper objectMapper;
     @Autowired
     private UserMapper userMapper;
+
+    @Autowired
+    private NumberRecordMapper numberRecordMapper;
 
     @Override
     public User authenticate(Long userId, String password) {
@@ -232,7 +232,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         List<User> userList = this.list(queryWrapper);
 
         // 日志记录查询到的用户数量
-        log.info("根据用户名查询到 {} 个用户", userList.size());
+//        log.info("根据用户名查询到 {} 个用户", userList.size());
 
         // 1. 如果没有找到用户，直接返回 null
         if (userList.isEmpty()) {
@@ -296,7 +296,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         }
         User uu = this.getByUserName(dto.getUsername());
         if (uu != null) {
-            return false;
+            throw new BusinessException(0,"该用户已存在！");
         }
 
         // 2. 构造用户实体，余额初始化为0
@@ -370,7 +370,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         }
 
         if (CollectionUtils.isEmpty(priceSettings)) {
-            log.warn("用户 {} 创建时没有配置任何项目价格。", user.getUserName());
+            log.info("用户 {} 创建时没有配置任何项目价格。", user.getUserName());
             return; // 如果没有价格，直接返回
         }
 
@@ -579,7 +579,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         User user = this.getById(userId);
         if (user == null || user.getStatus() != 0) return false;
         // 假设 `hasOngoingRecord` 从号码记录表中查询
-        boolean hasOngoingRecord = false; // TODO: 实现查询逻辑
+        boolean hasOngoingRecord = false;
         return BalanceUtil.canGetNumber(user, hasOngoingRecord);
     }
 
@@ -722,12 +722,13 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         if (!isAdmin) {
             List<UserProjectLine> operatorLines = userProjectLineService.getLinesByUserId(operator.getId());
             if (!CollectionUtils.isEmpty(operatorLines)) {
-                log.info("为新用户生成初始价格：成功继承自操作员 {} 的价格配置。", operator.getId());
+                log.info("为新用户生成初始价格：成功设置为项目最高价");
                 return operatorLines.stream().map(line -> {
                     ProjectPriceDTO dto = new ProjectPriceDTO();
+                    Project project = projectService.getProject(line.getProjectId(), Integer.valueOf(line.getLineId()));
                     dto.setProjectId(Long.parseLong(line.getProjectId()));
                     dto.setLineId(Long.parseLong(line.getLineId()));
-                    dto.setPrice(line.getAgentPrice());
+                    dto.setPrice(project.getPriceMax());
                     return dto;
                 }).collect(Collectors.toList());
             }
@@ -738,7 +739,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         return projectService.list().stream()
                 .map(line -> {
                     ProjectPriceSummaryDTO summary = priceSummaries.get(line.getProjectId());
-                    BigDecimal price = (summary != null && summary.getMaxPrice() != null) ? summary.getMaxPrice() : line.getPriceMin();
+                    BigDecimal price = (summary != null && summary.getMaxPrice() != null) ? summary.getMaxPrice() : line.getCostPrice();
                     ProjectPriceDTO dto = new ProjectPriceDTO();
                     dto.setProjectId(Long.parseLong(line.getProjectId()));
                     dto.setLineId(Long.parseLong(line.getLineId()));
@@ -1192,6 +1193,65 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         } else {
             log.info("没有新的项目价格配置需要为用户 {} 添加（可能所有提供的配置都已存在）。", targetUser.getUserName());
         }
+    }
+
+    /**
+     * 根据号码记录表重新计算并更新用户的统计数据。
+     * 这个方法是幂等的，可以安全地重复调用。
+     *
+     * @param userId 需要更新统计数据的用户ID
+     */
+    @Override
+    public void updateUserStats(Long userId) {
+        // 1. 定义时间范围：今天零点
+        LocalDateTime startOfToday = LocalDate.now().atStartOfDay();
+
+        // 2. 查询总的取号次数
+        long totalGetCount = numberRecordMapper.selectCount(new LambdaQueryWrapper<NumberRecord>()
+                .eq(NumberRecord::getUserId, userId));
+
+        // 查询总的成功次数 (状态为2且验证码不为空)
+        long totalCodeCount = numberRecordMapper.selectCount(new LambdaQueryWrapper<NumberRecord>()
+                .eq(NumberRecord::getUserId, userId)
+                .eq(NumberRecord::getStatus, 2)       // 状态2表示成功
+                .isNotNull(NumberRecord::getCode)    // 并且 code 字段不为 NULL
+                .ne(NumberRecord::getCode, ""));      // 并且 code 字段不为空字符串
+
+        // 3. 查询今天的取号次数
+        long dailyGetCount = numberRecordMapper.selectCount(new LambdaQueryWrapper<NumberRecord>()
+                .eq(NumberRecord::getUserId, userId)
+                .ge(NumberRecord::getGetNumberTime, startOfToday));
+
+        // 查询今天的成功次数 (状态为2且验证码不为空)
+        long dailyCodeCount = numberRecordMapper.selectCount(new LambdaQueryWrapper<NumberRecord>()
+                .eq(NumberRecord::getUserId, userId)
+                .eq(NumberRecord::getStatus, 2)       // 状态2表示成功
+                .isNotNull(NumberRecord::getCode)    // 并且 code 字段不为 NULL
+                .ne(NumberRecord::getCode, "")      // 并且 code 字段不为空字符串
+                .ge(NumberRecord::getGetNumberTime, startOfToday));
+
+        // 4. 计算回码率 (注意处理除以零的情况)
+        BigDecimal totalCodeRate = (totalGetCount > 0)
+                ? new BigDecimal(totalCodeCount).divide(new BigDecimal(totalGetCount), 2, RoundingMode.HALF_UP)
+                : BigDecimal.ZERO;
+
+        BigDecimal dailyCodeRate = (dailyGetCount > 0)
+                ? new BigDecimal(dailyCodeCount).divide(new BigDecimal(dailyGetCount), 2, RoundingMode.HALF_UP)
+                : BigDecimal.ZERO;
+
+        // 5. 使用 LambdaUpdateWrapper 一次性原子更新 User 表
+        LambdaUpdateWrapper<User> updateWrapper = new LambdaUpdateWrapper<User>()
+                .eq(User::getId, userId)
+                .set(User::getTotalGetCount, totalGetCount)
+                .set(User::getTotalCodeCount, totalCodeCount)
+                .set(User::getDailyGetCount, dailyGetCount)
+                .set(User::getDailyCodeCount, dailyCodeCount)
+                .set(User::getTotalCodeRate, totalCodeRate)
+                .set(User::getDailyCodeRate, dailyCodeRate);
+
+        this.update(updateWrapper);
+        log.info("用户 {} 的统计数据已更新。今日取码/成功: {}/{}, 总计取码/成功: {}/{}",
+                userId, dailyGetCount, dailyCodeCount, totalGetCount, totalCodeCount);
     }
 
 

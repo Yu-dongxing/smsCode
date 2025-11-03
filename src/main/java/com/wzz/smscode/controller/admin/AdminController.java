@@ -835,6 +835,7 @@ public class AdminController {
 
     /**
      * 数据报表
+     * 管理员端
      * @param queryDTO 查询参数，包含分页和筛选条件
      */
     @PostMapping("/get/data")
