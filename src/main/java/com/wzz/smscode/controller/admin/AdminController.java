@@ -8,6 +8,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.wzz.smscode.common.CommonResultDTO;
 import com.wzz.smscode.common.Constants;
 import com.wzz.smscode.common.Result;
+import com.wzz.smscode.dto.*;
 import com.wzz.smscode.dto.CreatDTO.UserCreateDTO;
 import com.wzz.smscode.dto.EntityDTO.LedgerDTO;
 import com.wzz.smscode.dto.EntityDTO.UserDTO;
@@ -780,7 +781,7 @@ public class AdminController {
     /**
      * 更新用户项目价格配置表
      */
-    @PostMapping("/userProjectLine/update/")
+    @PostMapping("/userProjectLine/update")
     public Result<?> updateByUserProjectLine(@RequestBody ProjectPriceInfoDTO projectPriceInfoDTO) {
         try {
             if (projectPriceInfoDTO.getUserProjectLineTableId() == null) {
@@ -832,5 +833,116 @@ public class AdminController {
         return Result.success(userLedgerService.listUserLedgerByUSerId(userId,page));
     }
 
+    /**
+     * 数据报表
+     * @param queryDTO 查询参数，包含分页和筛选条件
+     */
+    @PostMapping("/get/data")
+    public Result<?> getData(@RequestBody StatisticsQueryDTO queryDTO){ // 使用 DTO 接收参数
+        try{
+            // 调用 service，传入分页和筛选条件，注意这里我们假设管理员ID仍然是 0L
+            IPage<ProjectStatisticsDTO> reportPage = numberRecordService.getStatisticsReport(0L, queryDTO);
+            return Result.success(reportPage);
+        }catch (BusinessException e) {
+            return Result.error(e.getMessage());
+        }
+    }
 
+    /**
+     * 为指定用户新增项目价格配置
+     * <p>
+     * 此接口用于为现有用户添加一个或多个新的项目线路价格，而不会影响其已有的配置。
+     * 如果尝试添加的配置已存在，则会自动跳过。
+     *
+     * @param request 包含用户ID和要添加的价格配置列表
+     * @return 操作结果
+     */
+    @PostMapping("/user-project-prices/add")
+    public Result<?> addUserProjectPrices(@RequestBody AddUserProjectPricesRequestDTO request) {
+        try {
+            // 调用统一的 Service 方法，管理员 operatorId 固定为 0L
+            userService.addProjectPricesForUser(request, 0L);
+            return Result.success("新增配置成功");
+        } catch (BusinessException | SecurityException e) {
+            log.warn("管理员新增用户项目配置业务校验失败: {}", e.getMessage());
+            return Result.error(e.getMessage());
+        } catch (Exception e) {
+            log.error("管理员新增用户项目配置时发生系统内部错误", e);
+            return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，新增失败");
+        }
+    }
+
+    @Autowired
+    private PriceTemplateService priceTemplateService;
+
+
+    /**
+     * 创建价格模板
+     * @param createDTO 模板信息
+     * @return 操作结果
+     */
+    @PostMapping("/price-templates")
+    public Result<?> createPriceTemplate(@RequestBody PriceTemplateCreateDTO createDTO) {
+        try {
+            boolean success = priceTemplateService.createTemplate(createDTO,0L);
+            return success ? Result.success("创建成功") : Result.error("创建失败");
+        } catch (BusinessException e) {
+            return Result.error(e.getMessage());
+        } catch (Exception e) {
+            log.error("创建价格模板失败", e);
+            return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，创建失败");
+        }
+    }
+
+    /**
+     * 获取所有价格模板
+     * @return 模板列表
+     */
+    @GetMapping("/price-templates")
+    public Result<List<PriceTemplateResponseDTO>> getAllPriceTemplates() {
+        try {
+            List<PriceTemplateResponseDTO> templates = priceTemplateService.listTemplatesByCreator(-1L);
+            return Result.success("查询成功", templates);
+        } catch (Exception e) {
+            log.error("查询价格模板失败", e);
+            return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，查询失败");
+        }
+    }
+
+    /**
+     * 更新价格模板
+     * @param templateId 模板ID
+     * @param updateDTO 更新后的模板信息
+     * @return 操作结果
+     */
+    @PostMapping("/price-templates/{templateId}")
+    public Result<?> updatePriceTemplate(@PathVariable Long templateId, @RequestBody PriceTemplateCreateDTO updateDTO) {
+        try {
+            boolean success = priceTemplateService.updateTemplate(templateId, updateDTO,0L);
+            return success ? Result.success("更新成功") : Result.error("更新失败");
+        } catch (BusinessException e) {
+            return Result.error(e.getMessage());
+        } catch (Exception e) {
+            log.error("更新价格模板失败", e);
+            return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，更新失败");
+        }
+    }
+
+    /**
+     * 删除价格模板
+     * @param templateId 模板ID
+     * @return 操作结果
+     */
+    @GetMapping("/price-templates/{templateId}")
+    public Result<?> deletePriceTemplate(@PathVariable Long templateId) {
+        try {
+            boolean success = priceTemplateService.deleteTemplate(templateId,0L);
+            return success ? Result.success("删除成功") : Result.error("删除失败");
+        } catch (BusinessException e) {
+            return Result.error(e.getMessage());
+        } catch (Exception e) {
+            log.error("删除价格模板失败", e);
+            return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，删除失败");
+        }
+    }
 }

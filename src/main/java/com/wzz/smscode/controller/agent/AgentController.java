@@ -8,20 +8,21 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.wzz.smscode.common.Constants;
 import com.wzz.smscode.common.Result;
+import com.wzz.smscode.dto.*;
 import com.wzz.smscode.dto.CreatDTO.UserCreateDTO;
 import com.wzz.smscode.dto.EntityDTO.LedgerDTO;
 import com.wzz.smscode.dto.LoginDTO.AgentLoginDTO;
 import com.wzz.smscode.dto.agent.AgentDashboardStatsDTO;
 import com.wzz.smscode.dto.agent.AgentProjectLineUpdateDTO;
+import com.wzz.smscode.dto.number.NumberDTO;
 import com.wzz.smscode.dto.project.SubUserProjectPriceDTO;
 import com.wzz.smscode.dto.update.UserUpdateDtoByUser;
 import com.wzz.smscode.entity.SystemConfig;
 import com.wzz.smscode.entity.User;
 import com.wzz.smscode.entity.UserLedger;
+import com.wzz.smscode.entity.UserProjectLine;
 import com.wzz.smscode.exception.BusinessException;
-import com.wzz.smscode.service.SystemConfigService;
-import com.wzz.smscode.service.UserLedgerService;
-import com.wzz.smscode.service.UserService;
+import com.wzz.smscode.service.*;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -30,6 +31,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
 import java.util.Date;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -81,6 +83,7 @@ public class AgentController {
     @GetMapping("/listUsers") // 推荐使用更具体的 GetMapping
     public Result<?> listUsers(
             @RequestParam(defaultValue = "1") long page,
+            @RequestParam(required = false) String userName,
             @RequestParam(defaultValue = "10") long size) {
 
         // 通过 Sa-Token 获取当前登录的代理ID
@@ -90,7 +93,7 @@ public class AgentController {
         checkAgentPermission(agentId);
 
         IPage<User> pageRequest = new Page<>(page, size);
-        IPage<User> subUsersPage = userService.listSubUsers(agentId, pageRequest);
+        IPage<User> subUsersPage = userService.listSubUsers(userName,agentId, pageRequest);
 
         return Result.success(subUsersPage);
     }
@@ -267,6 +270,7 @@ public class AgentController {
             @RequestParam(required = false) Long targetUserId,
             @RequestParam(required = false) Date startTime,
             @RequestParam(required = false) Date endTime,
+            @RequestParam(required = false) String userName,
             @RequestParam(defaultValue = "1") long page,
             @RequestParam(defaultValue = "10") long size) {
 
@@ -275,7 +279,7 @@ public class AgentController {
 
         try {
             Page<UserLedger> pageRequest = new Page<>(page, size);
-            IPage<UserLedger> ledgerPage = userLedgerService.listSubordinateLedgers(agentId, pageRequest, targetUserId, startTime, endTime);
+            IPage<UserLedger> ledgerPage = userLedgerService.listSubordinateLedgers(userName,agentId, pageRequest, targetUserId, startTime, endTime);
             IPage<LedgerDTO> dtoPage = ledgerPage.convert(ledger -> {
                 LedgerDTO dto = new LedgerDTO();
                 dto.setId(ledger.getId());
@@ -339,6 +343,7 @@ public class AgentController {
      */
     @GetMapping("/get/by-agent/project")
     public Result<?> getSubUsersProjectPrices(@RequestParam(defaultValue = "1") long page,
+                                              @RequestParam(required = false) String userName,
                                               @RequestParam(defaultValue = "10") long size) {
         try {
             // 登录校验
@@ -350,7 +355,7 @@ public class AgentController {
             Page<User> pagea = new Page<>(page, size);
 
             // 2. 调用 Service 层，方法签名保持不变
-            IPage<SubUserProjectPriceDTO> resultPage = userService.getSubUsersProjectPrices(agentId, pagea);
+            IPage<SubUserProjectPriceDTO> resultPage = userService.getSubUsersProjectPrices(userName,agentId, pagea);
 
             if (resultPage.getTotal() == 0) {
                 return Result.success("查询成功，暂无下级用户或价格数据", resultPage);
@@ -375,6 +380,171 @@ public class AgentController {
             return Result.success("配置更新成功");
         } catch (BusinessException e) {
             return Result.error(e.getMessage());
+        }
+    }
+
+    @Autowired
+    private UserProjectLineService userProjectLineService;
+
+    /**
+     * 查询当前登录代理自己的项目价格
+     */
+    @GetMapping("/project/price")
+    public Result<?> getProjectPrice() {
+        try {
+            StpUtil.checkLogin();
+            long agentId = StpUtil.getLoginIdAsLong();
+            List<UserProjectLine> sss = userProjectLineService.getLinesByUserId(agentId);
+            return Result.success("查询成功！",sss);
+        }catch (BusinessException e){
+            return Result.error(e.getMessage());
+        }
+    }
+
+    @Autowired
+    private NumberRecordService numberRecordService;
+    /**
+     * 数据报表
+     */
+    @PostMapping("/get/data")
+    public Result<?> getData(@RequestBody StatisticsQueryDTO queryDTO){
+        try{
+            StpUtil.checkLogin();
+            Long id  = StpUtil.getLoginIdAsLong();
+            IPage<ProjectStatisticsDTO> reportPage = numberRecordService.getStatisticsReport(id, queryDTO);
+            return Result.success(reportPage);
+        }catch (BusinessException e) {
+            return Result.error(e.getMessage());
+        }
+    }
+
+    /**
+     * 为指定下级用户新增项目价格配置
+     * <p>
+     * 代理只能为自己的直接下级用户添加配置。
+     * 添加的价格不能低于代理自身的成本价。
+     * 如果尝试添加的配置已存在，则会自动跳过。
+     *
+     * @param request 包含下级用户ID和要添加的价格配置列表
+     * @return 操作结果
+     */
+    @SaCheckLogin
+    @PostMapping("/sub-user-project-prices/add")
+    public Result<?> addSubUserProjectPrices(@RequestBody AddUserProjectPricesRequestDTO request) {
+        try {
+            // 从 Sa-Token 获取当前登录的代理ID
+            long agentId = StpUtil.getLoginIdAsLong();
+
+            // 调用统一的 Service 方法，传入代理ID
+            userService.addProjectPricesForUser(request, agentId);
+            return Result.success("新增配置成功");
+        } catch (BusinessException | SecurityException e) {
+            log.warn("代理 [{}] 新增下级项目配置业务校验失败: {}", StpUtil.getLoginId(), e.getMessage());
+            return Result.error(e.getMessage());
+        } catch (Exception e) {
+            log.error("代理 [{}] 新增下级项目配置时发生系统内部错误", StpUtil.getLoginId(), e);
+            return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，新增失败");
+        }
+    }
+    /**
+     * 分页查询代理下级用户的取号记录（支持多条件筛选）
+     *
+     * @param queryDTO 包含分页信息和筛选条件的请求体对象。
+     *                 可筛选字段: userName(下级用户名), projectName(项目名), projectId, lineId 等。
+     * @return 分页后的取号记录列表 (NumberDTO)
+     */
+    @SaCheckLogin
+    @PostMapping("/subordinate-number-records")
+    public Result<?> listSubordinateNumberRecords(@RequestBody SubordinateNumberRecordQueryDTO queryDTO) {
+        long agentId = StpUtil.getLoginIdAsLong();
+        checkAgentPermission(agentId); // 校验代理身份
+        try {
+            IPage<NumberDTO> resultPage = numberRecordService.listSubordinateRecordsForAgent(agentId, queryDTO);
+            return Result.success("查询成功", resultPage);
+        } catch (BusinessException e) {
+            log.error("代理 [{}] 查询下级取号记录时发生系统内部错误", agentId, e);
+            return Result.error(Constants.ERROR_SYSTEM_ERROR, e.getMessage());
+        }
+    }
+
+    @Autowired
+    private PriceTemplateService priceTemplateService;
+
+    /**
+     * [代理] 创建自己的价格模板
+     * @param createDTO 模板信息
+     * @return 操作结果
+     */
+    @SaCheckLogin
+    @PostMapping("/price-templates/add")
+    public Result<?> createAgentPriceTemplate(@RequestBody PriceTemplateCreateDTO createDTO) {
+        long agentId = StpUtil.getLoginIdAsLong();
+        try {
+            boolean success = priceTemplateService.createTemplate(createDTO, agentId);
+            return success ? Result.success("创建成功") : Result.error("创建失败");
+        } catch (BusinessException e) {
+            return Result.error(e.getMessage());
+        } catch (Exception e) {
+            log.error("代理 [{}] 创建价格模板失败", agentId, e);
+            return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，创建失败");
+        }
+    }
+
+    /**
+     * [代理] 获取自己创建的所有价格模板
+     * @return 模板列表
+     */
+    @SaCheckLogin
+    @GetMapping("/price-templates/get")
+    public Result<List<PriceTemplateResponseDTO>> getAgentPriceTemplates() {
+        long agentId = StpUtil.getLoginIdAsLong();
+        try {
+            List<PriceTemplateResponseDTO> templates = priceTemplateService.listTemplatesByCreator(agentId);
+            return Result.success("查询成功", templates);
+        } catch (Exception e) {
+            log.error("代理 [{}] 查询价格模板失败", agentId, e);
+            return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，查询失败");
+        }
+    }
+
+    /**
+     * [代理] 更新自己的价格模板
+     * @param templateId 模板ID
+     * @param updateDTO 更新后的模板信息
+     * @return 操作结果
+     */
+    @SaCheckLogin
+    @PostMapping("/price-templates/update/{templateId}") // 建议使用 PUT
+    public Result<?> updateAgentPriceTemplate(@PathVariable Long templateId, @RequestBody PriceTemplateCreateDTO updateDTO) {
+        long agentId = StpUtil.getLoginIdAsLong();
+        try {
+            boolean success = priceTemplateService.updateTemplate(templateId, updateDTO, agentId);
+            return success ? Result.success("更新成功") : Result.error("更新失败");
+        } catch (BusinessException e) {
+            return Result.error(e.getMessage());
+        } catch (Exception e) {
+            log.error("代理 [{}] 更新价格模板失败", agentId, e);
+            return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，更新失败");
+        }
+    }
+
+    /**
+     * [代理] 删除自己的价格模板
+     * @param templateId 模板ID
+     * @return 操作结果
+     */
+    @SaCheckLogin
+    @GetMapping("/price-templates/delete/{templateId}") // 建议使用 DELETE
+    public Result<?> deleteAgentPriceTemplate(@PathVariable Long templateId) {
+        long agentId = StpUtil.getLoginIdAsLong();
+        try {
+            boolean success = priceTemplateService.deleteTemplate(templateId, agentId);
+            return success ? Result.success("删除成功") : Result.error("删除失败");
+        } catch (BusinessException e) {
+            return Result.error(e.getMessage());
+        } catch (Exception e) {
+            log.error("代理 [{}] 删除价格模板失败", agentId, e);
+            return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，删除失败");
         }
     }
 }

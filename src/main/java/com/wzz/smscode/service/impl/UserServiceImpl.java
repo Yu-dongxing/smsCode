@@ -5,10 +5,12 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.baomidou.mybatisplus.extension.repository.AbstractRepository;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wzz.smscode.common.CommonResultDTO;
 import com.wzz.smscode.common.Constants;
+import com.wzz.smscode.dto.AddUserProjectPricesRequestDTO;
 import com.wzz.smscode.dto.CreatDTO.LedgerCreationDTO;
 import com.wzz.smscode.dto.CreatDTO.UserCreateDTO;
 import com.wzz.smscode.dto.EntityDTO.UserDTO;
@@ -225,13 +227,31 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     @Override
     public User authenticateUserByUserName(String userId, String password) {
         LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
-        queryWrapper.eq(User::getUserName,userId);
+        queryWrapper.eq(User::getUserName, userId);
 
-        User user = this.getOne(queryWrapper);
-//        if (user != null && passwordEncoder.matches(password, user.getPassword())) {
-//            return user;
-//        }
-        return user;
+        List<User> userList = this.list(queryWrapper);
+
+        // 日志记录查询到的用户数量
+        log.info("根据用户名查询到 {} 个用户", userList.size());
+
+        // 1. 如果没有找到用户，直接返回 null
+        if (userList.isEmpty()) {
+            return null;
+        }
+        if (userList.size() > 1) {
+            log.warn("警告：数据库中存在多个用户名为 '{}' 的用户，请检查数据！", userId);
+        }
+
+        // 3. 遍历查找密码匹配的用户
+        for (User user : userList) {
+            if (user != null && password.equals(user.getPassword())) {
+                // 找到第一个密码匹配的用户就返回
+                return user;
+            }
+        }
+
+        // 4. 如果遍历完所有同名用户都没有找到密码匹配的，则认证失败
+        return null;
     }
 
     @Override
@@ -273,6 +293,10 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             operator = this.getById(operatorId);
             if (operator == null) throw new BusinessException("操作员不存在");
             if (operator.getIsAgent() != 1) throw new BusinessException("无权创建用户");
+        }
+        User uu = this.getByUserName(dto.getUsername());
+        if (uu != null) {
+            return false;
         }
 
         // 2. 构造用户实体，余额初始化为0
@@ -466,10 +490,13 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
 
 
     @Override
-    public IPage<User> listSubUsers(Long operatorId, IPage<User> page) {
+    public IPage<User> listSubUsers(String userName,Long operatorId, IPage<User> page) {
 
         LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(User::getParentId, operatorId);
+        if (userName!=null){
+            wrapper.like(User::getUserName, userName);
+        }
 
         IPage<User> userPage = this.page(page, wrapper);
         return userPage;
@@ -734,8 +761,10 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     public Boolean login(UserLoginDto userLoginDto) {
         User user = getByUserName(userLoginDto.getUsername());
         if (user == null) return false;
-        // 在这里应加入密码校验逻辑
-        return true;
+        if (user.getPassword().equals(userLoginDto.getPassword())) {
+            return true;
+        }
+        return false;
     }
 
     @Override
@@ -973,7 +1002,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     }
 
     @Override
-    public IPage<SubUserProjectPriceDTO> getSubUsersProjectPrices(Long agentId, Page<User> page) {
+    public IPage<SubUserProjectPriceDTO> getSubUsersProjectPrices(String userName,Long agentId, Page<User> page) {
         // 1. 校验操作者身份 (逻辑不变)
         User agent = this.getById(agentId);
         if (agent == null || agent.getIsAgent() != 1) {
@@ -983,6 +1012,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         // 2.【核心改造】分页查询该代理的下级用户
         LambdaQueryWrapper<User> subUsersQuery = new LambdaQueryWrapper<User>()
                 .eq(User::getParentId, agentId);
+        if (userName != null) {
+            subUsersQuery.like(User::getUserName, userName);
+        }
         // IPage<User> subUserPage = this.page(new Page<>(page.getCurrent(), page.getSize()), subUsersQuery);
         IPage<User> subUserPage = this.page(page, subUsersQuery);
 
@@ -998,7 +1030,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         List<Long> subUserIds = subUsersOnCurrentPage.stream().map(User::getId).collect(Collectors.toList());
 
         // 4. 一次性查询【当前页】用户的所有项目线路配置 (逻辑不变)
-        List<UserProjectLine> allLines = userProjectLineService.getLinesByUserIds(subUserIds);
+        List<UserProjectLine> allLines = userProjectLineService.getLinesByUserIds(subUserIds,null);
 
         // 5. 将线路配置按用户ID分组 (逻辑不变)
         Map<Long, List<UserProjectLine>> linesByUserId = allLines.stream()
@@ -1051,6 +1083,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         }
         LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
         // 使用 like 实现模糊查询，并只 select id 字段以提高效率
+
         queryWrapper.like(User::getUserName, username).select(User::getId);
         List<User> users = this.list(queryWrapper);
         if (CollectionUtils.isEmpty(users)) {
@@ -1069,4 +1102,97 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
 
         return userMapper.deleteById(user) >0;
     }
+    /**
+     * 为指定用户新增一个或多个项目价格配置的核心实现
+     */
+    @Transactional(rollbackFor = Exception.class)
+    @Override
+    public void addProjectPricesForUser( AddUserProjectPricesRequestDTO request, Long operatorId) {
+        Long targetUserId = request.getUserId();
+        List<ProjectPriceDTO> pricesToAdd = request.getPricesToAdd();
+
+        // 1. --- 基础校验 ---
+        User targetUser = this.getById(targetUserId);
+        if (targetUser == null) {
+            throw new BusinessException("目标用户不存在");
+        }
+
+        // 2. --- 权限和价格校验 ---
+        boolean isAdmin = (operatorId == 0L);
+        if (isAdmin) {
+            // 如果是管理员，创建虚拟操作员对象以复用校验逻辑
+            User adminOperator = new User();
+            adminOperator.setId(0L);
+            validateProjectPrices(pricesToAdd, adminOperator);
+        } else {
+            // 如果是代理，进行严格的权限校验
+            User agent = this.getById(operatorId);
+            if (agent == null || agent.getIsAgent() != 1) {
+                throw new SecurityException("操作员不是代理或不存在，无权操作");
+            }
+            if (!operatorId.equals(targetUser.getParentId())) {
+                throw new SecurityException("无权为非下级用户添加价格配置");
+            }
+            // 复用已有的价格校验逻辑，它会自动检查代理的成本价
+            validateProjectPrices(pricesToAdd, agent);
+        }
+
+        // 3. --- 数据准备和去重 ---
+        // 获取目标用户已有的价格配置，用于防止重复添加
+        List<UserProjectLine> existingLines = userProjectLineService.getLinesByUserId(targetUserId);
+        Set<String> existingKeys = existingLines.stream()
+                .map(line -> line.getProjectId() + "-" + line.getLineId())
+                .collect(Collectors.toSet());
+
+        // 一次性获取所有项目元数据，避免在循环中查询数据库
+        Map<String, Project> projectMetaMap = projectService.list().stream()
+                .collect(Collectors.toMap(
+                        p -> p.getProjectId() + "-" + p.getLineId(),
+                        p -> p,
+                        (p1, p2) -> p1 // 如果有重复键，保留第一个
+                ));
+
+        List<UserProjectLine> linesToInsert = new ArrayList<>();
+
+        for (ProjectPriceDTO priceDto : pricesToAdd) {
+            String priceKey = priceDto.getProjectId() + "-" + priceDto.getLineId();
+
+            // 如果配置已存在，则记录日志并跳过
+            if (existingKeys.contains(priceKey)) {
+                log.warn("用户 {} 已存在项目线路配置 {}，跳过添加。", targetUser.getUserName(), priceKey);
+                continue;
+            }
+
+            // 校验要添加的项目线路是否存在于系统中
+            Project projectMeta = projectMetaMap.get(priceKey);
+            if (projectMeta == null) {
+                throw new BusinessException("添加失败：项目线路 " + priceKey + " 不存在。");
+            }
+
+            // 构建新的 UserProjectLine 实体
+            UserProjectLine newLine = new UserProjectLine();
+            newLine.setUserId(targetUserId);
+            newLine.setProjectTableId(projectMeta.getId()); // 关联 project 表主键
+            newLine.setProjectName(projectMeta.getProjectName());
+            newLine.setProjectId(projectMeta.getProjectId());
+            newLine.setLineId(projectMeta.getLineId());
+            newLine.setAgentPrice(priceDto.getPrice()); // 设置为用户的新售价
+            newLine.setCostPrice(projectMeta.getCostPrice()); // 从系统项目表中获取成本价
+
+            linesToInsert.add(newLine);
+        }
+
+        // 4. --- 批量保存 ---
+        if (!CollectionUtils.isEmpty(linesToInsert)) {
+            boolean success = userProjectLineService.saveBatch(linesToInsert);
+            if (!success) {
+                throw new BusinessException("批量保存用户项目价格配置失败");
+            }
+            log.info("成功为用户 {} 添加了 {} 条新的项目价格配置。", targetUser.getUserName(), linesToInsert.size());
+        } else {
+            log.info("没有新的项目价格配置需要为用户 {} 添加（可能所有提供的配置都已存在）。", targetUser.getUserName());
+        }
+    }
+
+
 }

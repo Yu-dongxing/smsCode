@@ -277,9 +277,13 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
     }
 
     @Override
-    public IPage<UserLedger> listSubordinateLedgers(Long agentId, Page<UserLedger> page, Long targetUserId, Date startTime, Date endTime) {
+    public IPage<UserLedger> listSubordinateLedgers(String userName,Long agentId, Page<UserLedger> page, Long targetUserId, Date startTime, Date endTime) {
         // 1. 获取该代理的所有下级用户的ID
-        LambdaQueryWrapper<User> userQuery = new LambdaQueryWrapper<User>().eq(User::getParentId, agentId);
+        LambdaQueryWrapper<User> userQuery = new LambdaQueryWrapper<>();
+        userQuery.eq(User::getParentId, agentId);
+        if (userName != null) {
+            userQuery.like(User::getUserName, userName);
+        }
         List<User> subUsers = userService.list(userQuery);
 
         if (CollectionUtils.isEmpty(subUsers)) {

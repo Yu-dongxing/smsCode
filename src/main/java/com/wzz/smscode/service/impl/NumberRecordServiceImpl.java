@@ -1,6 +1,7 @@
 package com.wzz.smscode.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
@@ -8,7 +9,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wzz.smscode.common.Constants;
 import com.wzz.smscode.common.CommonResultDTO;
-import com.wzz.smscode.dto.CodeResult;
+import com.wzz.smscode.dto.*;
 import com.wzz.smscode.dto.CreatDTO.LedgerCreationDTO;
 import com.wzz.smscode.dto.number.NumberDTO;
 import com.wzz.smscode.entity.*;
@@ -32,10 +33,8 @@ import org.springframework.util.StringUtils;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.LocalDateTime;
-import java.util.Date;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+import java.util.*;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -82,7 +81,6 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         User user = userService.authenticateUserByUserName(userName, password);
         if (user == null) return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED, "用户验证失败");
 
-        // ... 省略其他业务校验代码，保持不变 ...
         SystemConfig config = systemConfigService.getConfig();
         if (user.getStatus() != 0){
             return CommonResultDTO.error(-5, "用户已被禁用");
@@ -187,6 +185,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         record.setStatus(0); // 待取码
         record.setCharged(0); // 默认未扣费
         record.setPrice(price);
+        record.setCostPrice(userProjectLine.getCostPrice());
         record.setBalanceBefore(user.getBalance());
         record.setBalanceAfter(user.getBalance());
         record.setGetNumberTime(LocalDateTime.now());
@@ -316,7 +315,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         }
 
         if (record.getStatus() == 4 || record.getStatus() == 3) {
-            log.info("记录 {} 状态为进行中，用户主动查询，触发一次即时验证码获取...", record.getId());
+//            log.info("记录 {} 状态为进行中，用户主动查询，触发一次即时验证码获取...", record.getId());
             Project project = projectService.getProject(record.getProjectId(), record.getLineId());
             if (project != null) {
                 // 根据项目配置决定使用 phone 还是 id 作为API请求的 identifier
@@ -330,7 +329,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                 if (codeOpt.isPresent()) {
                     String code = codeOpt.get();
                     if (!code.isEmpty()){
-                        log.info("即时获取成功！为记录 {} 获取到验证码: {}", record.getId(), code);
+//                        log.info("即时获取成功！为记录 {} 获取到验证码: {}", record.getId(), code);
 //                        CodeResult codeResult = new CodeResult();
 //                        codeResult.setCode(code);
 //                        codeResult.setPhoneNumber(record.getPhoneNumber());
@@ -342,7 +341,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                     }
                     return CommonResultDTO.error(Constants.ERROR_NO_CODE,"没有获取到验证码");
                 } else {
-                    log.info("即时获取未返回有效验证码，继续等待异步任务结果。");
+//                    log.info("即时获取未返回有效验证码，继续等待异步任务结果。");
                     return CommonResultDTO.error(Constants.ERROR_NO_CODE,"验证码获取失败");
                 }
             }
@@ -590,6 +589,327 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         return records.stream()
                 .map(NumberRecord::getPhoneNumber)
                 .collect(java.util.stream.Collectors.toList());
+    }
+
+
+    /**
+     * 主入口方法，移除了所有 username 相关的逻辑。
+     */
+    @Override
+    public IPage<ProjectStatisticsDTO> getStatisticsReport(Long operatorId, StatisticsQueryDTO queryDTO) {
+        User operator = new User();
+        if (operatorId != 0L) {
+            operator = userService.getById(operatorId);
+            if (operator == null) {
+                throw new BusinessException("操作用户不存在");
+            }
+        }
+
+        // 管理员逻辑
+        if (operatorId == 0L) {
+            log.info("Generating statistics report for admin user: {}", operatorId);
+            return generateAdminStatistics(queryDTO);
+        }
+        // 代理逻辑
+        else if (operator.getIsAgent() == 1) {
+            log.info("Generating statistics report for agent user: {}", operatorId);
+            // 代理的报表查询不再需要特殊处理用户名，筛选条件统一在 applyFilters 中处理
+            return generateAgentStatistics(operatorId, queryDTO);
+        }
+        // 其他普通用户无权限
+        else {
+            log.warn("User {} is not an admin or agent, no permission to view statistics.", operatorId);
+            return new Page<>(queryDTO.getCurrent(), queryDTO.getSize());
+        }
+    }
+
+    /**
+     * 为管理员生成全站统计报表（支持分页和筛选）。
+     * 此方法本身无需修改，因为筛选逻辑已封装到 applyFilters 中。
+     */
+    private IPage<ProjectStatisticsDTO> generateAdminStatistics(StatisticsQueryDTO queryDTO) {
+        // 1. 构建筛选条件
+        QueryWrapper<NumberRecord> wrapper = new QueryWrapper<>();
+        applyFilters(wrapper, queryDTO); // 统一应用筛选逻辑
+
+        // ... (后续聚合、分页、处理数据的代码与之前完全相同)
+
+        // 2. 构建聚合查询
+        wrapper.groupBy("project_id", "line_id");
+        wrapper.select(
+                "project_id",
+                "line_id",
+                "COUNT(id) as totalRequests",
+                "SUM(CASE WHEN status = 2 THEN 1 ELSE 0 END) as successCount",
+                "COALESCE(SUM(CASE WHEN charged = 1 THEN price ELSE 0 END), 0) as totalRevenue",
+                "COALESCE(SUM(CASE WHEN charged = 1 THEN cost_price ELSE 0 END), 0) as totalCost"
+        );
+
+        // 3. 执行分页聚合查询
+        Page<Map<String, Object>> page = new Page<>(queryDTO.getCurrent(), queryDTO.getSize());
+        IPage<Map<String, Object>> aggregatedDataPage = this.pageMaps(page, wrapper);
+
+        if (aggregatedDataPage.getRecords().isEmpty()) {
+            return new Page<ProjectStatisticsDTO>(queryDTO.getCurrent(), queryDTO.getSize(), aggregatedDataPage.getTotal());
+        }
+
+        // 4. 获取所有项目名称用于数据填充
+        Map<String, String> projectNames = projectService.list().stream()
+                .collect(Collectors.toMap(Project::getProjectId, Project::getProjectName, (p1, p2) -> p1));
+
+        // 5. 处理聚合结果并构建 DTO
+        List<ProjectStatisticsDTO> dtoList = processAggregatedData(aggregatedDataPage.getRecords(), null, projectNames);
+
+        // 6. 构造并返回最终的 IPage<ProjectStatisticsDTO>
+        IPage<ProjectStatisticsDTO> resultPage = new Page<>(aggregatedDataPage.getCurrent(), aggregatedDataPage.getSize(), aggregatedDataPage.getTotal());
+        resultPage.setRecords(dtoList);
+
+        return resultPage;
+    }
+
+    /**
+     * 为代理生成其下级的统计报表（支持分页和筛选）。
+     * 移除了根据 username 筛选下级用户的逻辑。
+     */
+    private IPage<ProjectStatisticsDTO> generateAgentStatistics(Long agentId, StatisticsQueryDTO queryDTO) {
+        // 1. 获取该代理的 *所有* 下级用户ID
+        List<Long> subUserIds = userService.list(new LambdaQueryWrapper<User>().eq(User::getParentId, agentId))
+                .stream().map(User::getId).collect(Collectors.toList());
+
+        if (subUserIds.isEmpty()) {
+            return new Page<>(queryDTO.getCurrent(), queryDTO.getSize());
+        }
+
+        // 2. 获取代理本人所有线路的拿货价（成本）
+        Map<String, BigDecimal> agentCostMap = userProjectLineService.list(new LambdaQueryWrapper<UserProjectLine>().eq(UserProjectLine::getUserId, agentId))
+                .stream()
+                .collect(Collectors.toMap(
+                        line -> line.getProjectId() + "-" + line.getLineId(),
+                        UserProjectLine::getAgentPrice
+                ));
+
+        // 3. 构建筛选和聚合查询
+        QueryWrapper<NumberRecord> wrapper = new QueryWrapper<>();
+        wrapper.in("user_id", subUserIds);
+        applyFilters(wrapper, queryDTO); // 应用通用筛选（包含项目名等）
+
+        // ... (后续聚合、分页、处理数据的代码与之前完全相同)
+
+        wrapper.groupBy("project_id", "line_id");
+        wrapper.select(
+                "project_id",
+                "line_id",
+                "COUNT(id) as totalRequests",
+                "SUM(CASE WHEN status = 2 THEN 1 ELSE 0 END) as successCount",
+                "COALESCE(SUM(CASE WHEN charged = 1 THEN price ELSE 0 END), 0) as totalRevenue"
+        );
+
+        // 4. 执行分页聚合查询
+        Page<Map<String, Object>> page = new Page<>(queryDTO.getCurrent(), queryDTO.getSize());
+        IPage<Map<String, Object>> aggregatedDataPage = this.pageMaps(page, wrapper);
+
+        if (aggregatedDataPage.getRecords().isEmpty()) {
+            return new Page<ProjectStatisticsDTO>(queryDTO.getCurrent(), queryDTO.getSize(), aggregatedDataPage.getTotal());
+        }
+
+        // 5. 获取项目名称
+        Map<String, String> projectNames = projectService.list().stream()
+                .collect(Collectors.toMap(Project::getProjectId, Project::getProjectName, (p1, p2) -> p1));
+
+        // 6. 处理聚合结果
+        List<ProjectStatisticsDTO> dtoList = processAggregatedData(aggregatedDataPage.getRecords(), agentCostMap, projectNames);
+
+        // 7. 构造并返回分页结果
+        IPage<ProjectStatisticsDTO> resultPage = new Page<>(aggregatedDataPage.getCurrent(), aggregatedDataPage.getSize(), aggregatedDataPage.getTotal());
+        resultPage.setRecords(dtoList);
+
+        return resultPage;
+    }
+
+    /**
+     * 【核心修改】通用的筛选条件应用方法。
+     * 替换了按用户名筛选的逻辑为按项目名筛选。
+     *
+     * @param wrapper QueryWrapper 实例
+     * @param queryDTO 筛选参数
+     */
+    private void applyFilters(QueryWrapper<NumberRecord> wrapper, StatisticsQueryDTO queryDTO) {
+        // 按项目名筛选 (模糊查询)
+        if (StringUtils.hasText(queryDTO.getProjectName())) {
+            // 1. 根据项目名（模糊）查询出所有匹配的项目ID
+            List<String> projectIds = projectService.list(
+                    new LambdaQueryWrapper<Project>().like(Project::getProjectName, queryDTO.getProjectName())
+            ).stream().map(Project::getProjectId).collect(Collectors.toList());
+
+            if (projectIds.isEmpty()) {
+                // 2. 如果没有项目匹配，为保证查询结果为空，添加一个永远为假的条件
+                wrapper.eq("1", 0);
+                return; // 后续条件无需再拼接
+            }
+            // 3. 将匹配到的项目ID列表加入查询条件
+            wrapper.in("project_id", projectIds);
+        }
+
+        // 按项目ID筛选 (精确查询)
+        // 这个条件可以和项目名筛选同时生效，提供更精确的过滤
+        if (StringUtils.hasText(queryDTO.getProjectId())) {
+            wrapper.eq("project_id", queryDTO.getProjectId());
+        }
+
+        // 按线路ID筛选
+        if (queryDTO.getLineId() != null) {
+            wrapper.eq("line_id", queryDTO.getLineId());
+        }
+    }
+
+
+
+    /**
+     * 【无需修改】通用的聚合数据处理方法
+     */
+    private List<ProjectStatisticsDTO> processAggregatedData(List<Map<String, Object>> aggregatedData, Map<String, BigDecimal> agentCostMap, Map<String, String> projectNames) {
+
+        Map<String, ProjectStatisticsDTO> projectReportMap = new LinkedHashMap<>();
+
+        for (Map<String, Object> lineData : aggregatedData) {
+            String projectId = (String) lineData.get("project_id");
+            Object lineIdObj = lineData.get("line_id");
+
+            if (projectId == null || lineIdObj == null) {
+                log.warn("Skipping aggregated data row with null projectId or lineId.");
+                continue;
+            }
+            Integer lineId = ((Number) lineIdObj).intValue();
+
+            long totalRequests = ((Number) lineData.get("totalRequests")).longValue();
+            long successCount = ((Number) lineData.get("successCount")).longValue();
+            BigDecimal totalRevenue = new BigDecimal(lineData.get("totalRevenue").toString());
+
+            ProjectStatisticsDTO projectDTO = projectReportMap.computeIfAbsent(projectId, k -> {
+                ProjectStatisticsDTO dto = new ProjectStatisticsDTO();
+                dto.setProjectId(k);
+                dto.setProjectName(projectNames.getOrDefault(k, "未知项目"));
+                dto.setTotalRequests(0L);
+                dto.setSuccessCount(0L);
+                dto.setTotalRevenue(BigDecimal.ZERO);
+                dto.setTotalCost(BigDecimal.ZERO);
+                dto.setLineDetails(new ArrayList<>());
+                return dto;
+            });
+
+            BigDecimal lineTotalCost;
+            if (agentCostMap != null) {
+                String priceKey = projectId + "-" + lineId;
+                BigDecimal agentPricePerSuccess = agentCostMap.getOrDefault(priceKey, BigDecimal.ZERO);
+                lineTotalCost = agentPricePerSuccess.multiply(new BigDecimal(successCount));
+            } else {
+                lineTotalCost = new BigDecimal(lineData.get("totalCost").toString());
+            }
+
+            LineStatisticsDTO lineDTO = new LineStatisticsDTO();
+            lineDTO.setProjectId(projectId);
+            lineDTO.setLineId(lineId);
+            lineDTO.setProjectName(projectNames.getOrDefault(projectId, "未知项目"));
+            lineDTO.setTotalRequests(totalRequests);
+            lineDTO.setSuccessCount(successCount);
+            lineDTO.setSuccessRate(totalRequests > 0 ? (double) successCount * 100.0 / totalRequests : 0.0);
+            lineDTO.setTotalRevenue(totalRevenue);
+            lineDTO.setTotalCost(lineTotalCost);
+            lineDTO.setTotalProfit(totalRevenue.subtract(lineTotalCost));
+
+            projectDTO.getLineDetails().add(lineDTO);
+
+            projectDTO.setTotalRequests(projectDTO.getTotalRequests() + totalRequests);
+            projectDTO.setSuccessCount(projectDTO.getSuccessCount() + successCount);
+            projectDTO.setTotalRevenue(projectDTO.getTotalRevenue().add(totalRevenue));
+            projectDTO.setTotalCost(projectDTO.getTotalCost().add(lineTotalCost));
+        }
+
+        projectReportMap.values().forEach(p -> {
+            p.setLineCount(p.getLineDetails().size());
+            p.setSuccessRate(p.getTotalRequests() > 0 ? (double) p.getSuccessCount() * 100.0 / p.getTotalRequests() : 0.0);
+            p.setTotalProfit(p.getTotalRevenue().subtract(p.getTotalCost()));
+        });
+
+        return new ArrayList<>(projectReportMap.values());
+    }
+
+
+    /**
+     * 为代理查询其下级用户的取号记录
+     *
+     * @param agentId  当前操作的代理ID
+     * @param queryDTO 查询条件
+     * @return 分页后的记录
+     */
+    @Override
+    public IPage<NumberDTO> listSubordinateRecordsForAgent(Long agentId, SubordinateNumberRecordQueryDTO queryDTO) {
+        List<Long> targetUserIds = new ArrayList<>();
+
+        // 步骤 1: 根据 userName 筛选条件，确定要查询的用户ID范围
+        if (StringUtils.hasText(queryDTO.getUserName())) {
+            // 如果指定了用户名，则精确查找该用户
+            User targetUser = userService.getOne(new LambdaQueryWrapper<User>()
+                    .eq(User::getUserName, queryDTO.getUserName()));
+
+            // 安全校验：确保该用户存在，并且是当前代理的直接下级
+            if (targetUser != null && agentId.equals(targetUser.getParentId())) {
+                targetUserIds.add(targetUser.getId());
+            } else {
+                // 如果用户不存在或不属于该代理，直接返回空结果，防止信息泄露
+                return new Page<>(queryDTO.getCurrent(), queryDTO.getSize());
+            }
+        } else {
+            // 如果未指定用户名，则查询该代理的所有下级用户ID
+            List<User> subUsers = userService.list(new LambdaQueryWrapper<User>()
+                    .select(User::getId) // 优化查询，只获取ID字段
+                    .eq(User::getParentId, agentId));
+            if (subUsers.isEmpty()) {
+                // 如果代理没有任何下级，也返回空结果
+                return new Page<>(queryDTO.getCurrent(), queryDTO.getSize());
+            }
+            targetUserIds = subUsers.stream().map(User::getId).collect(Collectors.toList());
+        }
+
+        // 步骤 2: 构建对 NumberRecord 表的查询条件
+        LambdaQueryWrapper<NumberRecord> wrapper = new LambdaQueryWrapper<>();
+
+        // 核心条件：只查询目标用户ID列表内的记录
+        wrapper.in(NumberRecord::getUserId, targetUserIds);
+
+        // 步骤 3: 处理项目名称筛选
+        if (StringUtils.hasText(queryDTO.getProjectName())) {
+            // 根据项目名称模糊查询，获取匹配的项目ID列表
+            List<String> projectIds = projectService.list(
+                    new LambdaQueryWrapper<Project>().like(Project::getProjectName, queryDTO.getProjectName())
+            ).stream().map(Project::getProjectId).collect(Collectors.toList());
+
+            if (projectIds.isEmpty()) {
+                // 如果没有项目匹配，直接返回空，因为不可能有符合条件的记录
+                return new Page<>(queryDTO.getCurrent(), queryDTO.getSize());
+            }
+            // 将匹配到的项目ID列表加入查询条件
+            wrapper.in(NumberRecord::getProjectId, projectIds);
+        }
+
+        // 步骤 4: 应用其他筛选条件
+        wrapper.eq(StringUtils.hasText(queryDTO.getProjectId()), NumberRecord::getProjectId, queryDTO.getProjectId());
+        wrapper.eq(queryDTO.getLineId() != null, NumberRecord::getLineId, queryDTO.getLineId());
+        wrapper.like(StringUtils.hasText(queryDTO.getPhoneNumber()), NumberRecord::getPhoneNumber, queryDTO.getPhoneNumber());
+        wrapper.eq(queryDTO.getStatus() != null, NumberRecord::getStatus, queryDTO.getStatus());
+        wrapper.eq(queryDTO.getCharged() != null, NumberRecord::getCharged, queryDTO.getCharged());
+        wrapper.ge(queryDTO.getStartTime() != null, NumberRecord::getGetNumberTime, queryDTO.getStartTime());
+        wrapper.le(queryDTO.getEndTime() != null, NumberRecord::getGetNumberTime, queryDTO.getEndTime());
+
+        // 步骤 5: 设置排序规则
+        wrapper.orderByDesc(NumberRecord::getGetNumberTime);
+
+        // 步骤 6: 执行分页查询
+        Page<NumberRecord> pageRequest = new Page<>(queryDTO.getCurrent(), queryDTO.getSize());
+        IPage<NumberRecord> recordPage = this.page(pageRequest, wrapper);
+
+        // 步骤 7: 将查询结果 (IPage<NumberRecord>) 转换为 DTO (IPage<NumberDTO>)
+        return recordPage.convert(this::convertToDTO);
     }
 
 }

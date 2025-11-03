@@ -28,5 +28,5 @@ public interface UserLedgerService extends IService<UserLedger> {
     @Transactional(rollbackFor = Exception.class) // 确保任何异常都会回滚事务
     boolean createLedgerAndUpdateBalance(LedgerCreationDTO request);
 
-    IPage<UserLedger> listSubordinateLedgers(Long agentId, Page<UserLedger> page, Long targetUserId, Date startTime, Date endTime);
+    IPage<UserLedger> listSubordinateLedgers(String userName,Long agentId, Page<UserLedger> page, Long targetUserId, Date startTime, Date endTime);
 }

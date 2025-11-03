@@ -50,7 +50,7 @@ public class UserProjectLineServiceImpl extends ServiceImpl<UserProjectLineMappe
 //    }
 
     @Override
-    public List<UserProjectLine> getLinesByUserIds(List<Long> userIds) {
+    public List<UserProjectLine> getLinesByUserIds(List<Long> userIds,String userName) {
         if (CollectionUtils.isEmpty(userIds)) {
             return Collections.emptyList();
         }

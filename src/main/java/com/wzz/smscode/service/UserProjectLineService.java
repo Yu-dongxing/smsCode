@@ -10,7 +10,7 @@ import java.util.List;
 public interface UserProjectLineService extends IService<UserProjectLine> {
     List<UserProjectLine> getLinesByUserId(Long userId);
 
-    List<UserProjectLine> getLinesByUserIds(List<Long> userIds);
+    List<UserProjectLine> getLinesByUserIds(List<Long> userIds,String userName);
 
     UserProjectLine getByProjectIdLineID(String projectId, Integer lineId,Long userId);
 

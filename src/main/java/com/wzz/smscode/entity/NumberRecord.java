@@ -153,6 +153,13 @@ public class NumberRecord extends BaseEntity {
     private LocalDateTime codeReceivedTime;
 
     /**
+     * 项目成本价（平台获取号码的成本）
+     */
+    @ColumnComment("项目成本价")
+    @TableField("cost_price")
+    private BigDecimal costPrice;
+
+    /**
      * 备注
      */
     @ColumnComment("备注")

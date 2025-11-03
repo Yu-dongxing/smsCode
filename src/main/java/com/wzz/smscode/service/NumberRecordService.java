@@ -3,6 +3,9 @@ package com.wzz.smscode.service;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.wzz.smscode.common.CommonResultDTO;
+import com.wzz.smscode.dto.ProjectStatisticsDTO;
+import com.wzz.smscode.dto.StatisticsQueryDTO;
+import com.wzz.smscode.dto.SubordinateNumberRecordQueryDTO;
 import com.wzz.smscode.dto.number.NumberDTO;
 import com.wzz.smscode.entity.NumberRecord;
 import org.springframework.scheduling.annotation.Async;
@@ -37,4 +40,15 @@ public interface NumberRecordService extends IService<NumberRecord> {
     NumberRecord getRecordByPhone(String phone);
 
     List<String> getPhoneNumbersByProjectId(String projectId);
+
+    /**
+     * 根据用户角色生成统计报表的主入口方法（支持分页和筛选）。
+     *
+     * @param operatorId 当前操作用户的ID
+     * @param queryDTO   包含分页和筛选条件的查询对象
+     * @return 分页后的项目统计报告
+     */
+    IPage<ProjectStatisticsDTO> getStatisticsReport(Long operatorId, StatisticsQueryDTO queryDTO);
+
+    IPage<NumberDTO> listSubordinateRecordsForAgent(Long agentId, SubordinateNumberRecordQueryDTO queryDTO);
 }
