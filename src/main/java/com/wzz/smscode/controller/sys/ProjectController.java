@@ -33,7 +33,8 @@ public class ProjectController {
      */
     @GetMapping("/find/all")
     public Result<?> findAll(@RequestParam(required = false) Long pageNum,
-                             @RequestParam(required = false) Long pageSize) {
+                             @RequestParam(required = false) Long pageSize,
+                             @RequestParam(required = false) String projectName) {
         if (pageNum == null || pageSize == null) {
             pageNum = 1L;
             pageSize = -1L;          // -1 表示不分页，MP 会查全部
@@ -42,7 +43,9 @@ public class ProjectController {
         Page<Project> page = new Page<>(pageNum, pageSize);
         LambdaQueryWrapper<Project> queryWrapper = new LambdaQueryWrapper<>();
         queryWrapper.orderByDesc(Project::getCreateTime);
-
+        if(projectName != null && !projectName.isEmpty()) {
+            queryWrapper.like(Project::getProjectName, projectName);
+        }
         IPage<Project> projectIPage = projectService.page(page, queryWrapper);
 
         return projectIPage.getRecords().isEmpty()

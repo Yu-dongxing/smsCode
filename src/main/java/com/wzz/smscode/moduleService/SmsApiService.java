@@ -54,7 +54,7 @@ public class SmsApiService {
         AuthStrategy strategy = authStrategyFactory.getStrategy(String.valueOf(project.getAuthType()));
         try {
             String responseBody = strategy.buildGetNumberRequest(webClient, project, params).block();
-//            log.info("项目 [{} - {}] 获取手机号API响应: {}", project.getProjectId(), project.getLineId(), responseBody);
+            log.info("项目 [{} - {}] 获取手机号API响应: {}", project.getProjectId(), project.getLineId(), responseBody);
             // 【核心修改】调用新的解析方法
             Map<String, String> parsedResult = responseParser.parsePhoneNumberByType(project, responseBody);
             String phoneNumber = parsedResult.get("phone");
@@ -65,7 +65,7 @@ public class SmsApiService {
                 // 你可以在这里处理解析出的ID，例如存入数据库或缓存，用于后续的释放、拉黑等操作
                 String phoneId = parsedResult.get("id");
                 if (StringUtils.hasText(phoneId)) {
-//                    log.info("为项目 [{} - {}] 解析到手机号唯一ID: {}", project.getProjectId(), project.getLineId(), phoneId);
+                    log.info("为项目 [{} - {}] 解析到手机号唯一ID: {}", project.getProjectId(), project.getLineId(), phoneId);
                 }
                 return parsedResult;
             }

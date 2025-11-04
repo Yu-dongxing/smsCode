@@ -34,6 +34,7 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZonedDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -101,6 +102,10 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
 
         Project projectT = projectService.getProject(projectId, lineId);
         if (projectT == null) return CommonResultDTO.error(-5, "总项目表中不存在这个项目和线路！");
+
+        if (!projectT.isStatus()){
+            return CommonResultDTO.error(Constants.ERROR_NO_NUMBER,"该项目没开启！");
+        }
 
         if (user.getBalance().compareTo(price) < 0) {
             return CommonResultDTO.error(Constants.ERROR_INSUFFICIENT_BALANCE, "余额不足");
@@ -791,13 +796,22 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         }
 
         try {
+            // 新增：优先处理 ISO 8601 格式 (带 'T' 和 'Z')
+            if (dateTimeStr.contains("T") && dateTimeStr.endsWith("Z")) {
+                // ZonedDateTime 可以正确解析包含时区信息的 ISO 字符串
+                // toLocalDateTime() 会将其转换为系统默认时区的本地时间
+                // 如果你的服务器时区不是期望的，需要进一步处理，例如：
+                // return ZonedDateTime.parse(dateTimeStr).withZoneSameInstant(ZoneId.of("Asia/Shanghai")).toLocalDateTime();
+                return ZonedDateTime.parse(dateTimeStr).toLocalDateTime();
+            }
             // 情况一：字符串包含空格，说明带有时间部分
-            if (dateTimeStr.contains(" ")) {
+            else if (dateTimeStr.contains(" ")) {
                 String standardizedStr = dateTimeStr;
                 // 如果格式是 "yyyy-MM-dd HH:mm"，补上秒
                 if (standardizedStr.length() == 16) {
                     standardizedStr += ":00";
                 }
+                // 原有逻辑，将空格替换为'T'以符合LocalDateTime的默认格式
                 return LocalDateTime.parse(standardizedStr.replace(" ", "T"));
             }
             // 情况二：字符串不含空格，说明只有日期部分
