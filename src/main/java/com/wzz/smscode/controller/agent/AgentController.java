@@ -275,6 +275,8 @@ public class AgentController {
             @RequestParam(required = false) Date startTime,
             @RequestParam(required = false) Date endTime,
             @RequestParam(required = false) String userName,
+            @RequestParam(required = false) Integer fundType,    // 新增：接收 fundType 参数
+            @RequestParam(required = false) Integer ledgerType,  // 新增：接收 ledgerType 参数
             @RequestParam(defaultValue = "1") long page,
             @RequestParam(defaultValue = "10") long size) {
 
@@ -283,12 +285,18 @@ public class AgentController {
 
         try {
             Page<UserLedger> pageRequest = new Page<>(page, size);
-            IPage<UserLedger> ledgerPage = userLedgerService.listSubordinateLedgers(userName,agentId, pageRequest, targetUserId, startTime, endTime);
+            // 调用 service 方法时，将新增的参数传递进去
+            IPage<UserLedger> ledgerPage = userLedgerService.listSubordinateLedgers(
+                    userName, agentId, pageRequest, targetUserId, startTime, endTime, fundType, ledgerType
+            );
+
             IPage<LedgerDTO> dtoPage = ledgerPage.convert(ledger -> {
                 LedgerDTO dto = new LedgerDTO();
+                dto.setUserName(ledger.getUserName());
                 dto.setId(ledger.getId());
                 dto.setUserId(ledger.getUserId());
                 dto.setFundType(ledger.getFundType());
+                dto.setLedgerType(ledger.getLedgerType()); // 建议：在 DTO 中也增加 ledgerType 字段
                 dto.setPrice(ledger.getBalanceAfter().subtract(ledger.getBalanceBefore()));
                 dto.setBalanceBefore(ledger.getBalanceBefore());
                 dto.setBalanceAfter(ledger.getBalanceAfter());

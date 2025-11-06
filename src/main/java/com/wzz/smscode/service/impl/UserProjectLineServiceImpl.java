@@ -65,7 +65,7 @@ public class UserProjectLineServiceImpl extends ServiceImpl<UserProjectLineMappe
         queryWrapper.eq(UserProjectLine::getUserId, userId);
         UserProjectLine projectLine = this.getOne(queryWrapper);
         if (projectLine == null){
-            throw new BusinessException(0,"查询为空");
+            throw new BusinessException(0,"当前用户没有该项目的价格配置");
         }
 
         return projectLine;

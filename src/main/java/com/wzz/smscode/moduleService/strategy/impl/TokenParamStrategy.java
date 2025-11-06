@@ -33,7 +33,7 @@ public class TokenParamStrategy extends BaseAuthStrategy {
 
         // 使用修正后的 buildUriFromRoute 方法
         URI finalUri = buildUriFromRoute(project.getDomain(), project.getGetNumberRoute());
-        log.info("构建的获取手机号请求 URI: {}", finalUri);
+        log.info("执行的项目线路：{}-{} 构建的获取手机号请求 URI: {}",project.getProjectId(),project.getLineId() ,finalUri);
 
         Consumer<WebClient.RequestHeadersSpec<?>> authApplier = spec -> {};
 
@@ -56,7 +56,7 @@ public class TokenParamStrategy extends BaseAuthStrategy {
 
         // 使用修正后的 buildUriFromRoute 方法
         URI finalUri = buildUriFromRoute(project.getDomain(), getCodeRoute);
-//        log.info("构建的获取验证码请求 URI: {}", finalUri);
+        log.info("构建的获取验证码请求 URI: {}", finalUri);
 
         Consumer<WebClient.RequestHeadersSpec<?>> authApplier = spec -> {};
 
@@ -75,7 +75,7 @@ public class TokenParamStrategy extends BaseAuthStrategy {
     private URI buildUriFromRoute(String domain, String route) {
         // 拼接完整的 URL 字符串
         String fullUrl = normalizeDomain(domain) + route;
-//        log.info("fullUrl: {}", fullUrl);
+        log.info("fullUrl: {}", fullUrl);
 
         // 让 UriComponentsBuilder 从完整的 URL 字符串进行构建
         // 它会自动解析路径、查询参数，并对它们进行正确的编码

@@ -2,6 +2,8 @@ package com.wzz.smscode.moduleService.strategy;
 
 import com.wzz.smscode.entity.Project;
 import com.wzz.smscode.enums.RequestType;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.springframework.http.MediaType;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
@@ -21,6 +23,8 @@ import java.util.function.Consumer;
  */
 public abstract class BaseAuthStrategy implements AuthStrategy {
 
+    private static final Logger log = LogManager.getLogger(BaseAuthStrategy.class);
+
     /**
      * 【旧方法 - 仅为兼容保留】
      * 构建并执行 WebClient 请求的通用核心方法。
@@ -32,6 +36,7 @@ public abstract class BaseAuthStrategy implements AuthStrategy {
                                                   RequestType requestType,
                                                   Map<String, Object> params,
                                                   Consumer<WebClient.RequestHeadersSpec<?>> authApplier) {
+        log.info("进入buildAndExecuteRequest（old），url:{}",url);
 
         WebClient.RequestBodyUriSpec requestSpec = webClient.method(org.springframework.http.HttpMethod.valueOf(method.toUpperCase()));
         WebClient.RequestHeadersSpec<?> headersSpec;
@@ -55,7 +60,7 @@ public abstract class BaseAuthStrategy implements AuthStrategy {
                 break;
 
             case PARAM:
-            default: // 默认为 PARAM 类型 (这是有问题的实现)
+            default: // 默认为 PARAM 类型
                 MultiValueMap<String, String> queryParams = new LinkedMultiValueMap<>();
                 params.forEach((key, value) -> queryParams.add(key, String.valueOf(value)));
                 headersSpec = requestSpec.uri(uriBuilder -> uriBuilder.path(url)
@@ -78,6 +83,7 @@ public abstract class BaseAuthStrategy implements AuthStrategy {
                                                   RequestType requestType,
                                                   Map<String, Object> params,
                                                   Consumer<WebClient.RequestHeadersSpec<?>> authApplier) {
+        log.info("进入buildAndExecuteRequest（NEW），url:{}",uri.toString());
 
         WebClient.RequestBodyUriSpec requestSpec = webClient.method(org.springframework.http.HttpMethod.valueOf(method.toUpperCase()));
         WebClient.RequestHeadersSpec<?> headersSpec;

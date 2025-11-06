@@ -15,7 +15,11 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
+
+import java.util.HashMap;
+import java.util.Map;
 
 @Slf4j
 @RestControllerAdvice
@@ -169,6 +173,43 @@ public class GlobalExceptionHandler {
     public Result<?> handleAllException(Exception e) {
         log.error("服务器未知异常:{ }", e);
         return Result.error(500, "系统繁忙，未知错误，请稍后再试");
+    }
+
+    /**
+     * 【重点修改】处理调用外部服务(WebClient)时发生的异常
+     * 并将详细的错误信息返回给前端
+     */
+    @ExceptionHandler(WebClientResponseException.class)
+    public Result<?> handleWebClientResponseException(WebClientResponseException e) {
+        // 1. 提取详细的错误信息
+        int statusCode = e.getStatusCode().value();
+        String responseBody = e.getResponseBodyAsString();
+        String requestUri = e.getRequest() != null ? e.getRequest().getURI().toString() : "N/A";
+
+        // 2. 记录完整的错误日志，用于后端排查
+        log.error("调用外部服务失败: Status='{}', URI='{}', Body='{}'",
+                statusCode, requestUri, responseBody, e);
+
+        // 3. 构建返回给前端的结构化错误详情
+        Map<String, Object> errorDetails = new HashMap<>();
+        errorDetails.put("status", statusCode);
+        errorDetails.put("uri", requestUri);
+        errorDetails.put("body", responseBody);
+
+        // 4. 根据不同的状态码，返回不同的外层提示信息
+        if (e.getStatusCode().isSameCodeAs(HttpStatus.NOT_FOUND)) {
+            // 对于本次的 404 错误
+            return Result.error(HttpStatus.BAD_GATEWAY.value(), "依赖的外部资源未找到", errorDetails);
+        } else if (e.getStatusCode().is4xxClientError()) {
+            // 对于其他 4xx 客户端错误 (如 400, 401, 403)
+            return Result.error(HttpStatus.BAD_GATEWAY.value(), "外部服务调用异常，请检查请求", errorDetails);
+        } else if (e.getStatusCode().is5xxServerError()) {
+            // 如果是服务端错误 (如 500, 503)，说明下游服务本身出了问题
+            return Result.error(HttpStatus.SERVICE_UNAVAILABLE.value(), "外部依赖服务暂时不可用", errorDetails);
+        }
+
+        // 对于其他未分类的HTTP错误
+        return Result.error(HttpStatus.INTERNAL_SERVER_ERROR.value(), "调用外部服务时发生未知错误", errorDetails);
     }
     /**
      * 数据库框架异常MyBatisSystemException

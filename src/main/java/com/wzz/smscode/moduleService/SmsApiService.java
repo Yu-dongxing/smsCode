@@ -50,7 +50,7 @@ public class SmsApiService {
      * @return 手机号或操作ID
      */
     public Map<String, String> getPhoneNumber(Project project, String... params) { // 1. 签名增加 varargs
-//        log.info("开始为项目 [{} - {}] 获取手机号...", project.getProjectId(), project.getLineId());
+        log.info("开始为项目 [{} - {}] 获取手机号...", project.getProjectId(), project.getLineId());
         AuthStrategy strategy = authStrategyFactory.getStrategy(String.valueOf(project.getAuthType()));
         try {
             String responseBody = strategy.buildGetNumberRequest(webClient, project, params).block();
@@ -89,8 +89,8 @@ public class SmsApiService {
      * @return 最新的验证码
      */
     public String getVerificationCode(Project project, String identifier) {
-//        log.info("开始为项目 [{} - {}], 标识符 [{}] 获取验证码 (最大尝试次数: {})...",
-//                project.getProjectId(), project.getLineId(), identifier, project.getCodeMaxAttempts());
+        log.info("开始为项目 [{} - {}], 标识符 [{}] 获取验证码 (最大尝试次数: {})...",
+                project.getProjectId(), project.getLineId(), identifier, project.getCodeMaxAttempts());
         AuthStrategy strategy = authStrategyFactory.getStrategy(String.valueOf(project.getAuthType()));
 
         // 定义计数器和最大尝试次数
@@ -103,11 +103,9 @@ public class SmsApiService {
         while (attempts < maxAttempts) {
             try {
                 String responseBody = strategy.buildGetCodeRequest(webClient, project, identifier).block();
-//                log.info("轮询获取验证码响应: {}", responseBody);
-
-                //todo 上线需要删除
+                log.info("轮询获取验证码响应: {}", responseBody);
                 if (responseBody != null && (responseBody.contains("错误") || responseBody.contains("失败"))) {
-//                    log.info("响应体中检测到错误信息，将立即停止轮询。响应内容: {}", responseBody);
+                    log.info("响应体中检测到错误信息，将立即停止轮询。响应内容: {}", responseBody);
                     // 抛出业务异常，并将完整的响应体作为错误信息返回给调用方
                     throw new BusinessException("获取验证码失败:" + responseBody);
                 }
@@ -120,7 +118,7 @@ public class SmsApiService {
                         !"null".equalsIgnoreCase(codeOpt.get().trim())) {
 
                     String code = codeOpt.get().trim();
-//                    log.info("成功获取到验证码: {}", code);
+                    log.info("成功获取到验证码: {}", code);
                     return code; // 获取到有效验证码后直接返回
                 }
 
@@ -151,14 +149,14 @@ public class SmsApiService {
      * @return Optional<String> 包含验证码（如果获取到）
      */
     public Optional<String> fetchVerificationCodeOnce(Project project, String identifier) {
-//        log.info("为项目 [{}], 标识符 [{}] 执行单次验证码获取...", project.getProjectId(), identifier);
+        log.info("为项目 [{}], 标识符 [{}] 执行单次验证码获取...", project.getProjectId(), identifier);
         AuthStrategy strategy = authStrategyFactory.getStrategy(String.valueOf(project.getAuthType()));
         try {
             String responseBody = strategy.buildGetCodeRequest(webClient, project, identifier).block();
-//            log.info("单次获取验证码响应: {}", responseBody);
+            log.info("单次获取验证码响应: {}", responseBody);
 
             if (responseBody != null && (responseBody.contains("错误") || responseBody.contains("失败"))) {
-//                log.warn("上游API在单次获取中返回明确错误: {}", responseBody);
+                log.warn("上游API在单次获取中返回明确错误: {}", responseBody);
                 return Optional.empty(); // 返回空，表示未获取到
             }
 
@@ -206,14 +204,14 @@ public class SmsApiService {
         // 1. 获取系统配置并检查功能总开关
         SystemConfig systemConfig = systemConfigService.getConfig();
         if (project.getEnableFilter() == null || !project.getEnableFilter() || !systemConfig.getEnableNumberFiltering()) {
-//            log.info("系统配置：{},项目 [{}] 未开启号码筛选功能，默认号码 [{}] 可用。",systemConfig.getEnableNumberFiltering(), project.getProjectName(), phoneNumber);
+            log.info("系统配置：{},项目 [{}] 未开启号码筛选功能，默认号码 [{}] 可用。",systemConfig.getEnableNumberFiltering(), project.getProjectName(), phoneNumber);
             return Mono.just(true); // 功能未开启，默认可用
         }
 
         // 2. 从系统配置中获取服务器地址列表
         List<String> servers = getServerList();
         if (servers.isEmpty()) {
-//            log.info("号码筛选功能已开启，但系统未配置任何有效的筛选服务器地址。号码 [{}] 将被视为不可用。", phoneNumber);
+            log.info("号码筛选功能已开启，但系统未配置任何有效的筛选服务器地址。号码 [{}] 将被视为不可用。", phoneNumber);
             return Mono.just(false);
         }
 
@@ -239,9 +237,9 @@ public class SmsApiService {
                             .timeout(Duration.ofSeconds(50)) // 根据建议设置45-60秒超时
                             .flatMap(responseBody -> {
                                 // 请求成功，解析响应体
-//                                log.info("服务器 [{}] 响应: {}", serverIp, responseBody);
+                                log.info("服务器 [{}] 响应: {}", serverIp, responseBody);
                                 boolean isAvailable = parseAvailabilityResponse(responseBody, cpid);
-//                                log.info("号码 [{}] 在服务器 [{}] 的筛选结果: {}", phoneNumber, serverIp, isAvailable ? "可用" : "不可用");
+                                log.info("号码 [{}] 在服务器 [{}] 的筛选结果: {}", phoneNumber, serverIp, isAvailable ? "可用" : "不可用");
                                 return Mono.just(isAvailable);
                             })
                             .doOnError(e -> log.warn("访问服务器 [{}] 失败: {}. 正在尝试下一个...", serverIp, e.getMessage()))

@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- status="warn" 表示Log4j2本身的日志级别 -->
+<Configuration status="warn">
+    <Appenders>
+<!--         1. 控制台输出 -->
+        <Console name="Console" target="SYSTEM_OUT">
+            <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss.SSS} [%t] %-5level %logger{36} - %msg%n"/>
+        </Console>
+
+        <!-- 2. 滚动文件输出：按文件大小分割 -->
+        <RollingFile name="RollingFile"
+                     fileName="logs/app.log"
+                     filePattern="logs/app-%i.log.gz">
+            <PatternLayout>
+                <Pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%t] %-5level %logger{36} - %msg%n</Pattern>
+            </PatternLayout>
+            <Policies>
+                <!--
+                    OnStartupTriggeringPolicy: 每次启动时都会创建一个新的日志文件。
+                    SizeBasedTriggeringPolicy: 定义了触发滚动的条件，这里是当文件大小达到 10 MB 时。
+                -->
+                <OnStartupTriggeringPolicy />
+                <SizeBasedTriggeringPolicy size="100 MB" />
+            </Policies>
+            <!--
+                DefaultRolloverStrategy: 定义了滚动的策略。
+                max="20" 表示最多保留 20 个滚动日志文件。当超过这个数量时，最旧的文件将被删除。
+            -->
+            <DefaultRolloverStrategy max="200" />
+        </RollingFile>
+    </Appenders>
+
+    <Loggers>
+        <!--
+            root logger: 所有日志记录器的根节点。
+            level="info" 表示默认记录 info 及以上级别的日志。
+            将 Console 和 RollingFile 两个 Appender 关联到 root logger，
+            这样日志会同时输出到控制台和文件。
+        -->
+        <Root level="info">
+            <AppenderRef ref="Console"/>
+            <AppenderRef ref="RollingFile"/>
+        </Root>
+    </Loggers>
+</Configuration>

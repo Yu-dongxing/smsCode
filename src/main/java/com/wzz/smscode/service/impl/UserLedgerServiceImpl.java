@@ -20,6 +20,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -83,14 +84,18 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
     }
 
     /**
-     * 通过条件查询号码表
-     * @param adminId 管理员id
-     * @param adminPassword 管理员密码
-     * @param filterByUserId 用户id
+     * 通过条件查询全局账本记录
+     * @param adminId 管理员id (暂未使用)
+     * @param adminPassword 管理员密码 (暂未使用)
+     * @param username 用户名（模糊查询）
+     * @param filterByUserId 用户ID
      * @param startTime 开始时间
      * @param endTime 结束时间
-     * @param page 分页
-     * @return 分页的
+     * @param page 分页对象
+     * @param remark 备注（模糊查询）
+     * @param fundType 资金类型
+     * @param ledgerType 账本类型
+     * @return 分页的账本DTO
      */
     @Override
     public IPage<LedgerDTO> listAllLedger(
@@ -101,14 +106,9 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
             Date startTime,
             Date endTime,
             Page<UserLedger> page,
-            String remark) {
-        // 1. 管理员身份验证
-//        User admin = userService.authenticate(adminId, adminPassword);
-        // TODO: 此处应增加更严格的管理员角色判断
-//        if (admin == null || admin.getIsAgent() != 1) { // 假设管理员也是一种特殊的代理
-//            log.warn("管理员 {} 账本查询失败：身份验证或权限不足", adminId);
-//            return null;
-//        }
+            String remark,
+            Integer fundType,   // 新增：资金类型
+            Integer ledgerType) { // 新增：账本类型
 
         // 2. 构建查询条件
         LambdaQueryWrapper<UserLedger> wrapper = new LambdaQueryWrapper<>();
@@ -117,7 +117,7 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
         if (username != null && !username.trim().isEmpty()) {
             List<Long> userIds = userService.findUserIdsByUsernameLike(username);
 
-            // 如果根据用户名模糊查询没有找到任何用户，直接返回空的分页结果，避免无效的数据库查询
+            // 如果根据用户名模糊查询没有找到任何用户，直接返回空的分页结果
             if (CollectionUtils.isEmpty(userIds)) {
                 return new Page<LedgerDTO>(page.getCurrent(), page.getSize(), 0).setRecords(Collections.emptyList());
             }
@@ -127,11 +127,18 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
             // 只有在 username 未提供时，才使用 filterByUserId
             wrapper.eq(UserLedger::getUserId, filterByUserId);
         }
+
+        // 备注的模糊查询
         if (remark != null && !remark.trim().isEmpty()) {
             wrapper.like(UserLedger::getRemark, remark);
         }
 
         // 4. 添加其他筛选条件
+        // ----- 新增的筛选条件 -----
+        wrapper.eq(fundType != null, UserLedger::getFundType, fundType);
+        wrapper.eq(ledgerType != null, UserLedger::getLedgerType, ledgerType);
+        // -------------------------
+
         wrapper.ge(startTime != null, UserLedger::getTimestamp, startTime);
         wrapper.le(endTime != null, UserLedger::getTimestamp, endTime);
         wrapper.orderByDesc(UserLedger::getTimestamp);
@@ -141,7 +148,6 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
 
         // 6. 转换 DTO
         return ledgerPage.convert(this::convertToDTO);
-
     }
 
     /**
@@ -261,6 +267,7 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
         // 5. 创建并保存账本记录
         UserLedger ledger = new UserLedger();
         ledger.setUserId(request.getUserId());
+        ledger.setUserName(user.getUserName());
         ledger.setPrice(amount); // `price` 字段记录变动额，始终为正
         ledger.setLedgerType(request.getLedgerType());
         ledger.setBalanceBefore(balanceBefore);
@@ -277,11 +284,12 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
     }
 
     @Override
-    public IPage<UserLedger> listSubordinateLedgers(String userName,Long agentId, Page<UserLedger> page, Long targetUserId, Date startTime, Date endTime) {
+    public IPage<UserLedger> listSubordinateLedgers(String userName, Long agentId, Page<UserLedger> page, Long targetUserId, Date startTime, Date endTime, Integer fundType, Integer ledgerType) {
         // 1. 获取该代理的所有下级用户的ID
         LambdaQueryWrapper<User> userQuery = new LambdaQueryWrapper<>();
         userQuery.eq(User::getParentId, agentId);
-        if (userName != null) {
+        // 优化：使用 StringUtils.hasText 替代 != null 判断，更严谨
+        if (StringUtils.hasText(userName)) {
             userQuery.like(User::getUserName, userName);
         }
         List<User> subUsers = userService.list(userQuery);
@@ -297,15 +305,11 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
 
         // 3. 安全性校验与核心查询条件
         if (targetUserId != null) {
-            // 如果传入了 targetUserId，必须校验该用户是否是当前代理的下级
             if (!subUserIds.contains(targetUserId)) {
-                // 抛出异常或返回空，这里抛出异常让 Controller 捕获更清晰
                 throw new SecurityException("试图查询的用户不属于该代理");
             }
-            // 只查询这一个下级用户
             ledgerWrapper.eq(UserLedger::getUserId, targetUserId);
         } else {
-            // 查询所有下级用户
             ledgerWrapper.in(UserLedger::getUserId, subUserIds);
         }
 
@@ -316,6 +320,17 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
         if (endTime != null) {
             ledgerWrapper.le(UserLedger::getTimestamp, endTime);
         }
+
+        // ==================== 新增筛选条件 ====================
+        // 如果传入了资金类型，则添加为查询条件
+        if (fundType != null) {
+            ledgerWrapper.eq(UserLedger::getFundType, fundType);
+        }
+        // 如果传入了账本类型，则添加为查询条件
+        if (ledgerType != null) {
+            ledgerWrapper.eq(UserLedger::getLedgerType, ledgerType);
+        }
+        // ====================================================
 
         // 5. 按时间倒序排序
         ledgerWrapper.orderByDesc(UserLedger::getTimestamp);

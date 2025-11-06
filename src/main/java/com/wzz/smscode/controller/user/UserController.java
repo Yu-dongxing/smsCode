@@ -27,6 +27,7 @@ import org.springframework.web.client.RestTemplate;
 import java.math.BigDecimal;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 用户接口控制器
@@ -228,19 +229,23 @@ public class UserController {
      * @param userName    用户ID
      * @param password  用户密码
      * @param projectId 项目ID
-     * @return CommonResultDTO，data 为可用的线路ID集合
+     * @return CommonResultDTO，data 为可用的线路列表，每个元素包含 lineId 和 lineName
      */
     @RequestMapping(value = "/listProjectLines", method = {RequestMethod.GET, RequestMethod.POST})
     public CommonResultDTO<?> listProjectLines(
             @RequestParam String userName,
             @RequestParam String password,
             @RequestParam String projectId) {
-        // 权限校验
+        // 1. 权限校验
         User user = userService.authenticateUserByUserName(userName, password);
         if (user == null) {
             return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED, "用户ID或密码错误");
         }
-        List<String> lines = projectService.listLines(projectId);
+
+        // 2. 调用新的 service 方法，获取包含 id 和 name 的 Map 列表
+        List<Map<String, Object>> lines = projectService.listLinesWithCamelCaseKey(projectId);
+
+        // 3. 将查询结果返回
         return CommonResultDTO.success("查询成功", lines);
     }
 

@@ -43,6 +43,14 @@ public class UserLedger extends BaseEntity {
     private Long userId;
 
     /**
+     * 用户名
+     */
+    @ColumnComment("用户名")
+    @TableField("user_name")
+    @DefaultValue("'无'")
+    private String userName;
+
+    /**
      * 项目ID（业务资金变动时填写，如取号扣款）
      */
     @ColumnComment("项目ID")

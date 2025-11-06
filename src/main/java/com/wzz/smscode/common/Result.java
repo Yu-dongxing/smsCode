@@ -4,6 +4,8 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.Map;
+
 /**
  * 通用响应结果类
  *
@@ -69,5 +71,9 @@ public class Result<T> {
      */
     public static Result error(int code, String message) {
         return new Result(code, message, null);
+    }
+
+    public static Result<?> error(int value, String message, Map<String, Object> errorDetails) {
+        return new Result<>(value, message, errorDetails);
     }
 }

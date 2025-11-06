@@ -22,6 +22,11 @@ public class LedgerDTO {
     private Long userId;
 
     /**
+     * 用户名
+     */
+    private String userName;
+
+    /**
      * 项目ID（业务资金变动时填写，如取号扣款）
      */
     private String projectId;

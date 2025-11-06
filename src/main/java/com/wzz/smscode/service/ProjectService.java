@@ -14,21 +14,15 @@ import java.util.Map;
 
 public interface ProjectService extends IService<Project> {
 
-    @Transactional
-    boolean createProject(ProjectDTO projectDTO);
 
-    @Transactional
-    boolean updateProject(ProjectDTO projectDTO);
-
-    @Transactional
+    @Transactional(rollbackFor = Exception.class) // 确保事务性
     boolean updateProject(Project projectDTO);
-
-    @Transactional
-    boolean deleteProject(String projectId, Integer lineId);
 
     Project getProject(String projectId, Integer lineId);
 
     List<String> listLines(String projectId);
+
+    List<Map<String, Object>> listLinesWithCamelCaseKey(String projectId);
 
     Map<String, ProjectPriceDetailsDTO> getAllProjectPrices();
 

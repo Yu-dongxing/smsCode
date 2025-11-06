@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.baomidou.mybatisplus.extension.repository.AbstractRepository;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -132,7 +133,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                 }
             } catch (BusinessException e) {
                 log.error("调用接口获取号码失败 (尝试 {}/{})，这是一个致命错误，终止流程: {}", attempt, MAX_ATTEMPTS, e.getMessage());
-                return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, "上游接口错误: " + e.getMessage());
+                return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, "接口错误: " + e.getMessage());
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 log.error("重试等待时线程被中断", e);
@@ -329,12 +330,21 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             Project project = projectService.getProject(record.getProjectId(), record.getLineId());
             if (project != null) {
                 // 根据项目配置决定使用 phone 还是 id 作为API请求的 identifier
-                final String finalIdentifierId = project.getResponsePhoneField() != null
-                        ? record.getApiPhoneId()
-                        : record.getPhoneNumber();
+                String key = project.getCodeRetrievalIdentifierKey();
+                Optional<String> codeOpt;
+                if (key != null && key.equals("phone") ) {
+                    log.info("使用手机号请求：{}", record.getPhoneNumber());
+                    codeOpt = smsApiService.fetchVerificationCodeOnce(project, record.getPhoneNumber());
+                }else {
+                    log.info("使用id请求：{}", record.getPhoneNumber());
+                    codeOpt = smsApiService.fetchVerificationCodeOnce(project, record.getApiPhoneId());
+                }
+//                final String finalIdentifierId = project.getResponsePhoneField() != null
+//                        ? record.getApiPhoneId()
+//                        : record.getPhoneNumber();
 
                 // 调用单次获取方法
-                Optional<String> codeOpt = smsApiService.fetchVerificationCodeOnce(project, finalIdentifierId);
+
 
                 if (codeOpt.isPresent()) {
                     String code = codeOpt.get();
@@ -509,16 +519,34 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         return recordPage.convert(this::convertToDTO);
     }
 
-    /**
-     * 列表查询所有号码记录（增加了新的过滤条件）
-     */
     @Override
     public IPage<NumberRecord> listAllNumbers(Integer statusFilter, Date startTime, Date endTime,
                                               Long userId, String projectId, String phoneNumber, Integer charged,
-                                              IPage<NumberRecord> page,String lineId) {
-        LambdaQueryWrapper<NumberRecord> wrapper = new LambdaQueryWrapper<>();
-        addCommonFilters(wrapper, statusFilter, startTime, endTime, userId, projectId, phoneNumber, charged,lineId);
+                                              IPage<NumberRecord> page, String lineId, String userName) {
 
+        LambdaQueryWrapper<NumberRecord> wrapper = new LambdaQueryWrapper<>();
+
+        // 使用标准Java方法判断 userName 是否有效
+        if (userName != null && !userName.trim().isEmpty()) {
+
+            // 根据userName模糊查询匹配的用户ID列表
+            List<Long> subUserIds = userService.list(new LambdaQueryWrapper<User>().like(User::getUserName, userName))
+                    .stream().map(User::getId).toList();
+
+            // 优化：如果根据userName没有找到任何用户，直接返回空结果集
+            if (subUserIds.isEmpty()) {
+                return page.setTotal(0).setRecords(Collections.emptyList());
+            }
+
+            // 将找到的用户ID作为筛选条件
+            // 假设NumberRecord实体中有关联用户ID的字段，例如叫 userId
+            wrapper.in(NumberRecord::getUserId, subUserIds);
+        }
+
+        // 添加其他通用的筛选条件
+        addCommonFilters(wrapper, statusFilter, startTime, endTime, userId, projectId, phoneNumber, charged, lineId);
+
+        // 执行分页查询并返回
         return this.page(page, wrapper);
     }
 

@@ -34,7 +34,7 @@ public interface NumberRecordService extends IService<NumberRecord> {
     IPage<NumberRecord> listAllNumbers(
             Integer statusFilter, Date startTime, Date endTime,
             Long userId, String projectId, String phoneNumber, Integer charged,
-            IPage<NumberRecord> page,String lineId
+            IPage<NumberRecord> page,String lineId,String userName
     );
 
     NumberRecord getRecordByPhone(String phone);

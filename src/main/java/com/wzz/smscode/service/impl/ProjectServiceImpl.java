@@ -1,8 +1,8 @@
 package com.wzz.smscode.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.wzz.smscode.dto.EntityDTO.ProjectDTO;
 import com.wzz.smscode.dto.project.ProjectPriceDetailsDTO;
 import com.wzz.smscode.dto.project.ProjectPriceSummaryDTO;
 import com.wzz.smscode.entity.Project;
@@ -23,6 +23,7 @@ import org.springframework.util.CollectionUtils;
 
 import java.math.BigDecimal;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -36,70 +37,59 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
     @Autowired
     @Lazy
     private UserService userService;
-
-    // 注入 UserProjectLineService 用于批量保存数据
     @Autowired
     private UserProjectLineService userProjectLineService;
 
-    @Transactional
-    @Override
-    public boolean createProject(ProjectDTO projectDTO) {
-        // 检查组合键是否已存在
-        if (getProject(projectDTO.getProjectId(), projectDTO.getLineId()) != null) {
-            throw new BusinessException(
-                    String.format("项目线路已存在: projectId=%s, lineId=%s", projectDTO.getProjectId(), projectDTO.getLineId())
-            );
-        }
-        // DTO 转换为 实体
-        Project project = new Project();
-        BeanUtils.copyProperties(projectDTO, project);
 
-        return this.save(project);
-    }
 
-    @Transactional
-    @Override
-    public boolean updateProject(ProjectDTO projectDTO) {
-        Project existingProject = getProject(projectDTO.getProjectId(), projectDTO.getLineId());
-        if (existingProject == null) {
-            return false; // 记录不存在，更新失败
-        }
-
-        Project projectToUpdate = new Project();
-        BeanUtils.copyProperties(projectDTO, projectToUpdate);
-        // 确保主键 ID 被设置，以便 Mybatis-Plus 按 ID 更新
-        projectToUpdate.setId(existingProject.getId());
-
-        return this.updateById(projectToUpdate);
-    }
-
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     @Override
     public boolean updateProject(Project projectDTO) {
-        Project existingProject = getProject(projectDTO.getProjectId(), Integer.valueOf(projectDTO.getLineId()));
-        if (existingProject == null) {
-            return false; // 记录不存在，更新失败
+        // 1. 参数校验：确保用于定位记录的 ID 不为空
+        if (projectDTO.getId() == null) {
+            throw new BusinessException("更新项目失败：必须提供项目的主键ID。");
         }
 
+        // 2. 查询项目更新前的状态
+        Project existingProject = this.getById(projectDTO.getId());
+        if (existingProject == null) {
+            log.warn("尝试更新一个不存在的项目，ID: {}", projectDTO.getId());
+            return false; // 或者抛出异常 new BusinessException("要更新的项目不存在");
+        }
+
+        // 3. 更新 Project 表自身
         Project projectToUpdate = new Project();
         BeanUtils.copyProperties(projectDTO, projectToUpdate);
-        // 确保主键 ID 被设置，以便 Mybatis-Plus 按 ID 更新
-        projectToUpdate.setId(existingProject.getId());
+        boolean projectUpdated = this.updateById(projectToUpdate);
+        if (!projectUpdated) {
+            log.error("更新项目基础信息失败, Project ID: {}", projectDTO.getId());
+            throw new BusinessException("更新项目基础信息失败，操作已回滚。");
+        }
+        log.info("项目基础信息已更新, ID: {}", projectDTO.getId());
 
-        return this.updateById(projectToUpdate);
-    }
+        boolean needsSync = !existingProject.getProjectId().equals(projectDTO.getProjectId()) ||
+                !existingProject.getLineId().equals(String.valueOf(projectDTO.getLineId())) ||
+                !existingProject.getProjectName().equals(projectDTO.getProjectName()) ||
+                existingProject.getCostPrice().compareTo(projectDTO.getCostPrice()) != 0;
 
-    @Transactional
-    @Override
-    public boolean deleteProject(String projectId, Integer lineId) {
-        // TODO: 在删除前，应检查是否有号码记录等关联数据正在使用此线路
-        // 例如: if (numberRecordService.isLineInUse(projectId, lineId)) { throw new BusinessException("线路正在使用中，无法删除"); }
+        if (needsSync) {
+            log.info("检测到项目关键信息变更，开始同步更新用户项目线路配置...");
+            LambdaUpdateWrapper<UserProjectLine> updateWrapper = new LambdaUpdateWrapper<>();
 
-        LambdaQueryWrapper<Project> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(Project::getProjectId, projectId)
-                .eq(Project::getLineId, lineId);
+            updateWrapper.eq(UserProjectLine::getProjectTableId, existingProject.getId());
+            updateWrapper.set(UserProjectLine::getProjectId, projectDTO.getProjectId());
+            updateWrapper.set(UserProjectLine::getLineId, String.valueOf(projectDTO.getLineId()));
+            updateWrapper.set(UserProjectLine::getProjectName, projectDTO.getProjectName());
+            updateWrapper.set(UserProjectLine::getCostPrice, projectDTO.getCostPrice());
 
-        return this.remove(wrapper);
+            boolean linesUpdated = userProjectLineService.update(updateWrapper);
+
+            log.info("用户项目线路配置同步完成:{}, Project ID: {}",linesUpdated, projectDTO.getId());
+        } else {
+            log.info("项目信息已更新，但未涉及需要同步到用户线路配置的关键字段，跳过同步。Project ID: {}", projectDTO.getId());
+        }
+
+        return true;
     }
 
     @Override
@@ -120,6 +110,24 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
 
         return projects.stream()
                 .map(Project::getLineId)
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public List<Map<String, Object>> listLinesWithCamelCaseKey(String projectId) {
+        LambdaQueryWrapper<Project> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(Project::getProjectId, projectId)
+                .select(Project::getLineId, Project::getLineName);
+
+        List<Project> projects = this.list(wrapper);
+
+        return projects.stream()
+                .map(project -> {
+                    Map<String, Object> map = new HashMap<>();
+                    map.put("lineId", project.getLineId());
+                    map.put("lineName", project.getLineName());
+                    return map;
+                })
                 .collect(Collectors.toList());
     }
 
@@ -177,6 +185,9 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
     @Override
     @Transactional(rollbackFor = Exception.class) // *** 关键：确保整个方法是事务性的 ***
     public boolean save(Project project) {
+        if(project.getLineId() == null || project.getProjectId() == null || project.getProjectName() == null) {
+            throw new BusinessException(0,"项目id，项目名称，线路id不能为空");
+        }
         // 1. 首先，保存项目自身，这样项目就会获得一个数据库自增ID
         boolean projectSaved = super.save(project);
         if (!projectSaved) {

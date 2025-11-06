@@ -63,7 +63,7 @@ public class ProjectController {
     public Result<?> updateByProject(@RequestBody Project project){
         log.info("传入数据：{}",project);
 
-        boolean is = projectService.updateById(project);
+        boolean is = projectService.updateProject(project);
         if (is){
             return Result.success("更新成功");
         }

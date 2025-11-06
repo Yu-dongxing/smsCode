@@ -240,6 +240,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         }
         if (userList.size() > 1) {
             log.warn("警告：数据库中存在多个用户名为 '{}' 的用户，请检查数据！", userId);
+            throw new BusinessException(0,"系统中存在多个相同用户！");
         }
 
         // 3. 遍历查找密码匹配的用户
@@ -277,6 +278,17 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         BigDecimal costPrice;
     }
 
+    /**
+     * 根据用户名查询用户列表。
+     * @param userName 用户名
+     * @return 用户列表。如果没有找到，返回一个空列表 (empty list)。
+     */
+    public List<User> listByUserName(String userName){
+        LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
+        queryWrapper.eq(User::getUserName, userName);
+        return this.list(queryWrapper); // 使用 list() 方法代替 getOne()
+    }
+
     @Autowired
     private UserProjectLineService userProjectLineService;
 
@@ -294,9 +306,15 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             if (operator == null) throw new BusinessException("操作员不存在");
             if (operator.getIsAgent() != 1) throw new BusinessException("无权创建用户");
         }
-        User uu = this.getByUserName(dto.getUsername());
-        if (uu != null) {
-            throw new BusinessException(0,"该用户已存在！");
+        List<User> existingUsers = this.listByUserName(dto.getUsername());
+
+        // 判断列表是否不为空
+        if (!existingUsers.isEmpty()) {
+            // 您甚至可以记录一个更详细的日志
+            if (existingUsers.size() > 1) {
+                log.warn("数据校验警告：数据库中存在 {} 个名为 '{}' 的重复用户！", existingUsers.size(), dto.getUsername());
+            }
+            throw new BusinessException(0, "该用户名已存在！");
         }
 
         // 2. 构造用户实体，余额初始化为0
@@ -394,13 +412,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         for (ProjectPriceDTO priceDto : priceSettings) {
             String compositeKey = priceDto.getProjectId() + "-" + priceDto.getLineId();
             Project meta = projMetaMap.get(compositeKey);
-
-            // 3. [健壮性] 校验每个价格配置对应的项目是否存在
             if (meta == null) {
-                // 如果找不到对应的项目元数据，说明传入了无效的ID，应抛出异常终止操作
                 throw new BusinessException("配置失败：项目ID " + priceDto.getProjectId() + " 或线路ID " + priceDto.getLineId() + " 无效。");
             }
-
             UserProjectLine upl = new UserProjectLine();
             upl.setUserId(user.getId());
             upl.setProjectId(String.valueOf(priceDto.getProjectId()));
@@ -408,10 +422,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             upl.setAgentPrice(priceDto.getPrice()); // 这是为新用户设置的售价
             upl.setProjectName(meta.getProjectName()); // 从元数据中获取
             upl.setCostPrice(meta.getCostPrice());   // 从元数据中获取成本价
-
             linesToInsert.add(upl);
         }
-
         // 4. 批量保存，提高效率
         userProjectLineService.saveBatch(linesToInsert);
         log.info("成功为用户 {} 批量插入 {} 条项目价格配置。", user.getUserName(), linesToInsert.size());
@@ -667,6 +679,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         if (CollectionUtils.isEmpty(pricesToSet)) {
             return;
         }
+        // 假设 operator.getId() 为 0L 是管理员的约定
         boolean isAdmin = (operator.getId() != null && operator.getId() == 0L);
         Map<String, ProjectPriceSummaryDTO> priceSummaries = projectService.getAllProjectPriceSummaries();
 
@@ -692,22 +705,24 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
                 continue;
             }
 
+            // 根据操作员角色进行价格校验
             if (isAdmin) {
+                // 管理员的价格不得低于项目最低价
                 if (priceToSet.compareTo(summary.getMinPrice()) < 0) {
-                    throw new IllegalArgumentException(String.format("价格设置错误：线路 %s 的价格 %s 不能低于项目最低价 %s", priceKey, priceToSet, summary.getMinPrice()));
+                    throw new BusinessException(String.format("价格设置错误：线路 %s 的价格 %s 不能低于项目最低价 %s", priceKey, priceToSet, summary.getMinPrice()));
                 }
-            } else { // 代理
+            } else { // 代理商
                 BigDecimal operatorCost = operatorPrices.get(priceKey);
                 if (operatorCost == null) {
-                    throw new IllegalArgumentException(String.format("价格设置错误：您没有线路 %s 的价格配置，无法为下级设置", priceKey));
+                    throw new BusinessException(String.format("价格设置错误：您没有线路 %s 的价格配置，无法为下级设置", priceKey));
                 }
                 if (priceToSet.compareTo(operatorCost) < 0) {
-                    throw new IllegalArgumentException(String.format("价格设置错误：线路 %s 的价格 %s 不能低于您的成本价 %s", priceKey, priceToSet, operatorCost));
+                    throw new BusinessException(String.format("价格设置错误：线路 %s 的价格 %s 不能低于您的成本价 %s", priceKey, priceToSet, operatorCost));
                 }
             }
-
+            // 统一校验：所有角色的设置价格都不能高于项目最高价
             if (priceToSet.compareTo(summary.getMaxPrice()) > 0) {
-                throw new IllegalArgumentException(String.format("价格设置错误：线路 %s 的价格 %s 不能高于项目最高价 %s", priceKey, priceToSet, summary.getMaxPrice()));
+                throw new BusinessException(String.format("价格设置错误：线路 %s 的价格 %s 不能高于项目最高价 %s", priceKey, priceToSet, summary.getMaxPrice()));
             }
         }
         log.info("操作员 {} 为下级设置的价格已通过校验。", operator.getId());
@@ -755,6 +770,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     public User getByUserName(String userName){
         LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
         queryWrapper.eq(User::getUserName,userName);
+
         return this.getOne(queryWrapper);
     }
 

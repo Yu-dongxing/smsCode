@@ -37,7 +37,7 @@ public class ApiKeyTokenStrategy extends BaseAuthStrategy {
 
         return getValidToken(webClient, project).flatMap(token -> {
             String url = normalizeDomain(project.getDomain()) + project.getGetNumberRoute();
-//            log.info("项目 [{}]: 使用有效Token发起取号请求: {}", project.getProjectId(), url);
+            log.info("项目 [{}-{}]: 使用有效Token发起取号请求: {}", project.getProjectId(),project.getLineId(), url);
 
             // 根据配置构建请求体，这里我们假设取号需要projectId
             // 注意：这里的实现需要根据你业务的通用性进行调整，params[0] 只是一个示例
@@ -70,7 +70,7 @@ public class ApiKeyTokenStrategy extends BaseAuthStrategy {
 
         return getValidToken(webClient, project).flatMap(token -> {
             String url = normalizeDomain(project.getDomain()) + project.getGetCodeRoute();
-//            log.info("项目 [{}]: 使用有效Token发起取码请求: {}", project.getProjectId(), url);
+            log.info("项目 [{}]: 使用有效Token发起取码请求: {}", project.getProjectId(), url);
 
             // 根据配置构建请求体
             // 文档中查询任务状态的字段是 taskId

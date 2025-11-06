@@ -18,7 +18,8 @@ public interface UserLedgerService extends IService<UserLedger> {
 
     IPage<UserLedger> listUserLedgerByUSerId(Long userId, Page<UserLedger> page);
 
-    IPage<LedgerDTO> listAllLedger(Long adminId, String adminPassword,String username, Long filterByUserId, Date startTime, Date endTime, Page<UserLedger> page,String remark);
+    IPage<LedgerDTO> listAllLedger(Long adminId, String adminPassword,String username, Long filterByUserId, Date startTime, Date endTime, Page<UserLedger> page,String remark,Integer fundType,
+                                   Integer ledgerType);
 
     BigDecimal calculateUserBalanceFromLedger(Long userId);
 
@@ -28,5 +29,5 @@ public interface UserLedgerService extends IService<UserLedger> {
     @Transactional(rollbackFor = Exception.class) // 确保任何异常都会回滚事务
     boolean createLedgerAndUpdateBalance(LedgerCreationDTO request);
 
-    IPage<UserLedger> listSubordinateLedgers(String userName,Long agentId, Page<UserLedger> page, Long targetUserId, Date startTime, Date endTime);
+    IPage<UserLedger> listSubordinateLedgers(String userName,Long agentId, Page<UserLedger> page, Long targetUserId, Date startTime, Date endTime, Integer fundType, Integer ledgerType);
 }

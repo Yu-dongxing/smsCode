@@ -86,32 +86,29 @@ public class ResponseParser {
         String phoneNumberField = project.getResponsePhoneField();
         String phoneIdField = project.getResponsePhoneIdField();
 
-        boolean isPhoneNumberFieldDefined = StringUtils.hasText(phoneNumberField);
-
-        // 2. 优先策略：如果定义了手机号字段，则根据字段解析
-        if (isPhoneNumberFieldDefined) {
+        // 2. 优先策略：如果定义了手机号字段，则优先根据字段解析
+        if (StringUtils.hasText(phoneNumberField)) {
             parseJsonFieldValue(responseBody, phoneNumberField)
-                    // 【关键优化点】: 使用 filter 过滤掉 null 和空字符串
+                    // 过滤掉解析出的 null 或空字符串
                     .filter(StringUtils::hasText)
                     .ifPresent(phone -> result.put("phone", phone));
         }
 
-        // 3. 独立解析ID字段：无论手机号是否解析成功，都尝试解析ID
-        if (StringUtils.hasText(phoneIdField)) {
-            parseJsonFieldValue(responseBody, phoneIdField)
-                    // 【关键优化点】: 同样增加 filter 保证ID的有效性
-                    .filter(StringUtils::hasText)
-                    .ifPresent(id -> result.put("id", id));
-        }
-
-        // 4. 回退策略：仅当未定义手机号字段 且 Map中尚无手机号时，才使用通用正则进行解析
-        //    增加 !result.containsKey("phone") 是为了避免在某些边缘情况下覆盖已解析到的值
-        if (!isPhoneNumberFieldDefined && !result.containsKey("phone")) {
+        // 3. 【核心修改】回退策略：如果上面的优先策略未能获取到手机号，则使用通用正则进行解析
+        if (!result.containsKey("phone")) {
             Matcher matcher = PHONE_NUMBER_PATTERN.matcher(responseBody);
             if (matcher.find()) {
                 // matcher.group(1) 在 find() 成功后保证不为 null
                 result.put("phone", matcher.group(1));
             }
+        }
+
+        // 4. 独立解析ID字段：无论手机号是否解析成功，都独立尝试解析ID
+        if (StringUtils.hasText(phoneIdField)) {
+            parseJsonFieldValue(responseBody, phoneIdField)
+                    // 同样增加 filter 保证ID的有效性
+                    .filter(StringUtils::hasText)
+                    .ifPresent(id -> result.put("id", id));
         }
 
         return result;

@@ -122,10 +122,13 @@ public class AdminController {
             // + 管理员操作，operatorId 直接传入 0L
             boolean success = userService.createUser(userCreateDTO, 0L);
             return success ? Result.success("创建成功") : Result.error(-5, "创建失败");
-        }catch (IllegalArgumentException | SecurityException | IllegalStateException | BusinessException e) {
+        }catch (IllegalArgumentException | SecurityException | IllegalStateException  e) {
             // 记录业务异常信息，但返回通用错误提示
             log.warn("创建用户业务校验失败: {}", e.getMessage());
             return Result.error("创建失败，输入信息有误或权限不足");
+        } catch (BusinessException e) {
+            log.error("创建用户时发生系统业务内部错误", e);
+            return Result.error(Constants.ERROR_SYSTEM_ERROR, e.getMessage());
         } catch (Exception e) {
             // 记录未预料到的系统异常
             log.error("创建用户时发生系统内部错误", e);
@@ -248,12 +251,17 @@ public class AdminController {
 
         Page pageRequest = new Page<>(page, size);
         // + 管理员可无密码查询任意用户，传入 adminId=0L, password=null
-        IPage<LedgerDTO> resultPage = userLedgerService.listAllLedger(0L, null, null,targetUserId, startTime, endTime, pageRequest,null);
+        IPage<LedgerDTO> resultPage = userLedgerService.listAllLedger(0L, null, null,targetUserId, startTime, endTime, pageRequest,null,null,null);
         return Result.success("查询成功", resultPage);
     }
 
     /**
      * 查看全局账本记录
+     * @param username 用户名（模糊查询）
+     * @param filterByUserId 用户ID
+     * @param remark 备注（模糊查询）
+     * @param fundType 资金类型（0-业务扣费, 1-后台操作）
+     * @param ledgerType 账本类型（1-入账，0-出账）
      * @param startTime 开始时间
      * @param endTime 结束时间
      * @param page 页码
@@ -262,9 +270,11 @@ public class AdminController {
      */
     @RequestMapping(value = "/viewAllLedger", method = {RequestMethod.GET, RequestMethod.POST})
     public Result<IPage<LedgerDTO>> viewAllLedger(
-            @RequestParam(required = false) String username, // 新增了 username
-            @RequestParam(required = false) Long filterByUserId, // 新增了 filterByUserId
+            @RequestParam(required = false) String username,
+            @RequestParam(required = false) Long filterByUserId,
             @RequestParam(required = false) String remark,
+            @RequestParam(required = false) Integer fundType, // 新增：资金类型
+            @RequestParam(required = false) Integer ledgerType, // 新增：账本类型
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") Date startTime,
             @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") Date endTime,
             @RequestParam(defaultValue = "1") long page,
@@ -272,8 +282,10 @@ public class AdminController {
 
         Page<UserLedger> pageRequest = new Page<>(page, size);
 
-        // 调用的是我们修改过的 service 方法
-        IPage<LedgerDTO> resultPage = userLedgerService.listAllLedger(0L, null,username, filterByUserId, startTime, endTime, pageRequest,remark);
+        // 调用修改后的 service 方法，并传入新增的参数
+        IPage<LedgerDTO> resultPage = userLedgerService.listAllLedger(
+                0L, null, username, filterByUserId, startTime, endTime, pageRequest, remark, fundType, ledgerType
+        );
 
         return Result.success("查询成功", resultPage);
     }
@@ -329,13 +341,14 @@ public class AdminController {
             @RequestParam(required = false) String projectId, //项目id
             @RequestParam(required = false) String lineId, //线路id
             @RequestParam(required = false) String phoneNumber, // 用于模糊查询
-            @RequestParam(required = false) Integer charged //扣费状态
+            @RequestParam(required = false) Integer charged, //扣费状态
+            @RequestParam(required = false) String userName // 用于模糊查询
     ) {
 
         IPage<NumberRecord> pageRequest = new Page<>(page, size);
         // 调用服务层方法，并传入所有参数
         IPage<NumberRecord> resultPage = numberRecordService.listAllNumbers(
-                status, startTime, endTime, userId, projectId, phoneNumber, charged, pageRequest,lineId
+                status, startTime, endTime, userId, projectId, phoneNumber, charged, pageRequest,lineId,userName
         );
 
         return Result.success("查询成功", resultPage);

@@ -37,6 +37,10 @@ public class NoAuthStrategy extends BaseAuthStrategy {
         String domain = normalizeDomain(project.getDomain());
         String fullUrl = domain + project.getGetNumberRoute();
 
+        log.info("执行的项目线路：{}-{} 构建的获取手机号请求 URI: {}",project.getProjectId(),project.getLineId() ,fullUrl);
+
+
+
         // 使用 UriComponentsBuilder 来构建 URI，以安全地处理路径变量
         // 这里假设 params[0] 是项目ID，params[1] 是数量 (如果存在)
         // 这种方式比简单的字符串替换更健壮

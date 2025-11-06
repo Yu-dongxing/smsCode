@@ -45,6 +45,14 @@ public class Project extends BaseEntity {
     private String projectName;
 
     /**
+     * 线路名称
+     */
+    @ColumnComment("线路名称")
+    @TableField("line_name")
+    @DefaultValue("'默认线路'")
+    private String lineName;
+
+    /**
      * 项目线路ID，用于区分同一项目下不同的API线路
      */
     @ColumnComment("项目线路ID，用于区分同一项目下不同的API线路")
