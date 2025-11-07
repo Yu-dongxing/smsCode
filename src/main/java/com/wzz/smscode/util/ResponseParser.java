@@ -88,6 +88,7 @@ public class ResponseParser {
 
         // 2. 优先策略：如果定义了手机号字段，则优先根据字段解析
         if (StringUtils.hasText(phoneNumberField)) {
+            log.info("进入解析优先策略--");
             parseJsonFieldValue(responseBody, phoneNumberField)
                     // 过滤掉解析出的 null 或空字符串
                     .filter(StringUtils::hasText)
@@ -96,6 +97,7 @@ public class ResponseParser {
 
         // 3. 【核心修改】回退策略：如果上面的优先策略未能获取到手机号，则使用通用正则进行解析
         if (!result.containsKey("phone")) {
+            log.info("进入解析回退策略--");
             Matcher matcher = PHONE_NUMBER_PATTERN.matcher(responseBody);
             if (matcher.find()) {
                 // matcher.group(1) 在 find() 成功后保证不为 null
@@ -105,8 +107,8 @@ public class ResponseParser {
 
         // 4. 独立解析ID字段：无论手机号是否解析成功，都独立尝试解析ID
         if (StringUtils.hasText(phoneIdField)) {
-            parseJsonFieldValue(responseBody, phoneIdField)
-                    // 同样增加 filter 保证ID的有效性
+            log.info("进入独立解析ID字段 ，字段：{}",phoneIdField);
+            parseJsonFieldValueByPath(responseBody, phoneIdField) // 直接调用优化后的方法
                     .filter(StringUtils::hasText)
                     .ifPresent(id -> result.put("id", id));
         }
@@ -176,10 +178,10 @@ public class ResponseParser {
      */
     public Optional<String> parseJsonFieldValueByPath(String jsonBody, String fieldPath) {
         try {
-            // 1. 将用户友好的路径转换为标准的JSON Pointer路径
-            //    - "result.code" -> "/result/code"
-            //    - "data[0].verificationCode" -> "/data/0/verificationCode"
-            String jsonPointerPath = "/" + fieldPath.replace(".", "/").replaceAll("\\[(\\d+)\\]", "/$1");
+            // 兼容处理 "$.data.path" 和 "data.path" 两种格式
+            String cleanPath = fieldPath.startsWith("$.") ? fieldPath.substring(2) : fieldPath;
+
+            String jsonPointerPath = "/" + cleanPath.replace(".", "/").replaceAll("\\[(\\d+)\\]", "/$1");
 
             // 2. 读取JSON树
             JsonNode rootNode = objectMapper.readTree(jsonBody);

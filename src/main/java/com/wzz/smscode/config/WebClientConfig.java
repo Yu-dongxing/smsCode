@@ -15,8 +15,8 @@ public class WebClientConfig {
     public WebClient webClient() {
         // 配置HTTP客户端，设置连接超时等
         HttpClient httpClient = HttpClient.create()
-                .responseTimeout(Duration.ofSeconds(10)) // 响应超时
-                .option(io.netty.channel.ChannelOption.CONNECT_TIMEOUT_MILLIS, 5000); // 连接超时
+                .responseTimeout(Duration.ofSeconds(60)) // 响应超时
+                .option(io.netty.channel.ChannelOption.CONNECT_TIMEOUT_MILLIS, 10000); // 连接超时
 
         return WebClient.builder()
                 .clientConnector(new ReactorClientHttpConnector(httpClient))

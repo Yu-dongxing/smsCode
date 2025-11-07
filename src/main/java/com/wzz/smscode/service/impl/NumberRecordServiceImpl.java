@@ -200,9 +200,15 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         record.setGetNumberTime(LocalDateTime.now());
         this.save(record);
 
-        final String finalIdentifierId = projectT.getResponsePhoneField() != null
-                ? successfulIdentifier.get("id")
-                : successfulIdentifier.get("phone");
+        final String finalIdentifierId;
+        String identifierKey = projectT.getCodeRetrievalIdentifierKey();
+
+        if ("id".equalsIgnoreCase(identifierKey)) {
+            finalIdentifierId = successfulIdentifier.get("id");
+        } else {
+            // 默认或明确配置为 "phone" 时，使用手机号
+            finalIdentifierId = successfulIdentifier.get("phone");
+        }
 
         final Long recordId = record.getId();
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronizationAdapter() {
