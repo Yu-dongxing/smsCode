@@ -7,20 +7,27 @@ import com.wzz.smscode.dto.PriceTemplateItemDTO;
 import com.wzz.smscode.dto.PriceTemplateResponseDTO;
 import com.wzz.smscode.entity.PriceTemplate;
 import com.wzz.smscode.entity.PriceTemplateItem;
+import com.wzz.smscode.entity.Project;
+import com.wzz.smscode.entity.UserProjectLine;
 import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.mapper.PriceTemplateMapper;
 import com.wzz.smscode.service.PriceTemplateItemService;
 import com.wzz.smscode.service.PriceTemplateService;
+import com.wzz.smscode.service.ProjectService;
+import com.wzz.smscode.service.UserProjectLineService;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.CollectionUtils;
 
+import java.math.BigDecimal;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 import java.util.stream.Collectors;
+
 
 @Service
 public class PriceTemplateServiceImpl extends ServiceImpl<PriceTemplateMapper, PriceTemplate> implements PriceTemplateService {
@@ -28,11 +35,90 @@ public class PriceTemplateServiceImpl extends ServiceImpl<PriceTemplateMapper, P
     @Autowired
     private PriceTemplateItemService priceTemplateItemService;
 
+    @Autowired
+    private UserProjectLineService userProjectLineService;
+
+    @Autowired
+    private ProjectService projectService;
+
     @Transactional(rollbackFor = Exception.class)
     @Override
-    public boolean createTemplate(PriceTemplateCreateDTO createDTO, Long creatorId) { // 修改点 1: 增加 creatorId 参数
+    public boolean createTemplate(PriceTemplateCreateDTO createDTO, Long creatorId) {
         if (createDTO == null || createDTO.getName() == null || createDTO.getName().trim().isEmpty()) {
             throw new BusinessException("模板名称不能为空");
+        }
+        //如果是管理员操作那么这个id始终为0
+        if (creatorId != null && !creatorId.equals(0L)) {
+            List<PriceTemplateItemDTO> itemsToCreate = createDTO.getItems();
+            if (!CollectionUtils.isEmpty(itemsToCreate)) {
+
+                // 1. 获取代理自己的所有价格配置，存入Map
+                Map<String, BigDecimal> agentPriceMap = userProjectLineService.getLinesByUserId(creatorId).stream()
+                        .collect(Collectors.toMap(
+                                line -> line.getProjectId() + ":" + line.getLineId(),
+                                UserProjectLine::getAgentPrice,
+                                (existing, replacement) -> existing
+                        ));
+
+                // 2. 【优化】一次性获取所有项目配置(包含priceMin和priceMax)，存入Map
+                // Value 直接存 Project 对象，方便后续取值
+                Map<String, Project> projectConfigMap = projectService.list().stream()
+                        .collect(Collectors.toMap(
+                                project -> project.getProjectId() + ":" + project.getLineId(),
+                                Function.identity(), // Value是Project对象本身
+                                (existing, replacement) -> existing
+                        ));
+
+
+                // 3. 遍历模板中的每一个项目，进行双重价格校验
+                for (PriceTemplateItemDTO item : itemsToCreate) {
+                    String key = item.getProjectId() + ":" + item.getLineId();
+                    BigDecimal templatePrice = item.getPrice();
+
+                    if (templatePrice == null) {
+                        throw new BusinessException("项目 '" + item.getProjectName() + "' 的价格不能为空");
+                    }
+
+                    // --- 校验一：模板价格不能低于最低价 ---
+                    BigDecimal minimumAllowedPrice;
+                    String minPriceSourceName;
+
+                    if (agentPriceMap.containsKey(key)) {
+                        minimumAllowedPrice = agentPriceMap.get(key);
+                        minPriceSourceName = "您的配置价";
+                    } else {
+                        Project projectConfig = projectConfigMap.get(key);
+                        // 检查项目配置是否存在，并且设置了最低价
+                        if (projectConfig != null && projectConfig.getPriceMin() != null) {
+                            minimumAllowedPrice = projectConfig.getPriceMin();
+                            minPriceSourceName = "平台项目最低价";
+                        } else {
+                            throw new BusinessException("无法为项目 '" + item.getProjectName() + "' 定价，缺少您的价格配置或平台未设置项目最低价。");
+                        }
+                    }
+
+                    if (templatePrice.compareTo(minimumAllowedPrice) < 0) {
+                        throw new BusinessException(
+                                "项目 '" + item.getProjectName() + "' 的模板价格(" + templatePrice +
+                                        ")不能低于" + minPriceSourceName + "(" + minimumAllowedPrice + ")。"
+                        );
+                    }
+
+                    // --- 【新增】校验二：模板价格不能高于最高价 ---
+                    Project projectConfig = projectConfigMap.get(key);
+                    // 检查项目配置是否存在，并且设置了最高价 (priceMax > 0 才有效)
+                    if (projectConfig != null && projectConfig.getPriceMax() != null && projectConfig.getPriceMax().compareTo(BigDecimal.ZERO) > 0) {
+                        BigDecimal maximumAllowedPrice = projectConfig.getPriceMax();
+
+                        if (templatePrice.compareTo(maximumAllowedPrice) > 0) {
+                            throw new BusinessException(
+                                    "项目 '" + item.getProjectName() + "' 的模板价格(" + templatePrice +
+                                            ")不能高于项目允许的最高价(" + maximumAllowedPrice + ")。"
+                            );
+                        }
+                    }
+                }
+            }
         }
 
         // 1. 创建模板主体

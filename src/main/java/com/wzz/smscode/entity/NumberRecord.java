@@ -47,6 +47,14 @@ public class NumberRecord extends BaseEntity {
     private Long userId;
 
     /**
+     * 用户名
+     */
+    @ColumnComment("用户名")
+    @TableField("user_name")
+    @DefaultValue("'无'")
+    private String userName;
+
+    /**
      * 项目ID
      */
     @ColumnComment("项目ID")

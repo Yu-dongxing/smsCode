@@ -188,6 +188,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         record.setUserId(user.getId());
         record.setProjectId(projectId);
         record.setLineId(lineId);
+        record.setUserName(user.getUserName());
         record.setPhoneNumber(successfulIdentifier.get("phone"));
         record.setApiPhoneId(successfulIdentifier.get("id"));
         record.setStatus(0); // 待取码
