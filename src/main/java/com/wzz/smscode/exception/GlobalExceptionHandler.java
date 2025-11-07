@@ -15,6 +15,7 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
@@ -31,39 +32,27 @@ public class GlobalExceptionHandler {
         return Result.error("不支持的请求方法");
     }
 
-    // 参数校验异常-方法参数校验
-//    @ExceptionHandler(MethodArgumentNotValidException.class)
-//    public Result<?> handleMethodArgumentNotValidException(MethodArgumentNotValidException e) {
-//        String msg = e.getBindingResult().getFieldError() != null ?
-//                e.getBindingResult().getFieldError().getDefaultMessage() : "参数校验失败";
-//        log.warn("参数校验异常: {}, 错误信息={}", msg, e);
-//        return Result.error(400, msg);
-//    }
-//    /**
-//     * 【重点修改】参数校验异常 (JSR-303)
-//     * 这个方法整合了 @RequestBody 和 @RequestParam/ModelAttribute 的参数校验
-//     */
-//    @ExceptionHandler({MethodArgumentNotValidException.class, BindException.class})
-//    @ResponseStatus(HttpStatus.BAD_REQUEST)
-//    public Result<?> handleValidationException(BindException e) {
-//        // 从异常中获取第一个字段错误
-//        FieldError fieldError = e.getBindingResult().getFieldError();
-//        String msg = "参数校验失败";
-//        if (fieldError != null) {
-//            msg = fieldError.getField() + " " + fieldError.getDefaultMessage();
-//        }
-//        log.warn("参数校验异常: {}", msg);
-//        return Result.error(400, msg);
-//    }
+    /**
+     * 【必须添加】处理请求参数类型转换失败 (如: "?parentId=p" 无法转为 Long)
+     * 这是解决当前报错的直接方案
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public Result<?> handleMethodArgumentTypeMismatch(MethodArgumentTypeMismatchException ex) {
+        String paramName = ex.getName(); // 获取参数名: parentId
+        Class<?> requiredType = ex.getRequiredType(); // 获取目标类型: Long
+        Object actualValue = ex.getValue(); // 获取实际值: "p"
 
-    // 参数校验异常-BindException
-//    @ExceptionHandler(BindException.class)
-//    public Result<?> handleBindException(BindException e) {
-//        String msg = e.getBindingResult().getFieldError() != null ?
-//                e.getBindingResult().getFieldError().getDefaultMessage() : "参数绑定失败";
-//        log.warn("参数绑定异常: {}, 错误信息={}", msg, e);
-//        return Result.error(400, msg);
-//    }
+        String message = String.format("参数 [%s] 的值 '%s' 不是有效的 %s 类型",
+                paramName,
+                actualValue,
+                requiredType != null ? requiredType.getSimpleName() : "未知");
+
+        log.warn("请求参数类型错误: {}", message, ex); // 保留堆栈信息便于排查
+
+        return Result.error(400, message); // 返回友好的中文提示
+    }
+
     /**
      * 【推荐】统一处理参数校验异常 (JSR-303)
      * 整合了对 @RequestBody, @RequestParam, @ModelAttribute 等参数校验失败的处理
@@ -74,12 +63,8 @@ public class GlobalExceptionHandler {
         String msg = "参数校验失败";
         FieldError fieldError = e.getBindingResult().getFieldError();
         if (fieldError != null) {
-            // 返回更具体的错误信息，如: "username 不能为空"
-//            msg = fieldError.getDefaultMessage();
-            // 如果想包含字段名，可以这样:
              msg = fieldError.getField() + " " + fieldError.getDefaultMessage();
         }
-        // 记录更通用的日志
         log.warn("参数校验或绑定异常: {}", msg, e);
         return Result.error(400, msg);
     }
