@@ -108,9 +108,11 @@ public class UserController {
     public CommonResultDTO<String> getCode(
              @RequestParam String userName,
             @RequestParam String password,
-            @RequestParam String phoneNumber) {
+            @RequestParam String phoneNumber,
+             @RequestParam String projectId,
+             @RequestParam String lineId) {
 
-        return numberRecordService.getCode(userName, password, phoneNumber);
+        return numberRecordService.getCode(userName, password, phoneNumber,projectId,lineId);
     }
 
     /**

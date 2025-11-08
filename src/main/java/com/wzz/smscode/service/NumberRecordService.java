@@ -25,7 +25,7 @@ public interface NumberRecordService extends IService<NumberRecord> {
     @Transactional
     void updateRecordAfterRetrieval(NumberRecord record, boolean is, String result);
 
-    CommonResultDTO<String> getCode(String userName, String password, String identifier);
+    CommonResultDTO<String> getCode(String userName, String password, String identifier,String projectId,String lineId);
 
     IPage<NumberDTO> listUserNumbers(Long userName, String password, Integer statusFilter, Date startTime, Date endTime, IPage<NumberRecord> page);
 

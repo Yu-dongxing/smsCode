@@ -312,14 +312,28 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
      * 【核心修改】重写 getCode 方法
      */
     @Override
-    public CommonResultDTO<String> getCode(String userName, String password, String identifier) {
+    public CommonResultDTO<String> getCode(String userName, String password, String identifier,String projectId,String lineId) {
         User user = userService.authenticateUserByUserName(userName, password);
         if (user == null) {
             return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED, "用户验证失败");
         }
+        // --- 修改开始 ---
+        // 1. 校验 lineId 是否为空
+        if (!StringUtils.hasText(lineId)) { // 或者使用其他非空判断
+            return CommonResultDTO.error(Constants.ERROR_NO_CODE, "线路ID不能为空");
+        }
+
+        Long lineIdAsLong;
+        try {
+            lineIdAsLong = Long.parseLong(lineId);
+        } catch (NumberFormatException e) {
+            return CommonResultDTO.error(Constants.ERROR_NO_CODE, "线路ID格式不正确");
+        }
         NumberRecord record = this.getOne(new LambdaQueryWrapper<NumberRecord>()
-                .eq(NumberRecord::getPhoneNumber, identifier) // phoneNumber 字段现在存储 identifier
+                .eq(NumberRecord::getPhoneNumber, identifier)
                 .eq(NumberRecord::getUserId, user.getId())
+                        .eq(NumberRecord::getLineId, lineIdAsLong)
+                .eq(NumberRecord::getProjectId, projectId)
                 .orderByDesc(NumberRecord::getGetNumberTime)
                 .last("LIMIT 1"));
 

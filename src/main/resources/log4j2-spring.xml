@@ -2,9 +2,19 @@
 <!-- status="warn" 表示Log4j2本身的日志级别 -->
 <Configuration status="warn">
     <Appenders>
-<!--         1. 控制台输出 -->
+        <!-- 1. 控制台输出 -->
         <Console name="Console" target="SYSTEM_OUT">
-            <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss.SSS} [%t] %-5level %logger{36} - %msg%n"/>
+            <!--
+                优化的彩色日志输出格式：
+                - %d{yyyy-MM-dd HH:mm:ss.SSS}: 日期和时间
+                - %highlight{...}: 颜色高亮块，根据日志级别应用不同颜色
+                - %-5level: 日志级别，左对齐并占用5个字符
+                - [%t]: 线程名
+                - %logger{36}: Logger 名称，最长36个字符
+                - %msg%n: 日志消息和换行符
+                - disableAnsi="false": 确保ANSI颜色代码不会被禁用 (在大多数现代终端中是默认行为)
+            -->
+            <PatternLayout pattern="%style{%d{yyyy-MM-dd HH:mm:ss.SSS}}{blue} %highlight{[%-5level]}{FATAL=red blink, ERROR=red, WARN=yellow bold, INFO=green, DEBUG=cyan, TRACE=white} [%t] %logger{36} - %msg%n" disableAnsi="false"/>
         </Console>
 
         <!-- 2. 滚动文件输出：按文件大小分割 -->
@@ -17,14 +27,14 @@
             <Policies>
                 <!--
                     OnStartupTriggeringPolicy: 每次启动时都会创建一个新的日志文件。
-                    SizeBasedTriggeringPolicy: 定义了触发滚动的条件，这里是当文件大小达到 10 MB 时。
+                    SizeBasedTriggeringPolicy: 定义了触发滚动的条件，这里是当文件大小达到 100 MB 时。
                 -->
                 <OnStartupTriggeringPolicy />
                 <SizeBasedTriggeringPolicy size="100 MB" />
             </Policies>
             <!--
                 DefaultRolloverStrategy: 定义了滚动的策略。
-                max="20" 表示最多保留 20 个滚动日志文件。当超过这个数量时，最旧的文件将被删除。
+                max="200" 表示最多保留 200 个滚动日志文件。当超过这个数量时，最旧的文件将被删除。
             -->
             <DefaultRolloverStrategy max="200" />
         </RollingFile>
