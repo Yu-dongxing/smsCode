@@ -30,6 +30,7 @@ import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
+import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.Objects;
@@ -479,6 +480,61 @@ public class AgentController {
             return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，新增失败");
         }
     }
+
+    /**
+     * 编辑或更新指定用户的项目价格配置
+     * @param subUserProjectPriceDTO 包含用户ID和该用户全新的项目价格配置列表
+     * @return 返回操作结果
+     */
+    @PostMapping("/sub-user-project-prices/update")
+    public Result<?> updateUserProjectPrices(@RequestBody SubUserProjectPriceDTO subUserProjectPriceDTO) {
+        try {
+            // 调用包含事务处理的 Service 方法
+            boolean success = userProjectLineService.updateUserProjectLines(subUserProjectPriceDTO);
+            return success ? Result.success("更新成功") : Result.error("更新失败或数据无变化");
+        } catch (BusinessException e) {
+            log.warn("编辑用户项目配置业务校验失败: {}", e.getMessage());
+            return Result.error(e.getMessage());
+        } catch (Exception e) {
+            log.error("编辑用户项目配置时发生系统内部错误", e);
+            return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，更新失败");
+        }
+    }
+
+    /**
+     * 根据下级用户ID获取其项目价格配置列表
+     * @param userId 下级用户的ID
+     * @return 该用户的项目价格配置列表
+     */
+    @SaCheckLogin
+    @GetMapping("/user/project-prices")
+    public Result<?> getSubUserProjectPricesByUserId(@RequestParam Long userId) {
+        try {
+            long agentId = StpUtil.getLoginIdAsLong();
+
+            // 权限校验：确保查询的是自己的下级用户
+            User targetUser = userService.getById(userId);
+            if (targetUser == null || !Objects.equals(targetUser.getParentId(), agentId)) {
+                return Result.error(403, "无权查看该用户的项目配置");
+            }
+
+            // 调用 Service 获取数据
+            List<UserProjectLine> userProjectLines = userProjectLineService.getLinesByUserId(userId);
+
+            if (userProjectLines == null || userProjectLines.isEmpty()) {
+                return Result.success("查询成功，该用户暂无项目配置", Collections.emptyList());
+            }
+
+            return Result.success("查询成功", userProjectLines);
+        } catch (BusinessException e) {
+            log.warn("代理 [{}] 查询下级 [{}] 项目配置失败: {}", StpUtil.getLoginId(), userId, e.getMessage());
+            return Result.error(e.getMessage());
+        } catch (Exception e) {
+            log.error("代理 [{}] 查询下级 [{}] 项目配置时发生系统内部错误", StpUtil.getLoginId(), userId, e);
+            return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，查询失败");
+        }
+    }
+
     /**
      * 分页查询代理下级用户的取号记录（支持多条件筛选）
      *
