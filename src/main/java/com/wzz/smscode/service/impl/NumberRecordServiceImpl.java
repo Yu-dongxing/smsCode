@@ -299,6 +299,16 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             latestRecord.setBalanceAfter(updatedUser.getBalance());
 //            userService.updateUserStatsForNewNumber(user.getId(), true);
             userService.updateUserStats(user.getId());
+            // [新增] 触发上级代理返款流程
+            try {
+                // 在用户扣费成功后，立即调用返款逻辑
+                userService.processRebates(latestRecord);
+            } catch (Exception e) {
+                // 如果返款失败，打印错误日志并向上抛出异常
+                // 由于整个方法是 @Transactional 的，抛出异常将导致包括用户扣费在内的所有操作全部回滚
+                log.error("处理代理返款时发生严重错误，事务将回滚。记录ID: {}", latestRecord.getId(), e);
+                throw new BusinessException("业务扣费成功，但代理返款失败，操作已全部回滚: " + e.getMessage());
+            }
         } else {
             latestRecord.setStatus(3);
             latestRecord.setCharged(0);
@@ -442,6 +452,16 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             latestRecord.setBalanceAfter(updatedUser.getBalance());
 //            userService.updateUserStatsForNewNumber(user.getId(), true);
             userService.updateUserStats(user.getId());
+            // [新增] 触发上级代理返款流程
+            try {
+                // 在用户扣费成功后，立即调用返款逻辑
+                userService.processRebates(latestRecord);
+            } catch (Exception e) {
+                // 如果返款失败，打印错误日志并向上抛出异常
+                // 由于整个方法是 @Transactional 的，抛出异常将导致包括用户扣费在内的所有操作全部回滚
+                log.error("处理代理返款时发生严重错误，事务将回滚。记录ID: {}", latestRecord.getId(), e);
+                throw new BusinessException("业务扣费成功，但代理返款失败，操作已全部回滚: " + e.getMessage());
+            }
         } else {
             latestRecord.setStatus(3);
             latestRecord.setCharged(0);

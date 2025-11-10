@@ -5,15 +5,23 @@ import com.baomidou.mybatisplus.core.toolkit.CollectionUtils;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.wzz.smscode.dto.project.ProjectPriceInfoDTO;
 import com.wzz.smscode.dto.project.SubUserProjectPriceDTO;
+import com.wzz.smscode.entity.Project;
 import com.wzz.smscode.entity.UserProjectLine;
 import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.mapper.UserProjectLineMapper;
+import com.wzz.smscode.service.ProjectService;
 import com.wzz.smscode.service.UserProjectLineService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -21,6 +29,12 @@ import java.util.stream.Collectors;
  */
 @Service
 public class UserProjectLineServiceImpl extends ServiceImpl<UserProjectLineMapper, UserProjectLine> implements UserProjectLineService {
+
+
+    @Autowired
+    @Lazy
+    private ProjectService projectService;
+
     /**
      * 根据用户ID获取其所有项目线路配置
      * @param userId 用户ID
@@ -72,45 +86,172 @@ public class UserProjectLineServiceImpl extends ServiceImpl<UserProjectLineMappe
     }
 
     /**
-     * [新增] 更新用户的项目线路配置
-     * 采用“先删除后新增”的策略，确保操作的原子性
+     * [重构后] 更新用户的项目线路配置，并加入价格校验逻辑
      * @param dto 包含用户ID和新的项目配置列表
+     * @param editorId 执行此操作的管理员或代理的ID (约定：0为管理员)
      * @return 是否成功
      */
     @Transactional(rollbackFor = Exception.class)
     @Override
-    public boolean updateUserProjectLines(SubUserProjectPriceDTO dto) {
-        if (dto == null || dto.getUserId() == null) {
-            throw new BusinessException("用户信息不能为空");
+    public boolean updateUserProjectLines(SubUserProjectPriceDTO dto, Long editorId) {
+        if (dto == null || dto.getUserId() == null || editorId == null) {
+            throw new BusinessException("用户或操作者信息不能为空");
         }
 
-        Long userId = dto.getUserId();
+        Long targetUserId = dto.getUserId();
+        List<ProjectPriceInfoDTO> incomingPrices = dto.getProjectPrices();
+        boolean isAdmin = editorId == 0L;
 
-        // 1. 删除该用户所有旧的配置
-        this.remove(new LambdaQueryWrapper<UserProjectLine>().eq(UserProjectLine::getUserId, userId));
-
-        // 2. 如果新的配置列表不为空，则批量插入
-        List<ProjectPriceInfoDTO> newProjectPrices = dto.getProjectPrices();
-        if (CollectionUtils.isNotEmpty(newProjectPrices)) {
-            List<UserProjectLine> newUserLines = newProjectPrices.stream().map(priceDto -> {
-                UserProjectLine line = new UserProjectLine();
-                line.setUserId(userId);
-                // 注意字段映射关系
-                line.setProjectTableId(priceDto.getId()); // DTO的id对应实体类的 project_table_id
-                line.setProjectName(priceDto.getProjectName());
-                line.setProjectId(priceDto.getProjectId());
-                line.setLineId(priceDto.getLineId());
-                line.setAgentPrice(priceDto.getPrice()); // DTO的price对应实体类的 agent_price
-                line.setCostPrice(priceDto.getCostPrice());
-                return line;
-            }).collect(Collectors.toList());
-
-            // 批量保存
-            return this.saveBatch(newUserLines);
+        if (CollectionUtils.isEmpty(incomingPrices)) {
+            this.remove(new LambdaQueryWrapper<UserProjectLine>().eq(UserProjectLine::getUserId, targetUserId));
+            return true;
         }
 
-        // 如果新列表为空，删除操作执行后即为成功
+        // [正确方式] 1. 根据传入的所有 projectId 和 lineId 组合，一次性查询出所有相关的总项目信息
+        LambdaQueryWrapper<Project> projectQueryWrapper = new LambdaQueryWrapper<>();
+        // 构建 (projectId = ? AND lineId = ?) OR (projectId = ? AND lineId = ?) ... 的查询条件
+        projectQueryWrapper.and(wrapper -> {
+            for (int i = 0; i < incomingPrices.size(); i++) {
+                ProjectPriceInfoDTO priceDto = incomingPrices.get(i);
+                wrapper.or(w -> w.eq(Project::getProjectId, priceDto.getProjectId())
+                        .eq(Project::getLineId, priceDto.getLineId()));
+            }
+        });
+        List<Project> relevantProjects = projectService.list(projectQueryWrapper);
+
+        // 将查询结果转换为Map，方便快速查找。Key: "projectId:lineId"
+        Map<String, Project> projectDetailsMap = relevantProjects.stream()
+                .collect(Collectors.toMap(
+                        p -> p.getProjectId() + ":" + p.getLineId(),
+                        Function.identity()
+                ));
+
+        // 2. 如果是代理操作，获取代理自己的价格配置
+        Map<String, BigDecimal> editorPriceMap = Collections.emptyMap();
+        if (!isAdmin) {
+            List<UserProjectLine> editorLines = this.list(new LambdaQueryWrapper<UserProjectLine>().eq(UserProjectLine::getUserId, editorId));
+            if (CollectionUtils.isNotEmpty(editorLines)) {
+                editorPriceMap = editorLines.stream()
+                        .collect(Collectors.toMap(
+                                line -> line.getProjectId() + ":" + line.getLineId(),
+                                UserProjectLine::getAgentPrice
+                        ));
+            }
+        }
+
+        // 3. 获取目标用户已有的配置
+        List<UserProjectLine> existingLines = this.list(new LambdaQueryWrapper<UserProjectLine>()
+                .eq(UserProjectLine::getUserId, targetUserId));
+        Map<String, UserProjectLine> existingLinesMap = existingLines.stream()
+                .collect(Collectors.toMap(
+                        line -> line.getProjectId() + ":" + line.getLineId(),
+                        Function.identity(),
+                        (first, second) -> first
+                ));
+
+        List<UserProjectLine> linesToInsert = new ArrayList<>();
+        List<UserProjectLine> linesToUpdate = new ArrayList<>();
+
+        // 4. 遍历传入的配置，进行校验和分类
+        for (ProjectPriceInfoDTO priceDto : incomingPrices) {
+            String key = priceDto.getProjectId() + ":" + priceDto.getLineId();
+            BigDecimal newPrice = priceDto.getPrice();
+
+            // 从Map中获取权威的项目信息
+            Project project = projectDetailsMap.get(key);
+
+            // 执行价格校验
+            validatePrice(priceDto, newPrice, isAdmin, editorPriceMap, project);
+
+            UserProjectLine existingLine = existingLinesMap.get(key);
+            if (existingLine != null) {
+                // 更新...
+                boolean needsUpdate = false;
+                if (newPrice != null && (existingLine.getAgentPrice() == null || newPrice.compareTo(existingLine.getAgentPrice()) != 0)) {
+                    existingLine.setAgentPrice(newPrice);
+                    needsUpdate = true;
+                }
+                if (needsUpdate) {
+                    linesToUpdate.add(existingLine);
+                }
+                existingLinesMap.remove(key);
+            } else {
+                // 新增...
+                UserProjectLine newLine = new UserProjectLine();
+                newLine.setUserId(targetUserId);
+                // 注意：这里的 project_table_id 应该从查到的 project 对象获取
+                newLine.setProjectTableId(project.getId());
+                newLine.setProjectName(project.getProjectName());
+                newLine.setProjectId(project.getProjectId());
+                newLine.setLineId(project.getLineId());
+                newLine.setAgentPrice(newPrice);
+                // 成本价也应该以总项目为准
+                newLine.setCostPrice(project.getCostPrice());
+                linesToInsert.add(newLine);
+            }
+        }
+
+        // 5. 删除多余的配置
+        if (!existingLinesMap.isEmpty()) {
+            List<Long> idsToDelete = existingLinesMap.values().stream()
+                    .map(UserProjectLine::getId)
+                    .collect(Collectors.toList());
+            this.removeByIds(idsToDelete);
+        }
+
+        // 6. 批量执行数据库操作
+        if (CollectionUtils.isNotEmpty(linesToInsert)) {
+            this.saveBatch(linesToInsert);
+        }
+        if (CollectionUtils.isNotEmpty(linesToUpdate)) {
+            this.updateBatchById(linesToUpdate);
+        }
+
         return true;
+    }
+
+    /**
+     * [正确方式] 价格校验的私有辅助方法
+     * @param priceDto          当前项目价格信息(仅用于获取projectId和lineId)
+     * @param newPrice          要设置的新价格
+     * @param isAdmin           操作者是否是管理员
+     * @param editorPriceMap    如果是代理，此为代理自己的价格配置
+     * @param project           从数据库查到的权威的总项目信息
+     */
+    private void validatePrice(ProjectPriceInfoDTO priceDto, BigDecimal newPrice, boolean isAdmin, Map<String, BigDecimal> editorPriceMap, Project project) {
+        if (newPrice == null) return;
+
+        if (project == null) {
+            throw new BusinessException(String.format("数据错误：系统中不存在项目ID为 '%s' 且线路ID为 '%s' 的项目。",
+                    priceDto.getProjectId(), priceDto.getLineId()));
+        }
+
+        String projectName = project.getProjectName();
+        BigDecimal maxPrice = project.getPriceMax();
+        BigDecimal minPrice = project.getPriceMin();
+
+        // 规则1: 任何角色的编辑，价格都不能超过项目最高价
+        if (maxPrice != null && newPrice.compareTo(maxPrice) > 0) {
+            throw new BusinessException(String.format("项目'%s'的价格[%s]不能超过最高价[%s]", projectName, newPrice, maxPrice));
+        }
+
+        if (isAdmin) {
+            // 规则2: 管理员编辑，价格不能低于项目最低价
+            if (minPrice != null && newPrice.compareTo(minPrice) < 0) {
+                throw new BusinessException(String.format("管理员设置项目'%s'的价格[%s]不能低于最低价[%s]", projectName, newPrice, minPrice));
+            }
+        } else {
+            // 规则3: 代理编辑，价格不能低于代理自己的价格
+            String key = project.getProjectId() + ":" + project.getLineId();
+            BigDecimal editorOwnPrice = editorPriceMap.get(key);
+
+            if (editorOwnPrice == null) {
+                throw new BusinessException(String.format("代理您没有项目'%s'的配置，无法为下级设置价格", projectName));
+            }
+            if (newPrice.compareTo(editorOwnPrice) < 0) {
+                throw new BusinessException(String.format("代理为项目'%s'设置的价格[%s]不能低于您自己的价格[%s]", projectName, newPrice, editorOwnPrice));
+            }
+        }
     }
 
     @Override

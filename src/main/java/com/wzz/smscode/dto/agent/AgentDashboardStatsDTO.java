@@ -28,4 +28,9 @@ public class AgentDashboardStatsDTO {
      * 我的所有下级的总回码率 (%)
      */
     private Double subUsersCodeRate;
+
+    /**
+     * 新增：平台总利润
+     */
+    private BigDecimal totalProfit;
 }

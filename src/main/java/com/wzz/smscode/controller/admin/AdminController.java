@@ -1,5 +1,6 @@
 package com.wzz.smscode.controller.admin;
 
+import cn.dev33.satoken.annotation.SaCheckLogin;
 import cn.dev33.satoken.stp.StpUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
@@ -22,6 +23,7 @@ import com.wzz.smscode.enums.AuthType;
 import com.wzz.smscode.enums.RequestType;
 import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.service.*;
+import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
@@ -398,6 +400,9 @@ public class AdminController {
          * 总余额
          */
         private String totalPrice;
+
+        // 新增：平台总利润
+        private BigDecimal totalProfit;
     }
 
     /**
@@ -455,6 +460,8 @@ public class AdminController {
             // 将结果转换为 BigDecimal
             totalBalance = new BigDecimal(map.get("totalBalance").toString());
         }
+
+        stats.setTotalProfit(userLedgerService.getTotalProfit()==null?BigDecimal.ZERO:userLedgerService.getTotalProfit());
         stats.setTotalPrice(totalBalance.setScale(2, RoundingMode.HALF_UP).toString());
 
         return Result.success("统计数据获取成功", stats);
@@ -780,7 +787,7 @@ public class AdminController {
     public Result<?> updateUserProjectPrices(@RequestBody SubUserProjectPriceDTO subUserProjectPriceDTO) {
         try {
             // 调用包含事务处理的 Service 方法
-            boolean success = userProjectLineService.updateUserProjectLines(subUserProjectPriceDTO);
+            boolean success = userProjectLineService.updateUserProjectLines(subUserProjectPriceDTO,0L);
             return success ? Result.success("更新成功") : Result.error("更新失败或数据无变化");
         } catch (BusinessException e) {
             log.warn("编辑用户项目配置业务校验失败: {}", e.getMessage());
@@ -796,6 +803,7 @@ public class AdminController {
      */
     @PostMapping("/userProjectLine/update")
     public Result<?> updateByUserProjectLine(@RequestBody ProjectPriceInfoDTO projectPriceInfoDTO) {
+        log.info("updateByUserProjectLine: {}", projectPriceInfoDTO);
         try {
             if (projectPriceInfoDTO.getUserProjectLineTableId() == null) {
                 return Result.error("更新失败：缺少必要的配置ID");
@@ -957,6 +965,38 @@ public class AdminController {
         } catch (Exception e) {
             log.error("删除价格模板失败", e);
             return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，删除失败");
+        }
+    }
+
+    /**
+     * 管理员根据下级用户ID获取其项目价格配置列表
+     * @param userId 下级用户的ID
+     * @return 该用户的项目价格配置列表
+     */
+//    @SaCheckLogin
+    @GetMapping("/user/project-prices/get")
+    public Result<?> getSubUserProjectPricesByUserId(@RequestParam @NotNull Long userId) {
+        long agentId = -1;
+        try {
+//            agentId = StpUtil.getLoginIdAsLong();
+            // 1. 校验用户是否存在
+            User targetUser = userService.getById(userId);
+            if (targetUser == null) {
+                return Result.error("用户不存在");
+            }
+            // 2. 权限校验：超级管理员
+//            if (!Objects.equals(0L, agentId)) {
+//                return Result.error("无权查看该用户的项目配置");
+//            }
+            // 3. 查询数据
+            List<UserProjectLine> userProjectLines = userProjectLineService.getLinesByUserId(userId);
+            if (userProjectLines == null || userProjectLines.isEmpty()) {
+                return Result.success("查询成功，该用户暂无项目配置", Collections.emptyList());
+            }
+            return Result.success("查询成功", userProjectLines);
+        } catch (BusinessException e) {
+            log.warn("代理 [{}] 查询下级 [{}] 项目配置失败: {}", agentId, userId, e.getMessage());
+            return Result.error(e.getMessage());
         }
     }
 }

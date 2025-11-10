@@ -1,6 +1,7 @@
 package com.wzz.smscode.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.core.toolkit.CollectionUtils;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -27,6 +28,7 @@ import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -337,6 +339,65 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
 
         // 6. 执行分页查询并返回
         return this.page(page, ledgerWrapper);
+    }
+
+
+    /**
+     * 根据用户id查询总利润
+     * <p>
+     * 利润来源：资金类型为 ADMIN_REBATE(4, "代理回款") 且 账本类型为入账的记录
+     * </p>
+     *
+     * @param userId 用户ID
+     * @return 该用户的累计总利润，如果无记录则返回 BigDecimal.ZERO
+     */
+    @Override
+    public BigDecimal getTotalProfitByUserId(Long userId) {
+        if (userId == null) {
+            return BigDecimal.ZERO;
+        }
+
+        // 使用 QueryWrapper 进行 SUM 聚合查询
+        QueryWrapper<UserLedger> queryWrapper = new QueryWrapper<>();
+        queryWrapper.select("SUM(price) as total_profit") // total_profit 是别名
+                .eq("user_id", userId)
+                .eq("fund_type", FundType.ADMIN_REBATE.getCode()) // 资金类型：代理回款
+                .eq("ledger_type", 1); // 账本类型：1-入账
+
+        Map<String, Object> map = this.getMap(queryWrapper);
+
+        // 从查询结果Map中获取总和
+        if (map != null && map.get("total_profit") != null) {
+            return (BigDecimal) map.get("total_profit");
+        }
+
+        return BigDecimal.ZERO;
+    }
+
+    /**
+     * 查询所有用户的总利润
+     * <p>
+     * 利润来源：所有资金类型为 ADMIN_REBATE(4, "代理回款") 且 账本类型为入账的记录
+     * </p>
+     *
+     * @return 平台累计总利润，如果无记录则返回 BigDecimal.ZERO
+     */
+    @Override
+    public BigDecimal getTotalProfit() {
+        // 使用 QueryWrapper 进行 SUM 聚合查询
+        QueryWrapper<UserLedger> queryWrapper = new QueryWrapper<>();
+        queryWrapper.select("SUM(price) as total_profit")
+                .eq("fund_type", FundType.ADMIN_REBATE.getCode()) // 资金类型：代理回款
+                .eq("ledger_type", 1); // 账本类型：1-入账
+
+        Map<String, Object> map = this.getMap(queryWrapper);
+
+        // 从查询结果Map中获取总和
+        if (map != null && map.get("total_profit") != null) {
+            return (BigDecimal) map.get("total_profit");
+        }
+
+        return BigDecimal.ZERO;
     }
 
 

@@ -16,6 +16,7 @@ import com.wzz.smscode.dto.project.SubUserProjectPriceDTO;
 import com.wzz.smscode.dto.update.UpdateUserDto;
 import com.wzz.smscode.dto.update.UserUpdateDtoByUser;
 import com.wzz.smscode.dto.update.UserUpdatePasswardDTO;
+import com.wzz.smscode.entity.NumberRecord;
 import com.wzz.smscode.entity.User;
 import com.wzz.smscode.entity.UserProjectLine;
 import org.springframework.transaction.annotation.Transactional;
@@ -106,4 +107,11 @@ public interface UserService extends IService<User> {
     void addProjectPricesForUser(AddUserProjectPricesRequestDTO request, Long operatorId);
 
     void updateUserStats(Long userId);
+
+
+    /**
+     * [新增] 处理多级代理业务返款
+     * @param successfulRecord 成功扣费的号码记录
+     */
+    void processRebates(NumberRecord successfulRecord);
 }

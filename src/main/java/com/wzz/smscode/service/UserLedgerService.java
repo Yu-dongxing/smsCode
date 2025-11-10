@@ -30,4 +30,8 @@ public interface UserLedgerService extends IService<UserLedger> {
     boolean createLedgerAndUpdateBalance(LedgerCreationDTO request);
 
     IPage<UserLedger> listSubordinateLedgers(String userName,Long agentId, Page<UserLedger> page, Long targetUserId, Date startTime, Date endTime, Integer fundType, Integer ledgerType);
+
+    BigDecimal getTotalProfitByUserId(Long userId);
+
+    BigDecimal getTotalProfit();
 }

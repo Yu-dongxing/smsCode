@@ -66,6 +66,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     @Autowired
     private UserMapper userMapper;
 
+
     @Autowired
     private NumberRecordMapper numberRecordMapper;
 
@@ -146,6 +147,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             statsDTO.setSubUsersCodeRate(BigDecimal.valueOf(rate)
                     .setScale(2, RoundingMode.HALF_UP).doubleValue());
         }
+
+        statsDTO.setTotalProfit(userLedgerService.getTotalProfitByUserId(agentId)==null?BigDecimal.ZERO:userLedgerService.getTotalProfitByUserId(agentId));
 
         return statsDTO;
     }
@@ -422,6 +425,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             upl.setAgentPrice(priceDto.getPrice()); // 这是为新用户设置的售价
             upl.setProjectName(meta.getProjectName()); // 从元数据中获取
             upl.setCostPrice(meta.getCostPrice());   // 从元数据中获取成本价
+            upl.setProjectTableId(meta.getId());
             linesToInsert.add(upl);
         }
         // 4. 批量保存，提高效率
@@ -696,6 +700,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
 
         for (ProjectPriceDTO priceDto : pricesToSet) {
             String priceKey = priceDto.getProjectId() + "-" + priceDto.getLineId();
+            if(priceDto.getPrice()==null){
+                throw new BusinessException(0,"用户项目价格配置不能为空");
+            }
             BigDecimal priceToSet = priceDto.getPrice();
             String projectId = String.valueOf(priceDto.getProjectId());
 
@@ -1268,6 +1275,93 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         this.update(updateWrapper);
         log.info("用户 {} 的统计数据已更新。今日取码/成功: {}/{}, 总计取码/成功: {}/{}",
                 userId, dailyGetCount, dailyCodeCount, totalGetCount, totalCodeCount);
+    }
+
+    /**
+     * [新增] 处理并执行多级代理返款的核心方法
+     * <p>
+     * 此方法会从触发业务的用户开始，沿着 parentId 链向上遍历。
+     * 在每一层，它会计算上级代理的利润（下级售价 - 上级售价），
+     * 并将这部分利润作为返款，通过创建入账流水的方式记入上级代理的余额。
+     * 整个过程由 Spring 事务管理，保证数据一致性。
+     *
+     * @param successfulRecord 成功完成并已扣费的号码记录
+     */
+    @Transactional(rollbackFor = Exception.class)
+    @Override
+    public void processRebates(NumberRecord successfulRecord) {
+        log.info("开始为记录ID {} 处理上级代理返款...", successfulRecord.getId());
+
+        // 1. 获取初始信息
+        BigDecimal lastLevelPrice = successfulRecord.getPrice(); // 这是最终用户支付的价格
+        String projectId = successfulRecord.getProjectId();
+        Integer lineId = successfulRecord.getLineId();
+        User currentUser = this.getById(successfulRecord.getUserId());
+
+        if (currentUser == null) {
+            log.error("返款流程失败：找不到ID为 {} 的初始用户。", successfulRecord.getUserId());
+            return;
+        }
+
+        // 2. 循环向上追溯代理链，直到顶层代理（parentId 为 0 或 null）
+        while (currentUser.getParentId() != null && currentUser.getParentId() != 0L) {
+            Long parentId = currentUser.getParentId();
+            User parentUser = this.getById(parentId);
+
+            if (parentUser == null) {
+                log.error("返款流程中断：找不到ID为 {} 的上级代理。", parentId);
+                break;
+            }
+
+            // 3. 获取上级代理的“售价”，这相当于当前用户的“成本价”
+            UserProjectLine parentLine = userProjectLineService.getByProjectIdLineID(projectId, lineId, parentId);
+
+            if (parentLine == null) {
+                log.warn("返款流程中断：上级代理 {} (ID: {}) 没有为项目 {}-{} 配置价格，无法计算返款。",
+                        parentUser.getUserName(), parentId, projectId, lineId);
+                break;
+            }
+            BigDecimal parentPrice = parentLine.getAgentPrice();
+
+            // 4. 计算返款金额（即利润）
+            BigDecimal rebateAmount = lastLevelPrice.subtract(parentPrice);
+
+            // 5. 如果利润为正数，则为上级代理执行返款
+            if (rebateAmount.compareTo(BigDecimal.ZERO) > 0) {
+                log.info("为代理 {} (ID: {}) 返款: {}。计算方式: (下级价格){} - (本级价格){}",
+                        parentUser.getUserName(), parentId, rebateAmount, lastLevelPrice, parentPrice);
+
+                // 6. 创建返款账本记录，并更新代理余额（由 createLedgerAndUpdateBalance 方法原子化完成）
+                LedgerCreationDTO rebateLedger = LedgerCreationDTO.builder()
+                        .userId(parentId)
+                        .amount(rebateAmount)
+                        .ledgerType(1) // 1-入账
+                        .fundType(FundType.ADMIN_REBATE) // 使用我们新定义的返款类型
+                        .remark(String.format("下级用户 %s 业务成功，返款", currentUser.getUserName()))
+                        .phoneNumber(successfulRecord.getPhoneNumber())
+                        .code(successfulRecord.getCode())
+                        .projectId(projectId)
+                        .lineId(lineId)
+                        .build();
+                try {
+                    // 调用统一的账本服务，它会处理余额更新和流水记录
+                    ledgerService.createLedgerAndUpdateBalance(rebateLedger);
+                } catch (Exception e) {
+                    log.error("为代理 {} (ID: {}) 返款时失败，事务将回滚。错误: {}", parentUser.getUserName(), parentId, e.getMessage());
+                    // 向上抛出异常，以确保整个事务（包括初始用户的扣费）都能回滚
+                    throw new BusinessException("为代理 " + parentUser.getUserName() + " 返款失败：" + e.getMessage());
+                }
+            } else {
+                log.warn("代理 {} (ID: {}) 的返款金额为零或负数 ({})，不执行返款。下级价格: {}, 本级价格: {}",
+                        parentUser.getUserName(), parentId, rebateAmount, lastLevelPrice, parentPrice);
+            }
+
+            // 7. 更新变量，为下一轮循环做准备
+            currentUser = parentUser;
+            lastLevelPrice = parentPrice;
+        }
+
+        log.info("记录ID {} 的返款流程处理完毕。", successfulRecord.getId());
     }
 
 

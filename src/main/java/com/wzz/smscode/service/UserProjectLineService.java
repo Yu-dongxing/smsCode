@@ -15,7 +15,7 @@ public interface UserProjectLineService extends IService<UserProjectLine> {
     UserProjectLine getByProjectIdLineID(String projectId, Integer lineId,Long userId);
 
     @Transactional(rollbackFor = Exception.class)
-    boolean updateUserProjectLines(SubUserProjectPriceDTO dto);
+    boolean updateUserProjectLines(SubUserProjectPriceDTO dto, Long editorId);
 
     Boolean updateUserProjectLinesById(UserProjectLine userProjectLine);
 }

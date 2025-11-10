@@ -23,6 +23,7 @@ import com.wzz.smscode.entity.UserLedger;
 import com.wzz.smscode.entity.UserProjectLine;
 import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.service.*;
+import jakarta.validation.constraints.NotNull;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -153,6 +154,23 @@ public class AgentController {
             return Result.error("修改失败，提交的数据不合法或无权操作");
         }
     }
+
+//    /**
+//     * 修改下级用户的信息并且更新用户项目价格配置
+//     */
+//    @SaCheckLogin
+//    @PostMapping("/updateUser")
+//    public Result<?> updateUserByUserProjectLineConfug(@RequestBody UserUpdateDtoByUser userDTO) {
+//        long agentId = StpUtil.getLoginIdAsLong();
+//        try {
+////            boolean success = userService.updateUserByAgent(userDTO, agentId);
+//
+////            return success ? Result.success("修改成功") : Result.error("信息无变化或修改失败");
+//        } catch (IllegalArgumentException | SecurityException e) {
+//            log.warn("修改用户信息业务校验失败: {}", e.getMessage());
+//            return Result.error("修改失败，提交的数据不合法或无权操作");
+//        }
+//    }
 
     /**
      * 为下级用户充值
@@ -488,9 +506,11 @@ public class AgentController {
      */
     @PostMapping("/sub-user-project-prices/update")
     public Result<?> updateUserProjectPrices(@RequestBody SubUserProjectPriceDTO subUserProjectPriceDTO) {
+        log.info("代理更新，{}", subUserProjectPriceDTO);
         try {
+            Long agentId = StpUtil.getLoginIdAsLong();
             // 调用包含事务处理的 Service 方法
-            boolean success = userProjectLineService.updateUserProjectLines(subUserProjectPriceDTO);
+            boolean success = userProjectLineService.updateUserProjectLines(subUserProjectPriceDTO,agentId);
             return success ? Result.success("更新成功") : Result.error("更新失败或数据无变化");
         } catch (BusinessException e) {
             log.warn("编辑用户项目配置业务校验失败: {}", e.getMessage());
@@ -634,6 +654,21 @@ public class AgentController {
         } catch (Exception e) {
             log.error("代理 [{}] 删除价格模板失败", agentId, e);
             return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，删除失败");
+        }
+    }
+
+
+    /**
+     * 查询代理总利润
+     */
+    @GetMapping("/by-user/totalProfit")
+    public Result<?> getTotalProfit() {
+        try{
+            StpUtil.checkLogin();
+            Long  agentId = StpUtil.getLoginIdAsLong();
+            return Result.success(userLedgerService.getTotalProfitByUserId(agentId)==null?0:userLedgerService.getTotalProfitByUserId(agentId) );
+        }catch (BusinessException e){
+            return Result.error(e.getMessage());
         }
     }
 }

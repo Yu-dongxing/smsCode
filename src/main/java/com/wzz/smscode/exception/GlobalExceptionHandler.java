@@ -196,6 +196,9 @@ public class GlobalExceptionHandler {
         // 对于其他未分类的HTTP错误
         return Result.error(HttpStatus.INTERNAL_SERVER_ERROR.value(), "调用外部服务时发生未知错误", errorDetails);
     }
+
+
+
     /**
      * 数据库框架异常MyBatisSystemException
      */
