@@ -272,6 +272,8 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         }
 
         latestRecord.setCodeReceivedTime(LocalDateTime.now());
+        //User user = userService.getById(latestRecord.getUserId());
+        //UserProjectLine userProjectLine = userProjectLineService.getByProjectIdLineID(record.getProjectId(),record.getLineId(),user.getId());
 
         if (result != null) {
             latestRecord.setStatus(2);
@@ -427,6 +429,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
 
         latestRecord.setCodeReceivedTime(LocalDateTime.now());
 
+        //UserProjectLine userProjectLine = userProjectLineService.getByProjectIdLineID(record.getProjectId(),record.getLineId(),user.getId());
         if (code != null) {
             latestRecord.setStatus(2);
             latestRecord.setCode(code);
