@@ -131,6 +131,59 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
                 .collect(Collectors.toList());
     }
 
+    /**
+     * [重构后] 根据【用户】和【项目ID】查询其有权访问的线路列表
+     * @param userId    用户ID
+     * @param projectId 项目ID
+     * @return 包含 lineId 和 lineName 的 Map 列表
+     */
+    @Override
+    public List<Map<String, Object>> listLinesWithCamelCaseKeyFor(Long userId, String projectId) {
+        // 1. 参数校验
+        if (userId == null || projectId == null || projectId.isEmpty()) {
+            throw new BusinessException("用户ID和项目ID不能为空");
+        }
+
+        // 2. 从用户项目线路配置表中，查询指定用户和项目的所有线路记录
+        LambdaQueryWrapper<UserProjectLine> userLineQuery = new LambdaQueryWrapper<>();
+        userLineQuery.eq(UserProjectLine::getUserId, userId)
+                .eq(UserProjectLine::getProjectId, projectId)
+                .eq(UserProjectLine::isStatus, true)
+                .select(UserProjectLine::getLineId, UserProjectLine::getProjectTableId); // 优化：只查询需要的字段
+
+        List<UserProjectLine> userLines = userProjectLineService.list(userLineQuery);
+
+        if (CollectionUtils.isEmpty(userLines)) {
+            return Collections.emptyList();
+        }
+
+        // 3. 提取所有线路关联的主项目ID (project_table_id)
+        List<Long> projectTableIds = userLines.stream()
+                .map(UserProjectLine::getProjectTableId)
+                .distinct()
+                .collect(Collectors.toList());
+
+        // 4. 一次性从 Project 表中查出所有相关的项目信息（包含 lineName）
+        LambdaQueryWrapper<Project> projectQuery = new LambdaQueryWrapper<>();
+        projectQuery.in(Project::getId, projectTableIds)
+                .select(Project::getId, Project::getLineName, Project::getLineId);
+
+        Map<Long, Project> projectInfoMap = this.list(projectQuery).stream()
+                .collect(Collectors.toMap(Project::getId, Function.identity()));
+
+        // 5. 组合最终结果
+        return userLines.stream()
+                .map(userLine -> {
+                    Project projectInfo = projectInfoMap.get(userLine.getProjectTableId());
+                    Map<String, Object> map = new HashMap<>();
+                    map.put("lineId", userLine.getLineId());
+                    // 如果能找到对应的项目信息，则使用其 lineName，否则给一个默认值
+                    map.put("lineName", (projectInfo != null) ? projectInfo.getLineName() : "未知线路");
+                    return map;
+                })
+                .collect(Collectors.toList());
+    }
+
     @Override
     public Map<String, ProjectPriceDetailsDTO> getAllProjectPrices() {
         List<Project> allLines = this.list();

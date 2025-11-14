@@ -24,6 +24,9 @@ public interface ProjectService extends IService<Project> {
 
     List<Map<String, Object>> listLinesWithCamelCaseKey(String projectId);
 
+
+    List<Map<String, Object>> listLinesWithCamelCaseKeyFor(Long userId, String projectId);
+
     Map<String, ProjectPriceDetailsDTO> getAllProjectPrices();
 
     Map<String, BigDecimal> fillMissingPrices(Map<String, BigDecimal> inputPrices);
@@ -33,4 +36,5 @@ public interface ProjectService extends IService<Project> {
     Boolean deleteByID(long id);
 
     List<UserProjectLine>listUserProjects(Long userId);
+
 }

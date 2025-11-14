@@ -102,6 +102,7 @@ public class UserProjectLineServiceImpl extends ServiceImpl<UserProjectLineMappe
         List<ProjectPriceInfoDTO> incomingPrices = dto.getProjectPrices();
         boolean isAdmin = editorId == 0L;
 
+        // 如果传入的配置列表为空，则直接删除该用户的所有配置
         if (CollectionUtils.isEmpty(incomingPrices)) {
             this.remove(new LambdaQueryWrapper<UserProjectLine>().eq(UserProjectLine::getUserId, targetUserId));
             return true;
@@ -109,7 +110,6 @@ public class UserProjectLineServiceImpl extends ServiceImpl<UserProjectLineMappe
 
         // [正确方式] 1. 根据传入的所有 projectId 和 lineId 组合，一次性查询出所有相关的总项目信息
         LambdaQueryWrapper<Project> projectQueryWrapper = new LambdaQueryWrapper<>();
-        // 构建 (projectId = ? AND lineId = ?) OR (projectId = ? AND lineId = ?) ... 的查询条件
         projectQueryWrapper.and(wrapper -> {
             for (int i = 0; i < incomingPrices.size(); i++) {
                 ProjectPriceInfoDTO priceDto = incomingPrices.get(i);
@@ -146,7 +146,7 @@ public class UserProjectLineServiceImpl extends ServiceImpl<UserProjectLineMappe
                 .collect(Collectors.toMap(
                         line -> line.getProjectId() + ":" + line.getLineId(),
                         Function.identity(),
-                        (first, second) -> first
+                        (first, second) -> first // 防御重复数据
                 ));
 
         List<UserProjectLine> linesToInsert = new ArrayList<>();
@@ -157,41 +157,62 @@ public class UserProjectLineServiceImpl extends ServiceImpl<UserProjectLineMappe
             String key = priceDto.getProjectId() + ":" + priceDto.getLineId();
             BigDecimal newPrice = priceDto.getPrice();
 
+            // 【新增】获取传入的状态
+            Boolean newStatus = priceDto.getStatus();
+
             // 从Map中获取权威的项目信息
             Project project = projectDetailsMap.get(key);
+            if (project == null) {
+                // 如果在总项目表中都找不到对应的项目线路，可以选择跳过或抛出异常
+                // 这里选择记录日志并跳过，更为健壮
+//                log.info("更新用户项目失败：找不到对应的总项目。ProjectId: {}, LineId: {}", priceDto.getProjectId(), priceDto.getLineId());
+                continue;
+            }
 
             // 执行价格校验
             validatePrice(priceDto, newPrice, isAdmin, editorPriceMap, project);
 
             UserProjectLine existingLine = existingLinesMap.get(key);
             if (existingLine != null) {
-                // 更新...
+                // --- 更新逻辑 ---
                 boolean needsUpdate = false;
+
+                // 检查价格是否有变化
                 if (newPrice != null && (existingLine.getAgentPrice() == null || newPrice.compareTo(existingLine.getAgentPrice()) != 0)) {
                     existingLine.setAgentPrice(newPrice);
                     needsUpdate = true;
                 }
+
+                // 【新增】检查状态是否有变化
+                if (newStatus != null && !newStatus.equals(existingLine.isStatus())) {
+                    existingLine.setStatus(newStatus);
+                    needsUpdate = true;
+                }
+
                 if (needsUpdate) {
                     linesToUpdate.add(existingLine);
                 }
+                // 处理过的从map中移除，剩下的就是要被删除的
                 existingLinesMap.remove(key);
             } else {
-                // 新增...
+                // --- 新增逻辑 ---
                 UserProjectLine newLine = new UserProjectLine();
                 newLine.setUserId(targetUserId);
-                // 注意：这里的 project_table_id 应该从查到的 project 对象获取
                 newLine.setProjectTableId(project.getId());
                 newLine.setProjectName(project.getProjectName());
                 newLine.setProjectId(project.getProjectId());
                 newLine.setLineId(project.getLineId());
                 newLine.setAgentPrice(newPrice);
-                // 成本价也应该以总项目为准
                 newLine.setCostPrice(project.getCostPrice());
+
+                // 【新增】设置状态，如果传入为null，则默认为 true (启用)
+                newLine.setStatus(newStatus != null ? newStatus : true);
+
                 linesToInsert.add(newLine);
             }
         }
 
-        // 5. 删除多余的配置
+        // 5. 删除多余的配置（在传入的列表中不存在，但在数据库中存在的）
         if (!existingLinesMap.isEmpty()) {
             List<Long> idsToDelete = existingLinesMap.values().stream()
                     .map(UserProjectLine::getId)

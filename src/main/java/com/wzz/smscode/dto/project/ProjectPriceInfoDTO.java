@@ -45,4 +45,9 @@ public class ProjectPriceInfoDTO {
      * 项目最低价
      */
     private BigDecimal minPrice;
+
+    /**
+     * 状态
+     */
+    private Boolean status;
 }

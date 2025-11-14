@@ -245,7 +245,7 @@ public class UserController {
         }
 
         // 2. 调用新的 service 方法，获取包含 id 和 name 的 Map 列表
-        List<Map<String, Object>> lines = projectService.listLinesWithCamelCaseKey(projectId);
+        List<Map<String, Object>> lines = projectService.listLinesWithCamelCaseKeyFor(user.getId(),projectId);
 
         // 3. 将查询结果返回
         return CommonResultDTO.success("查询成功", lines);

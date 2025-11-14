@@ -89,4 +89,13 @@ public class UserProjectLine extends BaseEntity {
     @ColumnComment("备注")
     @TableField("remark")
     private String remark;
+
+
+    /**
+     * 状态 (0-禁用, 1-启用)
+     */
+    @ColumnComment("状态 (0-禁用, 1-启用)")
+    @TableField("status")
+    @DefaultValue("1")
+    private boolean status;
 }
