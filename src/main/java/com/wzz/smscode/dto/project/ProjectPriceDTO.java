@@ -24,4 +24,9 @@ public  class ProjectPriceDTO {
      * 价格
      */
     private BigDecimal price;
+
+    /**
+     * 状态
+     */
+    private Boolean status;
 }

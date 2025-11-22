@@ -18,6 +18,7 @@ import com.wzz.smscode.dto.number.NumberDTO;
 import com.wzz.smscode.dto.project.ProjectPriceInfoDTO;
 import com.wzz.smscode.dto.project.SubUserProjectPriceDTO;
 import com.wzz.smscode.dto.update.UpdateUserDto;
+import com.wzz.smscode.dto.update.UserUpdateDtoByUser;
 import com.wzz.smscode.entity.*;
 import com.wzz.smscode.enums.AuthType;
 import com.wzz.smscode.enums.RequestType;
@@ -144,9 +145,9 @@ public class AdminController {
      * @return
      */
     @PostMapping("/updateUser")
-    public Result<?> updateUser(@RequestBody User userDTO) {
+    public Result<?> updateUser(@RequestBody UserUpdateDtoByUser userDTO) {
         try {
-            boolean success = userService.updateUserByEn(userDTO, 0L);
+            boolean success = userService.updateUserByAgent(userDTO, 0L);
             return success ? Result.success("修改成功") : Result.error(-5, "信息无变化或修改失败");
         } catch (Exception e) {
             return Result.error(-5, e.getMessage());

@@ -290,6 +290,7 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
 
             // 设置根据规则计算出的代理售价
             line.setAgentPrice(finalDefaultPrice);
+            line.setStatus(true);
 
             return line;
         }).collect(Collectors.toList());

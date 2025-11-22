@@ -426,6 +426,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             upl.setProjectName(meta.getProjectName()); // 从元数据中获取
             upl.setCostPrice(meta.getCostPrice());   // 从元数据中获取成本价
             upl.setProjectTableId(meta.getId());
+            upl.setStatus(priceDto.getStatus());
             linesToInsert.add(upl);
         }
         // 4. 批量保存，提高效率
