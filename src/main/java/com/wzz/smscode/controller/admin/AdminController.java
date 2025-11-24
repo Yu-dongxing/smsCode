@@ -146,6 +146,7 @@ public class AdminController {
      */
     @PostMapping("/updateUser")
     public Result<?> updateUser(@RequestBody UserUpdateDtoByUser userDTO) {
+        log.info("编辑用户信息接口： updateUser: {}", userDTO);
         try {
             boolean success = userService.updateUserByAgent(userDTO, 0L);
             return success ? Result.success("修改成功") : Result.error(-5, "信息无变化或修改失败");

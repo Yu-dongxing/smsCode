@@ -1,5 +1,6 @@
 package com.wzz.smscode.dto.update;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Data;
 
 @Data
@@ -19,6 +20,7 @@ public class UserUpdateDtoByUser {
     /**
      * 否具有代理权限。0表示普通用户，1表示代理用户。
      */
+    @JsonProperty("isAgent")
     private boolean isAgent;
     /**、
      * 用户状态（0=正常，1=冻结/禁用等）

@@ -42,6 +42,10 @@ public class NumberDTO {
      */
     private Integer lineId;
     /**
+     * 用户名
+     */
+    private String userName;
+    /**
      * 获取手机号的时间
      */
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
