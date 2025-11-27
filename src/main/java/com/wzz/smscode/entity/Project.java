@@ -2,10 +2,13 @@ package com.wzz.smscode.entity;
 
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler;
 import com.wzz.smscode.annotation.ColumnComment;
+import com.wzz.smscode.annotation.ColumnType;
 import com.wzz.smscode.annotation.DefaultValue;
 import com.wzz.smscode.annotation.TableComment;
 import com.wzz.smscode.common.BaseEntity;
+import com.wzz.smscode.dto.ApiConfig.ApiConfig;
 import com.wzz.smscode.enums.AuthType;
 import com.wzz.smscode.enums.RequestType;
 import lombok.Data;
@@ -24,7 +27,7 @@ import java.time.LocalDateTime;
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
-@TableName("project")
+@TableName(value = "project", autoResultMap = true)
 @TableComment("项目表")
 public class Project extends BaseEntity {
 
@@ -332,6 +335,10 @@ public class Project extends BaseEntity {
 
     // --- 业务逻辑与定价配置 ---
 
+
+
+
+
     /**
      * 获取验证码超时时长（秒）
      */
@@ -395,5 +402,25 @@ public class Project extends BaseEntity {
     @ColumnComment("筛选API所需的ID或密钥")
     @TableField("filter_id")
     private String filterId;
+
+
+    // === 核心：使用 TypeHandler 映射 JSON 配置 ===
+
+    @TableField(value = "login_config", typeHandler = JacksonTypeHandler.class)
+    @ColumnType("JSON")
+    private ApiConfig loginConfig;
+
+    @TableField(value = "get_number_config", typeHandler = JacksonTypeHandler.class)
+    @ColumnType("JSON")
+    private ApiConfig getNumberConfig;
+
+    @TableField(value = "get_code_config", typeHandler = JacksonTypeHandler.class)
+    @ColumnType("JSON")
+    private ApiConfig getCodeConfig;
+
+    @TableField(value = "get_balance_config", typeHandler = JacksonTypeHandler.class)
+    @ColumnType("JSON")
+    private ApiConfig getBalanceConfig;
+
 
 }

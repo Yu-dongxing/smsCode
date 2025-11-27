@@ -1,15 +1,15 @@
 package com.wzz.smscode.moduleService;
 
+import com.wzz.smscode.dto.ApiConfig.ApiConfig;
+import com.wzz.smscode.dto.ApiConfig.ExtractRule;
+import com.wzz.smscode.dto.RequestDTO.KeyValue;
 import com.wzz.smscode.entity.Project;
 import com.wzz.smscode.entity.SystemConfig;
 import com.wzz.smscode.exception.BusinessException;
-import com.wzz.smscode.moduleService.strategy.AuthStrategy;
-import com.wzz.smscode.moduleService.strategy.AuthStrategyFactory;
+import com.wzz.smscode.service.ProjectService;
 import com.wzz.smscode.service.SystemConfigService;
-import com.wzz.smscode.util.ResponseParser;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -21,175 +21,305 @@ import java.net.URI;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
-import java.time.format.DateTimeParseException;
-import java.time.temporal.ChronoUnit;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 import com.jayway.jsonpath.JsonPath;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
+import org.springframework.web.reactive.function.BodyInserters;
 
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class SmsApiService {
-
-    private final AuthStrategyFactory authStrategyFactory;
-    private final ResponseParser responseParser;
     private final WebClient webClient; // 从WebClientConfig注入
     private final SystemConfigService systemConfigService;
 
+    private final ProjectService projectService; // 需要更新Token到数据库
+
+    // 变量替换正则：匹配 {{variable}}
+    private static final Pattern VARIABLE_PATTERN = Pattern.compile("\\{\\{(.+?)}}");
+
+
+
     /**
-     * 【核心修改点】 增加 String... params 参数
-     * 统一获取手机号或操作ID
-     *
-     * @param project 项目配置
-     * @param params  用于替换URL中占位符的动态参数
-     * @return 手机号或操作ID
+     * 通用 API 执行方法
+     * @param config 前端传递的接口配置
+     * @param context 上下文变量 (入参为当前变量，执行后会将提取的新变量 put 进去)
      */
-    public Map<String, String> getPhoneNumber(Project project, String... params) { // 1. 签名增加 varargs
-        log.info("开始为项目 [{} - {}] 获取手机号...", project.getProjectId(), project.getLineId());
-        AuthStrategy strategy = authStrategyFactory.getStrategy(String.valueOf(project.getAuthType()));
-        try {
-            String responseBody = strategy.buildGetNumberRequest(webClient, project, params).block();
-            log.info("项目 [{} - {}] 获取手机号API响应: {}", project.getProjectId(), project.getLineId(), responseBody);
-            // 【核心修改】调用新的解析方法
-            Map<String, String> parsedResult = responseParser.parsePhoneNumberByType(project, responseBody);
-            String phoneNumber = parsedResult.get("phone");
-            // 如果成功解析出手机号，就返回手机号
-            if (StringUtils.hasText(phoneNumber)) {
-                log.info("为项目 [{} - {}] 解析到手机号: {}", project.getProjectId(), project.getLineId(), phoneNumber);
-
-                // 你可以在这里处理解析出的ID，例如存入数据库或缓存，用于后续的释放、拉黑等操作
-                String phoneId = parsedResult.get("id");
-                if (StringUtils.hasText(phoneId)) {
-                    log.info("为项目 [{} - {}] 解析到手机号唯一ID: {}", project.getProjectId(), project.getLineId(), phoneId);
-                }
-                return parsedResult;
+    private void executeApi(ApiConfig config, Map<String, String> context) {
+        // 1. 处理前置操作 (PreHooks)
+        if (config.getPreHooks() != null) {
+            for (KeyValue hook : config.getPreHooks()) {
+                String val = replaceVariables(hook.getValue(), context);
+                context.put(hook.getKey(), val);
             }
-            // 如果没有解析到手机号，则按原逻辑返回整个响应体作为操作ID
-            log.warn("在响应中未解析到手机号，将返回原始响应体作为操作ID。响应: {}", responseBody);
-            parsedResult.put("responseBody", responseBody);
+        }
 
-            return parsedResult;
+        // 2. 构建 URL
+        String rawUrl = config.getUrl();
+        if (!StringUtils.hasText(rawUrl)) {
+            throw new BusinessException("接口 URL 不能为空");
+        }
+        String finalUrl = replaceVariables(rawUrl, context);
 
-        } catch (Exception e) {
-            log.error("为项目 [{} - {}] 获取手机号失败", project.getProjectId(), project.getLineId(), e);
-            throw new BusinessException(0, "获取手机号失败", e);
+        // 3. 构建 Query 参数
+        UriComponentsBuilder uriBuilder = UriComponentsBuilder.fromHttpUrl(finalUrl);
+        if (config.getParams() != null) {
+            for (KeyValue param : config.getParams()) {
+                if (StringUtils.hasText(param.getKey())) {
+                    uriBuilder.queryParam(param.getKey(), replaceVariables(param.getValue(), context));
+                }
+            }
+        }
+        URI uri = uriBuilder.build().encode().toUri();
+
+        // 4. 构建请求体
+        Object body = null;
+        MediaType contentType = MediaType.APPLICATION_JSON; // 默认
+
+        if ("JSON".equalsIgnoreCase(config.getBodyType())) {
+            String jsonStr = config.getJsonBody();
+            if (StringUtils.hasText(jsonStr)) {
+                body = replaceVariables(jsonStr, context);
+                contentType = MediaType.APPLICATION_JSON;
+            }
+        } else if ("FORM_DATA".equalsIgnoreCase(config.getBodyType()) || "X_WWW_FORM".equalsIgnoreCase(config.getBodyType())) {
+            MultiValueMap<String, String> formData = new LinkedMultiValueMap<>();
+            if (config.getFormBody() != null) {
+                for (KeyValue item : config.getFormBody()) {
+                    formData.add(item.getKey(), replaceVariables(item.getValue(), context));
+                }
+            }
+            body = BodyInserters.fromFormData(formData);
+            contentType = MediaType.APPLICATION_FORM_URLENCODED;
+        }
+
+        // 5. 发起请求
+        WebClient.RequestBodySpec requestSpec = webClient
+                .method(HttpMethod.valueOf(config.getMethod().toUpperCase()))
+                .uri(uri)
+                .contentType(contentType);
+
+        // 添加 Headers
+        if (config.getHeaders() != null) {
+            for (KeyValue header : config.getHeaders()) {
+                if (StringUtils.hasText(header.getKey())) {
+                    requestSpec.header(header.getKey(), replaceVariables(header.getValue(), context));
+                }
+            }
+        }
+
+        if (body != null) {
+            requestSpec.body(body instanceof BodyInserters.FormInserter ? (BodyInserters.FormInserter) body : BodyInserters.fromValue(body));
+        }
+
+        // 6. 获取响应
+        String responseBody = requestSpec.retrieve()
+                .bodyToMono(String.class)
+                .timeout(Duration.ofSeconds(30))
+                .block();
+
+        log.info("API响应 [{}]: {}", finalUrl, responseBody);
+
+        // 7. 执行变量提取 (Extract Rules)
+        if (config.getExtractRules() != null && StringUtils.hasText(responseBody)) {
+            for (ExtractRule rule : config.getExtractRules()) {
+                try {
+                    String extractedValue = null;
+                    if ("BODY".equalsIgnoreCase(rule.getSource())) {
+                        Object val = JsonPath.parse(responseBody).read(rule.getJsonPath());
+                        extractedValue = String.valueOf(val);
+                    }
+
+                    if (extractedValue != null) {
+                        context.put(rule.getTargetVariable(), extractedValue);
+                        log.info("变量提取成功: {} = {}", rule.getTargetVariable(), extractedValue);
+                    }
+                } catch (Exception e) {
+                    log.warn("变量提取失败 [Key: {}, Path: {}]: {}", rule.getTargetVariable(), rule.getJsonPath(), e.getMessage());
+                }
+            }
         }
     }
 
     /**
-     * 统一获取验证码（带轮询）
-     *
-     * @param project    项目配置
-     * @param identifier 手机号或上一步获取的操作ID
-     * @return 最新的验证码
+     * 变量替换工具
+     * 将字符串中的 {{key}} 替换为 context 中的 value
      */
-    public String getVerificationCode(Project project, String identifier) {
-        log.info("开始为项目 [{} - {}], 标识符 [{}] 获取验证码 (最大尝试次数: {})...",
-                project.getProjectId(), project.getLineId(), identifier, project.getCodeMaxAttempts());
-        AuthStrategy strategy = authStrategyFactory.getStrategy(String.valueOf(project.getAuthType()));
+    private String replaceVariables(String input, Map<String, String> context) {
+        if (!StringUtils.hasText(input)) {
+            return input;
+        }
+        Matcher matcher = VARIABLE_PATTERN.matcher(input);
+        StringBuffer sb = new StringBuffer();
+        while (matcher.find()) {
+            String key = matcher.group(1).trim(); // 获取 {{ key }} 中的 key
+            String value = context.getOrDefault(key, ""); // 如果找不到，替换为空字符串，或者保留原样视需求而定
+            // 对 value 进行转义，防止 value 中包含 $ 导致报错
+            matcher.appendReplacement(sb, Matcher.quoteReplacement(value));
+        }
+        matcher.appendTail(sb);
+        return sb.toString();
+    }
 
-        // 定义计数器和最大尝试次数
+    /**
+     * 第一步：获取手机号
+     * 流程：
+     * 1. 检查是否需要登录（如果有Token且未过期可跳过，这里简化为每次检查或由配置决定）
+     * 2. 执行获取手机号请求
+     * 3. 返回包含手机号、ID等信息的 Map
+     */
+    public Map<String, String> getPhoneNumber(Project project, String... dynamicParams) {
+        log.info("开始为项目 [{} - {}] 获取手机号", project.getProjectName(), project.getLineId());
+
+        // 1. 初始化上下文变量 (Context)
+        Map<String, String> context = new HashMap<>();
+
+        // 如果数据库里已经存了Token，先放进去
+        if (StringUtils.hasText(project.getAuthTokenValue())) {
+            context.put("token", project.getAuthTokenValue());
+        }
+
+        // 放入传入的动态参数 (如果有)
+        if (dynamicParams != null && dynamicParams.length > 0) {
+            for (int i = 0; i < dynamicParams.length; i++) {
+                context.put("param" + (i + 1), dynamicParams[i]);
+            }
+        }
+
+        // 2. 执行登录 (如果配置了登录接口，且Token为空，或者策略是每次都登录)
+        // 这里做一个简单的逻辑：如果 loginConfig 不为空，且 context 中没有有效 token，尝试登录
+        // 更复杂的逻辑可以判断 token 过期时间
+        if (project.getLoginConfig() != null && StringUtils.hasText(project.getLoginConfig().getUrl())) {
+            try {
+                log.info("尝试执行登录接口...");
+                executeApi(project.getLoginConfig(), context);
+                if (context.containsKey("token")) {
+                    project.setAuthTokenValue(context.get("token"));
+                    projectService.updateById(project);
+                }
+            } catch (Exception e) {
+                log.error("项目 [{} - {}] 执行登录失败,错误：{}",project.getProjectName(), project.getLineId(), e);
+            }
+        }
+
+        // 3. 执行获取手机号接口
+        if (project.getGetNumberConfig() == null) {
+            throw new BusinessException("项目未配置获取手机号接口");
+        }
+
+        // 执行请求，executeApi 会将提取到的变量放入 context
+        executeApi(project.getGetNumberConfig(), context);
+
+        // 4. 检查结果
+        // 前端配置提取规则时，必须将手机号提取为 "phone"，ID提取为 "id" (约定优于配置)
+        if (!context.containsKey("phone")) {
+            log.error("获取手机号接口执行成功，但未提取到 phone 变量。当前Context: {}", context);
+            throw new BusinessException("未获取到手机号，请检查提取规则配置");
+        }
+
+        return context;
+    }
+
+    /**
+     * 第二步：获取验证码
+     * @param project 项目配置
+     * @param identifierParams 上一步获取到的所有变量 (包含 phone, id, token 等)
+     */
+    public String getVerificationCode(Project project, Map<String, String> identifierParams) {
+        log.info("开始获取验证码，参数: {}", identifierParams);
+
+        // 1. 准备上下文
+        Map<String, String> context = new HashMap<>(identifierParams);
+        // 确保 Token 存在 (如果上一步没传，从库里读)
+        if (!context.containsKey("token") && StringUtils.hasText(project.getAuthTokenValue())) {
+            context.put("token", project.getAuthTokenValue());
+        }
+
+        ApiConfig config = project.getGetCodeConfig();
+        if (config == null) {
+            throw new BusinessException("项目未配置获取验证码接口");
+        }
+
+        // 2. 轮询逻辑
         int attempts = 0;
-        final int maxAttempts = (project.getCodeMaxAttempts() != null && project.getCodeMaxAttempts() > 0)
-                ? project.getCodeMaxAttempts()
-                : 20;
-        final long pollIntervalMillis = 3000; // 轮询间隔
+        int maxAttempts = (project.getCodeMaxAttempts() != null && project.getCodeMaxAttempts() > 0)
+                ? project.getCodeMaxAttempts() : 10;
 
         while (attempts < maxAttempts) {
             try {
-                String responseBody = strategy.buildGetCodeRequest(webClient, project, identifier).block();
-                log.info("轮询获取验证码响应: {}", responseBody);
-                if (responseBody != null && (responseBody.contains("错误") || responseBody.contains("失败"))) {
-                    log.info("响应体中检测到错误信息，将立即停止轮询。响应内容: {}", responseBody);
-                    // 抛出业务异常，并将完整的响应体作为错误信息返回给调用方
-                    throw new BusinessException("获取验证码失败:" + responseBody);
+                // 执行请求
+                // 注意：这里需要每次清空"code"变量吗？executeApi是往context里put，会覆盖旧值
+                executeApi(config, context);
+
+                String code = context.get("code"); // 约定提取变量名为 code
+
+                // 增加对 "null" 字符串的过滤
+                if (StringUtils.hasText(code) && !"null".equalsIgnoreCase(code.trim())) {
+                    log.info("成功获取验证码: {}", code);
+                    return code;
                 }
 
-                Optional<String> codeOpt = responseParser.parseVerificationCodeByTypeByJson(project, responseBody);
-
-                // 增加对字符串 "null" (忽略大小写) 的判断
-                if (codeOpt.isPresent() &&
-                        !codeOpt.get().trim().isEmpty() &&
-                        !"null".equalsIgnoreCase(codeOpt.get().trim())) {
-
-                    String code = codeOpt.get().trim();
-                    log.info("成功获取到验证码: {}", code);
-                    return code; // 获取到有效验证码后直接返回
-                }
-
-                // 递增计数器
+                log.info("未获取到验证码，第 {} 次重试...", attempts + 1);
                 attempts++;
-                if (attempts < maxAttempts) {
-                    log.debug("未获取到有效验证码，将在 {}ms 后进行下一次尝试...", pollIntervalMillis);
-                    Thread.sleep(pollIntervalMillis);
-                }
-            } catch (InterruptedException ie) {
+                Thread.sleep(3000); // 3秒轮询一次
+
+            } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                throw new BusinessException("获取验证码线程被中断");
+                throw new BusinessException("获取验证码被中断");
             } catch (Exception e) {
-                log.error("轮询获取验证码时发生错误", e);
-                throw new BusinessException("获取验证码API调用失败: " + e.getMessage());
+                log.warn("轮询中发生异常: {}", e.getMessage());
+                attempts++;
+                try { Thread.sleep(3000); } catch (InterruptedException ignored) {}
             }
         }
-        throw new BusinessException("获取验证码失败，已达到最大尝试次数 (" + maxAttempts + "次)");
+
+        throw new BusinessException("获取验证码超时");
     }
 
     /**
-     * 【新增方法】
-     * 单次尝试获取验证码，无轮询。
-     * 此方法主要由 getCode 接口在用户主动查询时调用，以进行一次即时检查。
+     * 【新增】单次尝试获取验证码 (无轮询)
+     * 用于用户手动刷新或状态检查
      *
-     * @param project    项目配置
-     * @param identifier 手机号或操作ID
-     * @return Optional<String> 包含验证码（如果获取到）
+     * @param project 项目配置
+     * @param identifierParams 上下文参数
+     * @return Optional<String>
      */
-    public Optional<String> fetchVerificationCodeOnce(Project project, String identifier) {
-        log.info("为项目 [{}], 标识符 [{}] 执行单次验证码获取...", project.getProjectId(), identifier);
-        AuthStrategy strategy = authStrategyFactory.getStrategy(String.valueOf(project.getAuthType()));
+    public Optional<String> fetchVerificationCodeOnce(Project project, Map<String, String> identifierParams) {
+         log.info("执行单次验证码获取, 参数: {}", identifierParams);
+
+        Map<String, String> context = new HashMap<>(identifierParams);
+        if (!context.containsKey("token") && StringUtils.hasText(project.getAuthTokenValue())) {
+            context.put("token", project.getAuthTokenValue());
+        }
+
+        ApiConfig config = project.getGetCodeConfig();
+        if (config == null) {
+            log.warn("项目未配置获取验证码接口");
+            return Optional.empty();
+        }
+
         try {
-            String responseBody = strategy.buildGetCodeRequest(webClient, project, identifier).block();
-            log.info("单次获取验证码响应: {}", responseBody);
+            log.info("进入单次验证码获取，{}，{}",config,context);
+            executeApi(config, context);
 
-            if (responseBody != null && (responseBody.contains("错误") || responseBody.contains("失败"))) {
-                log.warn("上游API在单次获取中返回明确错误: {}", responseBody);
-                return Optional.empty(); // 返回空，表示未获取到
+            String code = context.get("code");
+            if (StringUtils.hasText(code) && !"null".equalsIgnoreCase(code.trim())) {
+                log.info("单次获取成功: {}", code);
+                return Optional.of(code);
             }
-
-            Optional<String> codeOpt = responseParser.parseVerificationCodeByTypeByJson(project, responseBody);
-
-            // 过滤掉空字符串或 "null" 字符串
-            return codeOpt.filter(code -> StringUtils.hasText(code) && !"null".equalsIgnoreCase(code.trim()));
-
         } catch (Exception e) {
-            log.error("单次轮询获取验证码时发生错误, identifier [{}]: {}", identifier, e.getMessage());
-            // 发生任何异常都视为未获取到
-            return Optional.empty();
+            log.warn("单次获取验证码API执行异常: {}", e.getMessage());
         }
+
+        return Optional.empty();
     }
 
-    /**
-     * 【新增】一个私有的辅助方法，用于解析可能包含不同分隔符的时间戳字符串。
-     *
-     * @param timestampStr 从响应中提取的时间戳字符串
-     * @return 解析后的 LocalDateTime 对象
-     */
-    private Optional<LocalDateTime> parseFlexibleTimestamp(String timestampStr) {
-        if (timestampStr == null || timestampStr.isEmpty()) {
-            return Optional.empty();
-        }
-        String normalizedTimestamp = timestampStr.replace('/', '-').replace('T', ' ');
-        try {
-            return Optional.of(LocalDateTime.parse(normalizedTimestamp, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
-        } catch (DateTimeParseException e) {
-            log.error("无法使用标准格式 'yyyy-MM-dd HH:mm:ss' 解析时间戳: '{}'", timestampStr, e);
-            return Optional.empty();
-        }
-    }
 
     /**
      * 调用外部API检查手机号码是否可用。

@@ -49,19 +49,7 @@ public class UserProjectLineServiceImpl extends ServiceImpl<UserProjectLineMappe
                 .eq(UserProjectLine::getUserId, userId));
     }
 
-//    @Override
-//    public IPage<UserProjectLine> pageLinesByUserId(Long agentId, Page<AgentProjectPriceDTO> page) {
-//        return null;
-//    }
-//
-//    @Override
-//    public IPage<UserProjectLine> pageLinesByUserId(Long userId, IPage<UserProjectLine> page) {
-//        // 使用 MyBatis-Plus 的 Wrapper 构建查询条件
-//        LambdaQueryWrapper<UserProjectLine> wrapper = new LambdaQueryWrapper<>();
-//        wrapper.eq(UserProjectLine::getUserId, userId); // 假设关联用户的字段是 userId
-//        // baseMapper 就是继承 ServiceImpl 后自带的 Mapper 对象
-//        return baseMapper.selectPage(page, wrapper);
-//    }
+
 
     @Override
     public List<UserProjectLine> getLinesByUserIds(List<Long> userIds,String userName) {
