@@ -671,4 +671,26 @@ public class AgentController {
             return Result.error(e.getMessage());
         }
     }
+
+    /**
+     * 代理-获取下级用户线路统计数据
+     * 只能看到自己下级的数据
+     */
+    @SaCheckLogin
+    @PostMapping("/stats/user-line")
+    public Result<?> getSubUserLineStats(@RequestBody UserLineStatsRequestDTO requestDTO) {
+        try {
+            Long agentId = StpUtil.getLoginIdAsLong();
+            IPage<UserLineStatsDTO> stats = numberRecordService.getUserLineStats(requestDTO, agentId);
+            return Result.success("查询成功", stats);
+        } catch (Exception e) {
+            log.error("代理获取下级统计失败", e);
+            return Result.error("获取统计数据失败");
+        }
+    }
+
+    /**
+     * 查询代理自己的账本记录
+     */
+
 }

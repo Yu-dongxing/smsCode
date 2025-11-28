@@ -3,9 +3,7 @@ package com.wzz.smscode.service;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.wzz.smscode.common.CommonResultDTO;
-import com.wzz.smscode.dto.ProjectStatisticsDTO;
-import com.wzz.smscode.dto.StatisticsQueryDTO;
-import com.wzz.smscode.dto.SubordinateNumberRecordQueryDTO;
+import com.wzz.smscode.dto.*;
 import com.wzz.smscode.dto.number.NumberDTO;
 import com.wzz.smscode.entity.NumberRecord;
 import org.springframework.scheduling.annotation.Async;
@@ -51,4 +49,6 @@ public interface NumberRecordService extends IService<NumberRecord> {
     IPage<ProjectStatisticsDTO> getStatisticsReport(Long operatorId, StatisticsQueryDTO queryDTO);
 
     IPage<NumberDTO> listSubordinateRecordsForAgent(Long agentId, SubordinateNumberRecordQueryDTO queryDTO);
+
+    IPage<UserLineStatsDTO> getUserLineStats(UserLineStatsRequestDTO requestDTO, Long agentId);
 }

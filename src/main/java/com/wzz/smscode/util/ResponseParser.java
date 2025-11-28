@@ -62,91 +62,8 @@ public class ResponseParser {
         return Optional.empty();
     }
 
-    /**
-     * 【已优化】根据项目配置，智能解析手机号和唯一ID。
-     * <p>
-     * 业务逻辑:
-     * 1.  如果 project 中配置了 `responsePhoneNumberField`，则根据该字段名解析手机号。
-     * 2.  如果 project 中配置了 `responsePhoneIdField`，则根据该字段名解析唯一ID。
-     * 3.  如果 `responsePhoneNumberField` 未配置，则回退到使用通用正则表达式解析响应体中的手机号。
-     * 4.  `responsePhoneIdField` 的解析与手机号解析相互独立。
-     * 5.  【优化点】确保不会将 null 或空字符串存入返回的 Map 中，增强代码健壮性。
-     *
-     * @param project      项目配置实体
-     * @param responseBody API接口返回的响应体字符串
-     * @return 一个Map，可能包含 "phone" 和 "id" 两个键，其值保证为非空字符串。如果解析不到任何信息，则返回空Map。
-     */
-    public Map<String, String> parsePhoneNumberByType(Project project, String responseBody) {
-        // 1. 入参校验：为空的响应体直接返回空Map，便于调用方处理
-        if (!StringUtils.hasText(responseBody)) {
-            return new HashMap<>();
-        }
-
-        Map<String, String> result = new HashMap<>();
-        String phoneNumberField = project.getResponsePhoneField();
-        String phoneIdField = project.getResponsePhoneIdField();
-
-        // 2. 优先策略：如果定义了手机号字段，则优先根据字段解析
-        if (StringUtils.hasText(phoneNumberField)) {
-            log.info("进入解析优先策略--");
-            parseJsonFieldValue(responseBody, phoneNumberField)
-                    // 过滤掉解析出的 null 或空字符串
-                    .filter(StringUtils::hasText)
-                    .ifPresent(phone -> result.put("phone", phone));
-        }
-
-        // 3. 【核心修改】回退策略：如果上面的优先策略未能获取到手机号，则使用通用正则进行解析
-        if (!result.containsKey("phone")) {
-            log.info("进入解析回退策略--");
-            Matcher matcher = PHONE_NUMBER_PATTERN.matcher(responseBody);
-            if (matcher.find()) {
-                // matcher.group(1) 在 find() 成功后保证不为 null
-                result.put("phone", matcher.group(1));
-            }
-        }
-
-        // 4. 独立解析ID字段：无论手机号是否解析成功，都独立尝试解析ID
-        if (StringUtils.hasText(phoneIdField)) {
-            log.info("进入独立解析ID字段 ，字段：{}",phoneIdField);
-            parseJsonFieldValueByPath(responseBody, phoneIdField) // 直接调用优化后的方法
-                    .filter(StringUtils::hasText)
-                    .ifPresent(id -> result.put("id", id));
-        }
-
-        return result;
-    }
 
 
-
-    /**
-     * 【已重构】根据项目配置，智能解析验证码。
-     * 优先使用JSON路径解析，如果失败或未配置，则回退到正则表达式。
-     *
-     * @param project      项目配置实体
-     * @param responseBody API接口返回的响应体字符串
-     * @return 包含验证码字符串的 Optional。
-     */
-    public Optional<String> parseVerificationCodeByTypeByJson(Project project, String responseBody) {
-        if (!StringUtils.hasText(responseBody)) {
-            return Optional.empty();
-        }
-
-        String codeField = project.getResponseCodeField();
-
-        // 优先策略：如果定义了验证码字段，则根据JSON路径进行解析
-        if (StringUtils.hasText(codeField)) {
-            Optional<String> parsedCode = parseJsonFieldValueByPath(responseBody, codeField);
-            // 如果JSON解析成功，直接返回结果
-            if (parsedCode.isPresent()) {
-                return parsedCode;
-            }
-            // 如果JSON解析失败，可以根据业务需求决定是否要继续尝试正则（这里选择继续）
-            log.warn("使用JSON路径 '{}' 解析验证码失败，将尝试使用通用正则进行回退解析。", codeField);
-        }
-
-        // 回退策略：如果未定义字段或JSON解析失败，则使用通用正则进行解析
-        return parseVerificationCodeWithRegex(responseBody);
-    }
 
     /**
      * 【回退方法】使用正则表达式从任意文本中提取可能是验证码的数字。
@@ -203,35 +120,6 @@ public class ResponseParser {
         }
     }
 
-    /**
-     * 【新增核心方法】从登录响应中解析出Token和有效期。
-     * 这是一个高级封装方法，供策略类直接调用。
-     *
-     * @param project 项目配置，包含token和有效期的字段路径
-     * @param loginResponseBody 登录接口的JSON响应体
-     * @return 一个Map，可能包含 "token" 和 "expiresIn" 两个键。
-     */
-    public Map<String, String> parseTokenInfo(Project project, String loginResponseBody) {
-        Map<String, String> tokenInfo = new HashMap<>();
-
-        if (!StringUtils.hasText(loginResponseBody)) {
-            return tokenInfo;
-        }
-
-        // 使用核心解析方法解析Token
-        if (StringUtils.hasText(project.getResponseTokenField())) {
-            parseJsonPath(loginResponseBody, project.getResponseTokenField())
-                    .ifPresent(token -> tokenInfo.put("token", token));
-        }
-
-        // 使用核心解析方法解析有效期
-        if (StringUtils.hasText(project.getResponseTokenExpirationField())) {
-            parseJsonPath(loginResponseBody, project.getResponseTokenExpirationField())
-                    .ifPresent(expiresIn -> tokenInfo.put("expiresIn", expiresIn));
-        }
-
-        return tokenInfo;
-    }
 
     /**
      * 【强化核心解析能力】使用JSON Path从响应体中提取字段值。
@@ -272,33 +160,6 @@ public class ResponseParser {
         return Optional.empty();
     }
 
-
-    /**
-     * 【新增】根据项目配置，智能解析验证码。
-     * <p>
-     * 业务逻辑:
-     * 1.  如果 project 中配置了 `responseCodeField`，则根据该字段名从JSON响应中解析验证码。
-     * 2.  如果 `responseCodeField` 未配置，则回退到使用通用正则表达式解析整个响应体。
-     *
-     * @param project      项目配置实体
-     * @param responseBody API接口返回的响应体字符串
-     * @return 包含验证码字符串的 Optional。
-     */
-    public Optional<String> parseVerificationCodeByType(Project project, String responseBody) {
-        if (!StringUtils.hasText(responseBody)) {
-            return Optional.empty();
-        }
-
-        String codeField = project.getResponseCodeField();
-
-        // 优先策略：如果定义了验证码字段，则根据字段解析
-        if (StringUtils.hasText(codeField)) {
-            return parseJsonFieldValue(responseBody, codeField);
-        } else {
-            // 回退策略：如果未定义字段，则使用通用正则进行解析
-            return parseVerificationCode(responseBody);
-        }
-    }
 
 
     /**

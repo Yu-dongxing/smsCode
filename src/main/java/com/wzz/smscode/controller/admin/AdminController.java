@@ -23,6 +23,8 @@ import com.wzz.smscode.entity.*;
 import com.wzz.smscode.enums.AuthType;
 import com.wzz.smscode.enums.RequestType;
 import com.wzz.smscode.exception.BusinessException;
+import com.wzz.smscode.moduleService.ModuleUtil;
+import com.wzz.smscode.moduleService.SmsApiService;
 import com.wzz.smscode.service.*;
 import jakarta.validation.constraints.NotNull;
 import lombok.Data;
@@ -62,6 +64,7 @@ public class AdminController {
     @Autowired private UserLedgerService userLedgerService;
     @Autowired private NumberRecordService numberRecordService;
     @Autowired private SystemConfigService systemConfigService;
+    @Autowired private ProjectService projectService;
 
     private final ErrorLogService errorLogService;
 
@@ -137,6 +140,23 @@ public class AdminController {
             log.error("创建用户时发生系统内部错误", e);
             return Result.error(Constants.ERROR_SYSTEM_ERROR, "创建用户时发生系统内部错误，请联系管理员");
         }
+    }
+
+
+    /**
+     * 获取所有代理商列表（用于下拉选择）
+     */
+    @GetMapping("/listAllAgents")
+    public Result<List<User>> listAllAgents() {
+        // 查询所有 is_agent = 1 的用户
+        LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
+        queryWrapper.eq(User::getIsAgent, 1)
+                .eq(User::getStatus, 0) // 可选：只查询状态正常的代理
+                .orderByDesc(User::getCreateTime);
+        // 为了安全和传输效率，这里最好只返回 ID 和 UserName，或者使用特定的 DTO
+        // 但为了简便，这里暂时返回 User 实体，前端取 id 和 userName 即可
+        List<User> agents = userService.list(queryWrapper);
+        return Result.success(agents);
     }
 
     /**
@@ -999,6 +1019,45 @@ public class AdminController {
         } catch (BusinessException e) {
             log.warn("代理 [{}] 查询下级 [{}] 项目配置失败: {}", agentId, userId, e.getMessage());
             return Result.error(e.getMessage());
+        }
+    }
+    @Autowired private SmsApiService smsApiService;
+    /**
+     *
+     * @return 操作结果
+     */
+    @PostMapping("/project/Balance")
+    public Result<?> projectBalance(@RequestBody PublicDTO updateDTO) {
+        if (updateDTO.getProjectId() == null || updateDTO.getLineId() == null) {
+            return Result.error("查询参数不能为空");
+        }
+        try {
+            Project project = projectService.getProject(updateDTO.getProjectId(), Integer.valueOf(updateDTO.getLineId()));
+            if (project == null) {
+                return Result.error("项目不存在");
+            }
+            String blance = smsApiService.getApiBalance(project, null);
+            if (blance == null) {
+                return Result.error("余额为空");
+            }
+            return Result.success(blance);
+        } catch (BusinessException e) {
+            return Result.error(e.getMessage());
+        }
+    }
+    /**
+     * 管理员-获取用户线路统计数据
+     * 统计维度：用户 + 项目 + 线路
+     */
+    @PostMapping("/stats/user-line")
+    public Result<?> getUserLineStats(@RequestBody UserLineStatsRequestDTO requestDTO) {
+        try {
+            // 管理员查询所有，agentId 传 null
+            IPage<UserLineStatsDTO> stats = numberRecordService.getUserLineStats(requestDTO, null);
+            return Result.success("查询成功", stats);
+        } catch (Exception e) {
+            log.error("获取用户线路统计失败", e);
+            return Result.error("获取统计数据失败");
         }
     }
 }

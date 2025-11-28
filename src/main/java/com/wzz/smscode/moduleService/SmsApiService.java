@@ -1,12 +1,9 @@
 package com.wzz.smscode.moduleService;
 
 import com.wzz.smscode.dto.ApiConfig.ApiConfig;
-import com.wzz.smscode.dto.ApiConfig.ExtractRule;
-import com.wzz.smscode.dto.RequestDTO.KeyValue;
 import com.wzz.smscode.entity.Project;
 import com.wzz.smscode.entity.SystemConfig;
 import com.wzz.smscode.exception.BusinessException;
-import com.wzz.smscode.service.ProjectService;
 import com.wzz.smscode.service.SystemConfigService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -16,7 +13,6 @@ import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.util.UriComponentsBuilder;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-
 import java.net.URI;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
@@ -24,13 +20,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-
 import com.jayway.jsonpath.JsonPath;
-import org.springframework.http.HttpMethod;
-import org.springframework.http.MediaType;
-import org.springframework.util.LinkedMultiValueMap;
-import org.springframework.util.MultiValueMap;
-import org.springframework.web.reactive.function.BodyInserters;
 
 @Service
 @RequiredArgsConstructor
@@ -38,114 +28,9 @@ import org.springframework.web.reactive.function.BodyInserters;
 public class SmsApiService {
     private final WebClient webClient; // 从WebClientConfig注入
     private final SystemConfigService systemConfigService;
-
-    private final ProjectService projectService; // 需要更新Token到数据库
-
+    private final ModuleUtil moduleUtil;
     // 变量替换正则：匹配 {{variable}}
     private static final Pattern VARIABLE_PATTERN = Pattern.compile("\\{\\{(.+?)}}");
-
-
-
-    /**
-     * 通用 API 执行方法
-     * @param config 前端传递的接口配置
-     * @param context 上下文变量 (入参为当前变量，执行后会将提取的新变量 put 进去)
-     */
-    private void executeApi(ApiConfig config, Map<String, String> context) {
-        // 1. 处理前置操作 (PreHooks)
-        if (config.getPreHooks() != null) {
-            for (KeyValue hook : config.getPreHooks()) {
-                String val = replaceVariables(hook.getValue(), context);
-                context.put(hook.getKey(), val);
-            }
-        }
-
-        // 2. 构建 URL
-        String rawUrl = config.getUrl();
-        if (!StringUtils.hasText(rawUrl)) {
-            throw new BusinessException("接口 URL 不能为空");
-        }
-        String finalUrl = replaceVariables(rawUrl, context);
-
-        // 3. 构建 Query 参数
-        UriComponentsBuilder uriBuilder = UriComponentsBuilder.fromHttpUrl(finalUrl);
-        if (config.getParams() != null) {
-            for (KeyValue param : config.getParams()) {
-                if (StringUtils.hasText(param.getKey())) {
-                    uriBuilder.queryParam(param.getKey(), replaceVariables(param.getValue(), context));
-                }
-            }
-        }
-        URI uri = uriBuilder.build().encode().toUri();
-
-        // 4. 构建请求体
-        Object body = null;
-        MediaType contentType = MediaType.APPLICATION_JSON; // 默认
-
-        if ("JSON".equalsIgnoreCase(config.getBodyType())) {
-            String jsonStr = config.getJsonBody();
-            if (StringUtils.hasText(jsonStr)) {
-                body = replaceVariables(jsonStr, context);
-                contentType = MediaType.APPLICATION_JSON;
-            }
-        } else if ("FORM_DATA".equalsIgnoreCase(config.getBodyType()) || "X_WWW_FORM".equalsIgnoreCase(config.getBodyType())) {
-            MultiValueMap<String, String> formData = new LinkedMultiValueMap<>();
-            if (config.getFormBody() != null) {
-                for (KeyValue item : config.getFormBody()) {
-                    formData.add(item.getKey(), replaceVariables(item.getValue(), context));
-                }
-            }
-            body = BodyInserters.fromFormData(formData);
-            contentType = MediaType.APPLICATION_FORM_URLENCODED;
-        }
-
-        // 5. 发起请求
-        WebClient.RequestBodySpec requestSpec = webClient
-                .method(HttpMethod.valueOf(config.getMethod().toUpperCase()))
-                .uri(uri)
-                .contentType(contentType);
-
-        // 添加 Headers
-        if (config.getHeaders() != null) {
-            for (KeyValue header : config.getHeaders()) {
-                if (StringUtils.hasText(header.getKey())) {
-                    requestSpec.header(header.getKey(), replaceVariables(header.getValue(), context));
-                }
-            }
-        }
-
-        if (body != null) {
-            requestSpec.body(body instanceof BodyInserters.FormInserter ? (BodyInserters.FormInserter) body : BodyInserters.fromValue(body));
-        }
-
-        // 6. 获取响应
-        String responseBody = requestSpec.retrieve()
-                .bodyToMono(String.class)
-                .timeout(Duration.ofSeconds(30))
-                .block();
-
-        log.info("API响应 [{}]: {}", finalUrl, responseBody);
-
-        // 7. 执行变量提取 (Extract Rules)
-        if (config.getExtractRules() != null && StringUtils.hasText(responseBody)) {
-            for (ExtractRule rule : config.getExtractRules()) {
-                try {
-                    String extractedValue = null;
-                    if ("BODY".equalsIgnoreCase(rule.getSource())) {
-                        Object val = JsonPath.parse(responseBody).read(rule.getJsonPath());
-                        extractedValue = String.valueOf(val);
-                    }
-
-                    if (extractedValue != null) {
-                        context.put(rule.getTargetVariable(), extractedValue);
-                        log.info("变量提取成功: {} = {}", rule.getTargetVariable(), extractedValue);
-                    }
-                } catch (Exception e) {
-                    log.warn("变量提取失败 [Key: {}, Path: {}]: {}", rule.getTargetVariable(), rule.getJsonPath(), e.getMessage());
-                }
-            }
-        }
-    }
 
     /**
      * 变量替换工具
@@ -176,46 +61,21 @@ public class SmsApiService {
      */
     public Map<String, String> getPhoneNumber(Project project, String... dynamicParams) {
         log.info("开始为项目 [{} - {}] 获取手机号", project.getProjectName(), project.getLineId());
-
         // 1. 初始化上下文变量 (Context)
-        Map<String, String> context = new HashMap<>();
-
-        // 如果数据库里已经存了Token，先放进去
-        if (StringUtils.hasText(project.getAuthTokenValue())) {
-            context.put("token", project.getAuthTokenValue());
-        }
-
-        // 放入传入的动态参数 (如果有)
-        if (dynamicParams != null && dynamicParams.length > 0) {
-            for (int i = 0; i < dynamicParams.length; i++) {
-                context.put("param" + (i + 1), dynamicParams[i]);
-            }
-        }
-
-        // 2. 执行登录 (如果配置了登录接口，且Token为空，或者策略是每次都登录)
-        // 这里做一个简单的逻辑：如果 loginConfig 不为空，且 context 中没有有效 token，尝试登录
-        // 更复杂的逻辑可以判断 token 过期时间
-        if (project.getLoginConfig() != null && StringUtils.hasText(project.getLoginConfig().getUrl())) {
-            try {
-                log.info("尝试执行登录接口...");
-                executeApi(project.getLoginConfig(), context);
-                if (context.containsKey("token")) {
-                    project.setAuthTokenValue(context.get("token"));
-                    projectService.updateById(project);
-                }
-            } catch (Exception e) {
-                log.error("项目 [{} - {}] 执行登录失败,错误：{}",project.getProjectName(), project.getLineId(), e);
-            }
+        Map<String, String> context =null;
+        try {
+            context =moduleUtil.getApiToken(project, dynamicParams);
+        }catch (Exception e) {
+            log.error("项目 [{} - {}] 获取Token出现错误, 错误：{}", project.getProjectName(), project.getLineId(), e);
+            throw new BusinessException("接口登录失败，无法执行后续操作");
         }
 
         // 3. 执行获取手机号接口
         if (project.getGetNumberConfig() == null) {
             throw new BusinessException("项目未配置获取手机号接口");
         }
-
         // 执行请求，executeApi 会将提取到的变量放入 context
-        executeApi(project.getGetNumberConfig(), context);
-
+        moduleUtil.executeApi(project.getGetNumberConfig(), context);
         // 4. 检查结果
         // 前端配置提取规则时，必须将手机号提取为 "phone"，ID提取为 "id" (约定优于配置)
         if (!context.containsKey("phone")) {
@@ -224,6 +84,32 @@ public class SmsApiService {
         }
 
         return context;
+    }
+
+
+    /**
+     * 获取api的余额
+     */
+    public String getApiBalance(Project project, String... dynamicParams){
+        // 1. 初始化上下文变量 (Context)
+        Map<String, String> context =null;
+        try {
+            context =moduleUtil.getApiToken(project, dynamicParams);
+        }catch (Exception e) {
+            log.error("项目 [{} - {}] 获取Token出现错误, 错误：{}", project.getProjectName(), project.getLineId(), e);
+            throw new BusinessException("接口登录失败，无法执行后续操作");
+        }
+        // 3. 执行获取手机号接口
+        if (project.getGetBalanceConfig() == null) {
+            throw new BusinessException("项目未配置获取余额接口");
+        }
+        // 执行请求，executeApi 会将提取到的变量放入 context
+        moduleUtil.executeApi(project.getGetBalanceConfig(), context);
+        if (!context.containsKey("balance")) {
+            log.error("获取余额接口执行成功，但未提取到 balance 变量。当前Context: {}", context);
+            throw new BusinessException("未获取到余额，请检查提取规则配置");
+        }
+        return context.get("balance");
     }
 
     /**
@@ -240,12 +126,10 @@ public class SmsApiService {
         if (!context.containsKey("token") && StringUtils.hasText(project.getAuthTokenValue())) {
             context.put("token", project.getAuthTokenValue());
         }
-
         ApiConfig config = project.getGetCodeConfig();
         if (config == null) {
             throw new BusinessException("项目未配置获取验证码接口");
         }
-
         // 2. 轮询逻辑
         int attempts = 0;
         int maxAttempts = (project.getCodeMaxAttempts() != null && project.getCodeMaxAttempts() > 0)
@@ -253,22 +137,15 @@ public class SmsApiService {
 
         while (attempts < maxAttempts) {
             try {
-                // 执行请求
-                // 注意：这里需要每次清空"code"变量吗？executeApi是往context里put，会覆盖旧值
-                executeApi(config, context);
-
+                moduleUtil.executeApi(config, context);
                 String code = context.get("code"); // 约定提取变量名为 code
-
-                // 增加对 "null" 字符串的过滤
                 if (StringUtils.hasText(code) && !"null".equalsIgnoreCase(code.trim())) {
                     log.info("成功获取验证码: {}", code);
                     return code;
                 }
-
                 log.info("未获取到验证码，第 {} 次重试...", attempts + 1);
                 attempts++;
                 Thread.sleep(3000); // 3秒轮询一次
-
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new BusinessException("获取验证码被中断");
@@ -278,7 +155,6 @@ public class SmsApiService {
                 try { Thread.sleep(3000); } catch (InterruptedException ignored) {}
             }
         }
-
         throw new BusinessException("获取验证码超时");
     }
 
@@ -306,7 +182,7 @@ public class SmsApiService {
 
         try {
             log.info("进入单次验证码获取，{}，{}",config,context);
-            executeApi(config, context);
+            moduleUtil.executeApi(config, context);
 
             String code = context.get("code");
             if (StringUtils.hasText(code) && !"null".equalsIgnoreCase(code.trim())) {

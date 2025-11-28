@@ -5,16 +5,10 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wzz.smscode.common.CommonResultDTO;
 import com.wzz.smscode.common.Constants;
-import com.wzz.smscode.dto.CodeResult;
+import com.wzz.smscode.dto.*;
 import com.wzz.smscode.dto.CreatDTO.LedgerCreationDTO;
-import com.wzz.smscode.dto.LineStatisticsDTO;
-import com.wzz.smscode.dto.ProjectStatisticsDTO;
-import com.wzz.smscode.dto.StatisticsQueryDTO;
-import com.wzz.smscode.dto.SubordinateNumberRecordQueryDTO;
 import com.wzz.smscode.dto.number.NumberDTO;
 import com.wzz.smscode.entity.*;
 import com.wzz.smscode.enums.FundType;
@@ -32,6 +26,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronizationAdapter;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
@@ -101,6 +96,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             return CommonResultDTO.error(Constants.ERROR_INSUFFICIENT_BALANCE, "余额不足");
         }
         boolean hasOngoingRecord = this.hasOngoingRecord(user.getId());
+
         if (!BalanceUtil.canGetNumber(user, hasOngoingRecord)) {
             return CommonResultDTO.error(Constants.ERROR_INSUFFICIENT_BALANCE, "余额不足或已有进行中的任务");
         }
@@ -201,6 +197,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
     }
 
     @Async("taskExecutor")
+    @Transactional
     @Override
     public void retrieveCode(Long numberId, String unusedIdentifier) {
         NumberRecord record = this.getById(numberId);
@@ -313,6 +310,59 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
     @Transactional
     @Override
     public void updateRecordAfterRetrieval(NumberRecord record, boolean isSuccess, String result) {
+        // 重新从数据库获取记录
+        NumberRecord latestRecord = this.getById(record.getId());
+        if (latestRecord.getStatus() != 1 && latestRecord.getStatus() != 3 && latestRecord.getStatus() != 4) {
+            // 允许从3(超时)或4(失败)状态通过手动刷新变更为成功，但不能重复处理已成功的
+            if(latestRecord.getStatus() == 2) return;
+        }
+
+        latestRecord.setCodeReceivedTime(LocalDateTime.now());
+
+        if (isSuccess && result != null) {
+            latestRecord.setStatus(2);
+            latestRecord.setCode(result);
+            latestRecord.setCharged(1);
+            this.updateById(latestRecord);
+            User user = userService.getById(latestRecord.getUserId());
+
+            LedgerCreationDTO ledgerDto = LedgerCreationDTO.builder()
+                    .userId(user.getId())
+                    .amount(latestRecord.getPrice())
+                    .ledgerType(0)
+                    .fundType(FundType.BUSINESS_DEDUCTION)
+                    .remark("业务扣费")
+                    .phoneNumber(record.getPhoneNumber())
+                    .code(result)
+                    .lineId(record.getLineId())
+                    .projectId(record.getProjectId())
+                    .build();
+
+            ledgerService.createLedgerAndUpdateBalance(ledgerDto);
+            User updatedUser = userService.getById(user.getId());
+            latestRecord.setBalanceAfter(updatedUser.getBalance());
+            userService.updateUserStats(user.getId());
+
+            try {
+                userService.processRebates(latestRecord);
+            } catch (Exception e) {
+                log.error("处理代理返款时发生严重错误，事务将回滚。记录ID: {}", latestRecord.getId(), e);
+                throw new BusinessException("业务扣费成功，但代理返款失败: " + e.getMessage());
+            }
+        } else {
+            // 如果原本就是3或4，保持原状；如果是1（取码中）变成3（超时）
+            if(latestRecord.getStatus() == 1) {
+                latestRecord.setStatus(3);
+                latestRecord.setCharged(0);
+            }
+        }
+
+        latestRecord.setRemark(record.getRemark());
+        this.updateById(latestRecord);
+    }
+
+
+    public void updateRecordAfterRetrieval_(NumberRecord record, boolean isSuccess, String result) {
         // 重新从数据库获取记录
         NumberRecord latestRecord = this.getById(record.getId());
         if (latestRecord.getStatus() != 1 && latestRecord.getStatus() != 3 && latestRecord.getStatus() != 4) {
@@ -652,5 +702,109 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         wrapper.le(endTime != null, NumberRecord::getGetNumberTime, endTime);
         wrapper.orderByDesc(NumberRecord::getGetNumberTime);
         return this.page(new Page<>(queryDTO.getCurrent(), queryDTO.getSize()), wrapper).convert(this::convertToDTO);
+    }
+
+    @Override
+    public IPage<UserLineStatsDTO> getUserLineStats(UserLineStatsRequestDTO requestDTO, Long agentId) {
+        // -----------------------------------------------------------------
+        // 步骤 1: 处理用户关联过滤 (如果需要按用户名或代理商筛选)
+        // -----------------------------------------------------------------
+        List<Long> filterUserIds = null;
+        boolean needUserFilter = StringUtils.hasText(requestDTO.getUserName()) || agentId != null;
+
+        if (needUserFilter) {
+            // 使用 Lambda 查询用户表
+            List<User> users = userService.lambdaQuery()
+                    .select(User::getId) // 只查ID，优化性能
+                    .like(StringUtils.hasText(requestDTO.getUserName()), User::getUserName, requestDTO.getUserName())
+                    .eq(agentId != null, User::getParentId, agentId)
+                    .list();
+
+            if (CollectionUtils.isEmpty(users)) {
+                // 如果筛选条件下没有找到用户，直接返回空分页
+                return new Page<>(requestDTO.getPage(), requestDTO.getSize());
+            }
+            filterUserIds = users.stream().map(User::getId).collect(Collectors.toList());
+        }
+
+        // -----------------------------------------------------------------
+        // 步骤 2: 构建分组统计查询 (混合 Lambda 和 String Select)
+        // -----------------------------------------------------------------
+        // 注意：这里必须用 QueryWrapper 而不是 LambdaQueryWrapper，因为 .select() 需要写聚合函数
+        QueryWrapper<NumberRecord> queryWrapper = new QueryWrapper<>();
+
+        // 2.1 定义 Select 聚合字段
+        // 使用数据库函数 SUM(CASE...) 来统计成功的验证码数
+        queryWrapper.select(
+                "user_id",
+                "project_id",
+                "line_id",
+                "COUNT(*) as totalNumbers",
+                "SUM(CASE WHEN status = 2 THEN 1 ELSE 0 END) as totalCodes"
+        );
+
+        // 2.2 转换到 Lambda 模式添加 Where 条件 (保持类型安全)
+        queryWrapper.lambda()
+                .eq(StringUtils.hasText(requestDTO.getProjectId()), NumberRecord::getProjectId, requestDTO.getProjectId())
+                .ge(requestDTO.getStartTime() != null, NumberRecord::getGetNumberTime, requestDTO.getStartTime())
+                .le(requestDTO.getEndTime() != null, NumberRecord::getGetNumberTime, requestDTO.getEndTime())
+                // 如果步骤1计算出了 ID 列表，这里进行 IN 查询
+                .in(needUserFilter, NumberRecord::getUserId, filterUserIds);
+
+        // 2.3 添加分组
+        queryWrapper.groupBy("user_id", "project_id", "line_id");
+
+        // 2.4 添加排序 (按取号量降序)
+        queryWrapper.orderByDesc("totalNumbers");
+
+        // -----------------------------------------------------------------
+        // 步骤 3: 执行查询并转换结果 (selectMapsPage)
+        // -----------------------------------------------------------------
+        Page<Map<String, Object>> mapPage = new Page<>(requestDTO.getPage(), requestDTO.getSize());
+        // 使用 Mybatis-Plus 的 selectMapsPage，返回 Map 列表
+        IPage<Map<String, Object>> resultPage = this.baseMapper.selectMapsPage(mapPage, queryWrapper);
+
+        // -----------------------------------------------------------------
+        // 步骤 4: Map 转 DTO 并 补全用户名
+        // -----------------------------------------------------------------
+        List<UserLineStatsDTO> dtoList = new ArrayList<>();
+
+        // 收集所有结果中的 userId，用于批量查询用户名
+        Set<Long> resultUserIds = new HashSet<>();
+
+        for (Map<String, Object> map : resultPage.getRecords()) {
+            UserLineStatsDTO dto = new UserLineStatsDTO();
+            // 注意：Map 的 Key 通常是 select 里的字段名
+            Long uId = Long.valueOf(map.get("user_id").toString());
+            dto.setUserId(uId);
+            dto.setProjectId((String) map.get("project_id"));
+            dto.setLineId((Integer) map.get("line_id"));
+            // 处理 Long/BigDecimal 类型转换 (数据库返回的 Count/Sum 类型可能不同)
+            dto.setTotalNumbers(new BigDecimal(map.get("totalNumbers").toString()).longValue());
+            dto.setTotalCodes(new BigDecimal(map.get("totalCodes").toString()).longValue());
+
+            // 计算成功率
+            dto.calculateRate();
+
+            dtoList.add(dto);
+            resultUserIds.add(uId);
+        }
+
+        // 批量补全用户名 (避免循环查库 N+1 问题)
+        if (!resultUserIds.isEmpty()) {
+            Map<Long, String> userMap = userService.listByIds(resultUserIds).stream()
+                    .collect(Collectors.toMap(User::getId, User::getUserName));
+
+            for (UserLineStatsDTO dto : dtoList) {
+                dto.setUserName(userMap.getOrDefault(dto.getUserId(), "未知用户"));
+            }
+        }
+
+        // 构造最终返回的 Page 对象
+        Page<UserLineStatsDTO> finalPage = new Page<>(requestDTO.getPage(), requestDTO.getSize());
+        finalPage.setTotal(resultPage.getTotal());
+        finalPage.setRecords(dtoList);
+
+        return finalPage;
     }
 }

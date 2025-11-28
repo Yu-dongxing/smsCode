@@ -34,7 +34,9 @@ public class ProjectController {
     @GetMapping("/find/all")
     public Result<?> findAll(@RequestParam(required = false) Long pageNum,
                              @RequestParam(required = false) Long pageSize,
-                             @RequestParam(required = false) String projectName) {
+                             @RequestParam(required = false) String projectName,
+                             @RequestParam(required = false) String projectId
+    ) {
         if (pageNum == null || pageSize == null) {
             pageNum = 1L;
             pageSize = -1L;          // -1 表示不分页，MP 会查全部
@@ -45,6 +47,9 @@ public class ProjectController {
         queryWrapper.orderByDesc(Project::getCreateTime);
         if(projectName != null && !projectName.isEmpty()) {
             queryWrapper.like(Project::getProjectName, projectName);
+        }
+        if (projectId != null && !projectId.isEmpty()) {
+            queryWrapper.like(Project::getProjectId, projectId);
         }
         IPage<Project> projectIPage = projectService.page(page, queryWrapper);
 
@@ -61,7 +66,7 @@ public class ProjectController {
      */
     @PostMapping("/update")
     public Result<?> updateByProject(@RequestBody Project project){
-        log.info("传入数据：{}",project);
+//        log.info("传入数据：{}",project);
 
         boolean is = projectService.updateProject(project);
         if (is){

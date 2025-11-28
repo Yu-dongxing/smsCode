@@ -146,6 +146,9 @@ public class UserController {
         if (user == null) {
             return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED, "用户ID或密码错误");
         }
+        if (user.getStatus()==1){
+            return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED,"该用户已被禁用");
+        }
         // 调用在 UserServiceImpl 中定义的 DTO 转换方法
         UserDTO userDTO = ((UserServiceImpl) userService).convertToDTO(user);
         return CommonResultDTO.success("登录成功", userDTO);

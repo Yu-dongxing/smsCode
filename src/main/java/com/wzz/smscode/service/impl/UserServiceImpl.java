@@ -221,42 +221,52 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
 
 
     /**
-     * 计算用户
-     * @param userId
-     * @param password
-     * @return
+     * 用户认证并更新登录时间
+     *
+     * @param userName 用户名 (原 userId，建议改为 userName 更清晰)
+     * @param password 密码
+     * @return User 登录成功返回用户对象，失败返回 null
      */
-
     @Override
-    public User authenticateUserByUserName(String userId, String password) {
+    @Transactional(rollbackFor = Exception.class) // 涉及更新操作，建议加上事务
+    public User authenticateUserByUserName(String userName, String password) {
+        // 1. 构造查询条件
         LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
-        queryWrapper.eq(User::getUserName, userId);
+        queryWrapper.eq(User::getUserName, userName);
 
-        List<User> userList = this.list(queryWrapper);
-
-        // 日志记录查询到的用户数量
-//        log.info("根据用户名查询到 {} 个用户", userList.size());
-
-        // 1. 如果没有找到用户，直接返回 null
-        if (userList.isEmpty()) {
+        // 2. 查询用户
+        // 优化点：使用 getOne(wrapper, true)，第二个参数 true 表示如果存在多个结果则抛出异常
+        User user;
+        try {
+            user = this.getOne(queryWrapper, true);
+        } catch (Exception e) {
+            // 捕获 MyBatis-Plus 的 TooManyResultsException 等异常
+            log.warn("警告：数据库中存在多个用户名为 '{}' 的用户，请检查数据！", userName);
+            throw new BusinessException(0, "系统中存在多个相同用户！");
+        }
+        if (user == null) {
             return null;
         }
-        if (userList.size() > 1) {
-            log.warn("警告：数据库中存在多个用户名为 '{}' 的用户，请检查数据！", userId);
-            throw new BusinessException(0,"系统中存在多个相同用户！");
+        if (!password.equals(user.getPassword())) {
+            return null; // 密码错误
+        }
+        // 5. 校验状态 (假设 0 是正常状态)
+        if (user.getStatus() != 0) {
+            log.info("用户 {} 尝试登录，但状态异常: {}", userName, user.getStatus());
+            return null; // 账号被禁用或状态异常
         }
 
-        // 3. 遍历查找密码匹配的用户
-        for (User user : userList) {
-            if (user != null && password.equals(user.getPassword())) {
-                // 找到第一个密码匹配的用户就返回
-                return user;
-            }
+        // 6. 认证通过，更新最后登录时间
+        user.setLastLoginTime(LocalDateTime.now());
+        // 优化点：只更新非空字段，或者使用 updateById
+        boolean updateResult = this.updateById(user);
+        if (!updateResult) {
+            log.error("用户 {} 登录时间更新失败", userName);
         }
-
-        // 4. 如果遍历完所有同名用户都没有找到密码匹配的，则认证失败
-        return null;
+        // 7. 返回用户信息
+        return user;
     }
+
 
     @Override
     public CommonResultDTO<BigDecimal> getBalance(Long userId, String password) {
@@ -324,10 +334,23 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         User user = new User();
         user.setUserName(dto.getUsername());
         user.setPassword(dto.getPassword()); // 注意：密码应该加密存储
-        user.setParentId(operatorId);
+        Long targetParentId = operatorId; // 默认为当前操作员(管理员是0)
+
+        // 如果是管理员操作，并且前端传来了指定的 parentId
+        if (isAdmin && dto.getParentId() != null && dto.getParentId() != 0L) {
+            User assignedAgent = this.getById(dto.getParentId());
+            if (assignedAgent == null || assignedAgent.getIsAgent() != 1) {
+                throw new BusinessException("指定的归属代理不存在或不具备代理权限");
+            }
+            targetParentId = dto.getParentId();
+        }
+
+        user.setParentId(targetParentId);
         user.setIsAgent(dto.getIsAgent() ? 1 : 0);
         user.setStatus(0);
         user.setBalance(BigDecimal.ZERO);
+
+        log.info("创建的用户：{}", user);
 
         // 3. 保存用户，以获取新用户的ID
         if (!this.save(user)) {

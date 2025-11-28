@@ -2,6 +2,7 @@ package com.wzz.smscode.entity;
 
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.wzz.smscode.annotation.*;
 import com.wzz.smscode.common.BaseEntity;
@@ -9,6 +10,7 @@ import lombok.Data;
 import lombok.EqualsAndHashCode;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 
 /**
  * 用户表实体类
@@ -138,6 +140,14 @@ public class User extends BaseEntity {
     @TableField("is_agent")
     @DefaultValue("0")
     private Integer isAgent;
+
+    /**
+     * 用户最后登录时间
+     */
+    @ColumnComment("最近登录时间")
+    @TableField("last_login_time")
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
+    private LocalDateTime lastLoginTime;
 
 
 }
