@@ -34,4 +34,6 @@ public interface UserLedgerService extends IService<UserLedger> {
     BigDecimal getTotalProfitByUserId(Long userId);
 
     BigDecimal getTotalProfit();
+
+    IPage<LedgerDTO> listAgentOwnLedger(Long userId, String userName, String remark, Date startTime, Date endTime, Integer fundType, Integer ledgerType, Page<UserLedger> page);
 }

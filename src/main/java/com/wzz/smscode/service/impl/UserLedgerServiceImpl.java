@@ -400,5 +400,49 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
         return BigDecimal.ZERO;
     }
 
+    @Override
+    public IPage<LedgerDTO> listAgentOwnLedger(Long userId, String userName, String remark, Date startTime, Date endTime, Integer fundType, Integer ledgerType, Page<UserLedger> page) {
+        // 1. 构建查询条件
+        LambdaQueryWrapper<UserLedger> wrapper = new LambdaQueryWrapper<>();
+
+        // 强制限制为当前登录用户的ID
+        wrapper.eq(UserLedger::getUserId, userId);
+
+        // 图片中的筛选条件：用户名 (模糊查询)
+        // 注意：查自己的账本时，UserName通常是自己，但为了匹配UI搜索框，还是加上此条件
+        if (StringUtils.hasText(userName)) {
+            wrapper.like(UserLedger::getUserName, userName);
+        }
+
+        // 图片中的筛选条件：备注 (模糊查询)
+        if (StringUtils.hasText(remark)) {
+            wrapper.like(UserLedger::getRemark, remark);
+        }
+
+        // 图片中的筛选条件：资金类型 (下拉框精确匹配)
+        if (fundType != null) {
+            wrapper.eq(UserLedger::getFundType, fundType);
+        }
+
+        // 图片中的筛选条件：账本类型 (下拉框精确匹配，如入账/出账)
+        if (ledgerType != null) {
+            wrapper.eq(UserLedger::getLedgerType, ledgerType);
+        }
+
+        // 图片中的筛选条件：时间范围
+        if (startTime != null) {
+            wrapper.ge(UserLedger::getTimestamp, startTime);
+        }
+        if (endTime != null) {
+            wrapper.le(UserLedger::getTimestamp, endTime);
+        }
+
+        // 按时间倒序
+        wrapper.orderByDesc(UserLedger::getTimestamp);
+
+        // 2. 查询并转换
+        Page<UserLedger> ledgerPage = this.page(page, wrapper);
+        return ledgerPage.convert(this::convertToDTO);
+    }
 
 }

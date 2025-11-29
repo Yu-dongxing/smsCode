@@ -73,9 +73,6 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     @Override
     public User authenticate(Long userId, String password) {
         User user = this.getById(userId);
-//        if (user != null && passwordEncoder.matches(password, user.getPassword())) {
-//            return user;
-//        }
         return null;
     }
 
@@ -159,14 +156,18 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public User AgentLogin(String username, String password) {
         User user = this.getByUserName(username);
         if (user == null) {
             return null;
         }
-        // TODO: 必须使用加密方式校验密码！此处为示例，请替换为您的加密校验逻辑
-        // if (passwordEncoder.matches(password, user.getPassword())) {
-        if (password.equals(user.getPassword())) { // 极不安全，仅作演示
+        if (password.equals(user.getPassword())) {
+            user.setLastLoginTime(LocalDateTime.now());
+            boolean updateSuccess = this.updateById(user);
+            if (!updateSuccess) {
+                log.error("代理用户 {} 登录时间更新失败", username);
+            }
             return user;
         }
         return null;
@@ -559,8 +560,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         if (targetUser == null) return CommonResultDTO.error(-5, "目标用户不存在");
 
         boolean isAdmin = (operatorId == 0L);
+        User operator;
         if (!isAdmin) {
-            User operator = this.getById(operatorId);
+            operator = this.getById(operatorId);
             if (operator == null) return CommonResultDTO.error(-5, "操作员不存在");
             if (!Objects.equals(targetUser.getParentId(), operatorId)) {
                 return CommonResultDTO.error(-5, "无权操作该用户");
@@ -568,6 +570,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         }
 
         try {
+
             // 1. 操作目标用户
             LedgerCreationDTO targetLedger = LedgerCreationDTO.builder()
                     .userId(targetUserId)
@@ -592,7 +595,6 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         } catch (BusinessException e) {
             log.info("出现错误：{}", e.getMessage());
             TransactionAspectSupport.currentTransactionStatus().setRollbackOnly();
-//            return CommonResultDTO.error(Constants.ERROR_INSUFFICIENT_BALANCE, e.getMessage());
             throw new BusinessException(0,e.getMessage());
         } catch (Exception e) {
             log.error("资金操作失败，未知异常", e);

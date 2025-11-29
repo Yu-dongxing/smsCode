@@ -108,8 +108,6 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
             Map<String, String> currentIdentifier;
             try {
-                // 【修改点 1】: 调用新接口，不再传 "null"，如果有动态参数可以传 String...
-                // getPhoneNumber 返回的是一个包含所有提取变量的 Map (必须包含 phone)
                 currentIdentifier = smsApiService.getPhoneNumber(projectT);
 
                 if (!StringUtils.hasText(currentIdentifier.get("phone"))) {
@@ -280,10 +278,6 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                 if (StringUtils.hasText(record.getApiPhoneId())) {
                     context.put("id", record.getApiPhoneId());
                 }
-
-                // 调用单次获取方法 (注意：SmsApiService 需要支持 fetchVerificationCodeOnce 且接收 Map 参数)
-                // 如果 SmsApiService 中移除了 fetchVerificationCodeOnce，这里需要使用 getVerificationCode 并注意它是阻塞轮询的
-                // 假设你已经同步更新了 SmsApiService 增加了 fetchVerificationCodeOnce(Project, Map)
                 Optional<String> codeOpt = smsApiService.fetchVerificationCodeOnce(project, context);
 
                 if (codeOpt.isPresent()) {
@@ -516,66 +510,111 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                 .map(NumberRecord::getPhoneNumber)
                 .collect(Collectors.toList());
     }
-
-    // ... 报表相关方法 (getStatisticsReport 等) 保持原样 ...
     @Override
     public IPage<ProjectStatisticsDTO> getStatisticsReport(Long operatorId, StatisticsQueryDTO queryDTO) {
         User operator = new User();
         if (operatorId != 0L) {
             operator = userService.getById(operatorId);
+            // 建议：增加空指针判断，防止 ID 不存在时报错
             if (operator == null) throw new BusinessException("操作用户不存在");
         }
+
+        // 区分管理员和代理商逻辑
         if (operatorId == 0L) {
             return generateAdminStatistics(queryDTO);
-        } else if (operator.getIsAgent() == 1) {
+        } else if (operator != null && operator.getIsAgent() == 1) {
             return generateAgentStatistics(operatorId, queryDTO);
         } else {
             return new Page<>(queryDTO.getCurrent(), queryDTO.getSize());
         }
     }
-
+    /**
+     * 生成管理员统计报表
+     * 修复：使用 AS 别名确保 Map Key 统一，避免驼峰配置导致取不到值
+     */
     private IPage<ProjectStatisticsDTO> generateAdminStatistics(StatisticsQueryDTO queryDTO) {
         QueryWrapper<NumberRecord> wrapper = new QueryWrapper<>();
         applyFilters(wrapper, queryDTO);
+
         wrapper.groupBy("project_id", "line_id");
-        wrapper.select("project_id", "line_id", "COUNT(id) as totalRequests",
-                "SUM(CASE WHEN status = 2 THEN 1 ELSE 0 END) as successCount",
-                "COALESCE(SUM(CASE WHEN charged = 1 THEN price ELSE 0 END), 0) as totalRevenue",
-                "COALESCE(SUM(CASE WHEN charged = 1 THEN cost_price ELSE 0 END), 0) as totalCost");
+
+        // 【核心修改】：显式使用 AS 别名 (projectId, lineId)，确保 selectMaps 返回的 Key 是固定的
+        wrapper.select(
+                "project_id AS projectId",
+                "line_id AS lineId",
+                "COUNT(id) AS totalRequests",
+                "SUM(CASE WHEN status = 2 THEN 1 ELSE 0 END) AS successCount",
+                // 处理金额 null 的情况
+                "COALESCE(SUM(CASE WHEN charged = 1 THEN price ELSE 0 END), 0) AS totalRevenue",
+                "COALESCE(SUM(CASE WHEN charged = 1 THEN cost_price ELSE 0 END), 0) AS totalCost"
+        );
+
         Page<Map<String, Object>> page = new Page<>(queryDTO.getCurrent(), queryDTO.getSize());
+        // 注意：selectMapsPage 在有 Group By 时，total 计数可能会不准（统计的是组数还是行数取决于 MP 版本），通常足以应对报表分页
         IPage<Map<String, Object>> aggregatedDataPage = this.pageMaps(page, wrapper);
-        if (aggregatedDataPage.getRecords().isEmpty()) return new Page<>(queryDTO.getCurrent(), queryDTO.getSize(), aggregatedDataPage.getTotal());
+
+        if (CollectionUtils.isEmpty(aggregatedDataPage.getRecords())) {
+            return new Page<>(queryDTO.getCurrent(), queryDTO.getSize(), aggregatedDataPage.getTotal());
+        }
 
         Map<String, String> projectNames = projectService.list().stream()
                 .collect(Collectors.toMap(Project::getProjectId, Project::getProjectName, (p1, p2) -> p1));
+
         List<ProjectStatisticsDTO> dtoList = processAggregatedData(aggregatedDataPage.getRecords(), null, projectNames);
+
         IPage<ProjectStatisticsDTO> resultPage = new Page<>(aggregatedDataPage.getCurrent(), aggregatedDataPage.getSize(), aggregatedDataPage.getTotal());
         resultPage.setRecords(dtoList);
         return resultPage;
     }
 
+    /**
+     * 生成代理商统计报表
+     * 修复：使用 AS 别名，优化成本匹配逻辑
+     */
     private IPage<ProjectStatisticsDTO> generateAgentStatistics(Long agentId, StatisticsQueryDTO queryDTO) {
+        // 获取下级用户 ID 列表
         List<Long> subUserIds = userService.list(new LambdaQueryWrapper<User>().eq(User::getParentId, agentId))
                 .stream().map(User::getId).collect(Collectors.toList());
+
         if (subUserIds.isEmpty()) return new Page<>(queryDTO.getCurrent(), queryDTO.getSize());
 
-        Map<String, BigDecimal> agentCostMap = userProjectLineService.list(new LambdaQueryWrapper<UserProjectLine>().eq(UserProjectLine::getUserId, agentId))
-                .stream().collect(Collectors.toMap(line -> line.getProjectId() + "-" + line.getLineId(), UserProjectLine::getAgentPrice));
+        // 获取代理商成本配置
+        // key 建议统一转为 String 避免类型问题
+        Map<String, BigDecimal> agentCostMap = userProjectLineService.list(
+                new LambdaQueryWrapper<UserProjectLine>().eq(UserProjectLine::getUserId, agentId)
+        ).stream().collect(Collectors.toMap(
+                line -> line.getProjectId() + "-" + line.getLineId(),
+                UserProjectLine::getAgentPrice,
+                (v1, v2) -> v1 // 处理重复配置，取第一个
+        ));
 
         QueryWrapper<NumberRecord> wrapper = new QueryWrapper<>();
         wrapper.in("user_id", subUserIds);
         applyFilters(wrapper, queryDTO);
+
         wrapper.groupBy("project_id", "line_id");
-        wrapper.select("project_id", "line_id", "COUNT(id) as totalRequests",
-                "SUM(CASE WHEN status = 2 THEN 1 ELSE 0 END) as successCount",
-                "COALESCE(SUM(CASE WHEN charged = 1 THEN price ELSE 0 END), 0) as totalRevenue");
+
+        // 【核心修改】：显式使用 AS 别名
+        wrapper.select(
+                "project_id AS projectId",
+                "line_id AS lineId",
+                "COUNT(id) AS totalRequests",
+                "SUM(CASE WHEN status = 2 THEN 1 ELSE 0 END) AS successCount",
+                "COALESCE(SUM(CASE WHEN charged = 1 THEN price ELSE 0 END), 0) AS totalRevenue"
+        );
+
         Page<Map<String, Object>> page = new Page<>(queryDTO.getCurrent(), queryDTO.getSize());
         IPage<Map<String, Object>> aggregatedDataPage = this.pageMaps(page, wrapper);
-        if (aggregatedDataPage.getRecords().isEmpty()) return new Page<>(queryDTO.getCurrent(), queryDTO.getSize(), aggregatedDataPage.getTotal());
+
+        if (CollectionUtils.isEmpty(aggregatedDataPage.getRecords())) {
+            return new Page<>(queryDTO.getCurrent(), queryDTO.getSize(), aggregatedDataPage.getTotal());
+        }
 
         Map<String, String> projectNames = projectService.list().stream()
                 .collect(Collectors.toMap(Project::getProjectId, Project::getProjectName, (p1, p2) -> p1));
+
         List<ProjectStatisticsDTO> dtoList = processAggregatedData(aggregatedDataPage.getRecords(), agentCostMap, projectNames);
+
         IPage<ProjectStatisticsDTO> resultPage = new Page<>(aggregatedDataPage.getCurrent(), aggregatedDataPage.getSize(), aggregatedDataPage.getTotal());
         resultPage.setRecords(dtoList);
         return resultPage;
@@ -615,21 +654,43 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         }
     }
 
+    /**
+     * 处理聚合数据并转换为 DTO
+     * 修复：从 Map 取值时使用别名，增加空值安全处理
+     */
     private List<ProjectStatisticsDTO> processAggregatedData(List<Map<String, Object>> aggregatedData, Map<String, BigDecimal> agentCostMap, Map<String, String> projectNames) {
+        // 使用 LinkedHashMap 保持数据库排序（通常按 Group By 顺序）
         Map<String, ProjectStatisticsDTO> projectReportMap = new LinkedHashMap<>();
-        for (Map<String, Object> lineData : aggregatedData) {
-            String projectId = (String) lineData.get("project_id");
-            Object lineIdObj = lineData.get("line_id");
-            if (projectId == null || lineIdObj == null) continue;
-            Integer lineId = ((Number) lineIdObj).intValue();
-            long totalRequests = ((Number) lineData.get("totalRequests")).longValue();
-            long successCount = ((Number) lineData.get("successCount")).longValue();
-            BigDecimal totalRevenue = new BigDecimal(lineData.get("totalRevenue").toString());
 
+        for (Map<String, Object> lineData : aggregatedData) {
+            // 1. 安全获取 projectId 和 lineId，对应 SQL 中的 AS 别名
+            String projectId = (String) lineData.get("projectId");
+            Object lineIdObj = lineData.get("lineId");
+
+            // 过滤无效数据，防止报错或合并到 null 分组
+            if (!StringUtils.hasText(projectId)) continue;
+
+            Integer lineId = 0;
+            if (lineIdObj != null) {
+                if (lineIdObj instanceof Number) {
+                    lineId = ((Number) lineIdObj).intValue();
+                } else {
+                    try {
+                        lineId = Integer.parseInt(lineIdObj.toString());
+                    } catch (NumberFormatException ignored) {}
+                }
+            }
+
+            // 2. 解析统计数值，增加空指针防御
+            long totalRequests = getLongFromMap(lineData, "totalRequests");
+            long successCount = getLongFromMap(lineData, "successCount");
+            BigDecimal totalRevenue = getBigDecimalFromMap(lineData, "totalRevenue");
+
+            // 3. 归类到 ProjectDTO
             ProjectStatisticsDTO projectDTO = projectReportMap.computeIfAbsent(projectId, k -> {
                 ProjectStatisticsDTO dto = new ProjectStatisticsDTO();
                 dto.setProjectId(k);
-                dto.setProjectName(projectNames.getOrDefault(k, "未知项目"));
+                dto.setProjectName(projectNames.getOrDefault(k, "未知项目(" + k + ")"));
                 dto.setTotalRequests(0L);
                 dto.setSuccessCount(0L);
                 dto.setTotalRevenue(BigDecimal.ZERO);
@@ -638,37 +699,62 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                 return dto;
             });
 
+            // 4. 计算成本
             BigDecimal lineTotalCost;
             if (agentCostMap != null) {
+                // 代理商模式：查配置表
                 String priceKey = projectId + "-" + lineId;
                 BigDecimal agentPricePerSuccess = agentCostMap.getOrDefault(priceKey, BigDecimal.ZERO);
                 lineTotalCost = agentPricePerSuccess.multiply(new BigDecimal(successCount));
             } else {
-                lineTotalCost = new BigDecimal(lineData.get("totalCost") != null ? lineData.get("totalCost").toString() : "0");
+                // 管理员模式：取 SQL 结果
+                lineTotalCost = getBigDecimalFromMap(lineData, "totalCost");
             }
 
+            // 5. 构建 LineDTO
             LineStatisticsDTO lineDTO = new LineStatisticsDTO();
             lineDTO.setProjectId(projectId);
             lineDTO.setLineId(lineId);
-            lineDTO.setProjectName(projectNames.getOrDefault(projectId, "未知项目"));
+            lineDTO.setProjectName(projectDTO.getProjectName()); // 冗余一份项目名方便前端
             lineDTO.setTotalRequests(totalRequests);
             lineDTO.setSuccessCount(successCount);
             lineDTO.setSuccessRate(totalRequests > 0 ? (double) successCount * 100.0 / totalRequests : 0.0);
             lineDTO.setTotalRevenue(totalRevenue);
             lineDTO.setTotalCost(lineTotalCost);
             lineDTO.setTotalProfit(totalRevenue.subtract(lineTotalCost));
+
             projectDTO.getLineDetails().add(lineDTO);
+
+            // 6. 累加到项目总计
             projectDTO.setTotalRequests(projectDTO.getTotalRequests() + totalRequests);
             projectDTO.setSuccessCount(projectDTO.getSuccessCount() + successCount);
             projectDTO.setTotalRevenue(projectDTO.getTotalRevenue().add(totalRevenue));
             projectDTO.setTotalCost(projectDTO.getTotalCost().add(lineTotalCost));
         }
+
+        // 7. 计算项目级汇总指标
         projectReportMap.values().forEach(p -> {
             p.setLineCount(p.getLineDetails().size());
             p.setSuccessRate(p.getTotalRequests() > 0 ? (double) p.getSuccessCount() * 100.0 / p.getTotalRequests() : 0.0);
             p.setTotalProfit(p.getTotalRevenue().subtract(p.getTotalCost()));
         });
+
         return new ArrayList<>(projectReportMap.values());
+    }
+
+    // 辅助方法：安全从 Map 获取 Long
+    private long getLongFromMap(Map<String, Object> map, String key) {
+        Object val = map.get(key);
+        if (val == null) return 0L;
+        if (val instanceof Number) return ((Number) val).longValue();
+        return Long.parseLong(val.toString());
+    }
+
+    // 辅助方法：安全从 Map 获取 BigDecimal
+    private BigDecimal getBigDecimalFromMap(Map<String, Object> map, String key) {
+        Object val = map.get(key);
+        if (val == null) return BigDecimal.ZERO;
+        return new BigDecimal(val.toString());
     }
 
     @Override

@@ -117,12 +117,13 @@ public class SmsApiService {
      * @param project 项目配置
      * @param identifierParams 上一步获取到的所有变量 (包含 phone, id, token 等)
      */
+
     public String getVerificationCode(Project project, Map<String, String> identifierParams) {
         log.info("开始获取验证码，参数: {}", identifierParams);
 
         // 1. 准备上下文
         Map<String, String> context = new HashMap<>(identifierParams);
-        // 确保 Token 存在 (如果上一步没传，从库里读)
+        // 确保 Token 存在
         if (!context.containsKey("token") && StringUtils.hasText(project.getAuthTokenValue())) {
             context.put("token", project.getAuthTokenValue());
         }
@@ -130,32 +131,37 @@ public class SmsApiService {
         if (config == null) {
             throw new BusinessException("项目未配置获取验证码接口");
         }
-        // 2. 轮询逻辑
-        int attempts = 0;
-        int maxAttempts = (project.getCodeMaxAttempts() != null && project.getCodeMaxAttempts() > 0)
-                ? project.getCodeMaxAttempts() : 10;
 
-        while (attempts < maxAttempts) {
+        // 2. 轮询逻辑 (改为时间控制：5分钟)
+        long startTime = System.currentTimeMillis();
+        long timeout = 5 * 60 * 1000L; // 5分钟超时
+        int attempts = 0; // 仅用于日志记录，不作为终止条件
+
+        // 只要当前时间减去开始时间小于超时时间，就继续轮询
+        while (System.currentTimeMillis() - startTime < timeout) {
+            attempts++;
             try {
                 moduleUtil.executeApi(config, context);
                 String code = context.get("code"); // 约定提取变量名为 code
                 if (StringUtils.hasText(code) && !"null".equalsIgnoreCase(code.trim())) {
-                    log.info("成功获取验证码: {}", code);
+                    log.info("成功获取验证码: {}, 耗时: {}ms", code, System.currentTimeMillis() - startTime);
                     return code;
                 }
-                log.info("未获取到验证码，第 {} 次重试...", attempts + 1);
-                attempts++;
-                Thread.sleep(3000); // 3秒轮询一次
+                log.info("未获取到验证码，第 {} 次尝试，已耗时 {}ms...", attempts, System.currentTimeMillis() - startTime);
+                Thread.sleep(1000); // 3秒轮询一次
+
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new BusinessException("获取验证码被中断");
             } catch (Exception e) {
                 log.warn("轮询中发生异常: {}", e.getMessage());
-                attempts++;
                 try { Thread.sleep(3000); } catch (InterruptedException ignored) {}
             }
         }
-        throw new BusinessException("获取验证码超时");
+
+        long totalTime = System.currentTimeMillis() - startTime;
+        log.error("获取验证码超时，总耗时: {}ms, 总尝试次数: {}", totalTime, attempts);
+        throw new BusinessException("获取验证码超时(5分钟未获取到)");
     }
 
     /**

@@ -680,6 +680,7 @@ public class AgentController {
     @PostMapping("/stats/user-line")
     public Result<?> getSubUserLineStats(@RequestBody UserLineStatsRequestDTO requestDTO) {
         try {
+            StpUtil.checkLogin();
             Long agentId = StpUtil.getLoginIdAsLong();
             IPage<UserLineStatsDTO> stats = numberRecordService.getUserLineStats(requestDTO, agentId);
             return Result.success("查询成功", stats);
@@ -690,9 +691,54 @@ public class AgentController {
     }
 
     /**
-     * 查询代理自己的账本记录
+     * 查询代理自己的账本记录 (对应图片中的筛选功能)
+     *
+     * @param userName   用户名
+     * @param remark     备注
+     * @param startTime  开始时间
+     * @param endTime    结束时间
+     * @param fundType   资金类型
+     * @param ledgerType 账本类型
+     * @param page       页码
+     * @param size       每页条数
      */
+    @SaCheckLogin
+    @GetMapping("/my-ledger")
+    public Result<?> getMyLedger(
+            @RequestParam(required = false) String userName,
+            @RequestParam(required = false) String remark,
+            @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") Date startTime,
+            @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") Date endTime,
+            @RequestParam(required = false) Integer fundType,
+            @RequestParam(required = false) Integer ledgerType,
+            @RequestParam(defaultValue = "1") long page,
+            @RequestParam(defaultValue = "10") long size) {
 
+        try {
+            // 1. 获取当前登录的代理ID
+            long agentId = StpUtil.getLoginIdAsLong();
+
+            // 2. 构造分页对象
+            Page<UserLedger> pageRequest = new Page<>(page, size);
+
+            // 3. 调用 Service 进行多条件查询
+            IPage<LedgerDTO> result = userLedgerService.listAgentOwnLedger(
+                    agentId,
+                    userName,
+                    remark,
+                    startTime,
+                    endTime,
+                    fundType,
+                    ledgerType,
+                    pageRequest
+            );
+
+            return Result.success("查询成功", result);
+        } catch (Exception e) {
+            log.error("查询代理个人账本失败", e);
+            return Result.error("查询失败：" + e.getMessage());
+        }
+    }
 
 
 }
