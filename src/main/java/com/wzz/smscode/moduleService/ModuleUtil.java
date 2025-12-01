@@ -9,6 +9,7 @@ import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.service.ProjectService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
@@ -108,6 +109,8 @@ public class ModuleUtil {
         return context;
     }
 
+    @Value("${admin.debug}")
+    private Boolean debug;
     /**
      * 通用 API 执行方法
      * @param config 前端传递的接口配置
@@ -219,7 +222,11 @@ public class ModuleUtil {
                     }
                 } catch (Exception e) {
                     log.warn("变量提取失败 [Key: {}, Path: {}]: {}", rule.getTargetVariable(), rule.getJsonPath(), e.getMessage());
-                    throw new BusinessException(0,"未获取到手机号，返回响应："+responseBody);
+                    if(debug) {
+                        throw new BusinessException(0,"未获取到手机号，返回响应："+responseBody);
+                    }else {
+                        throw new BusinessException(0,"未获取到手机号");
+                    }
                 }
             }
         }
