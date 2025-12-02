@@ -149,5 +149,11 @@ public class User extends BaseEntity {
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
     private LocalDateTime lastLoginTime;
 
+    /**
+     * 上级用户名（非数据库字段，仅用于展示）
+     */
+    @TableField(exist = false)
+    private String parentName;
+
 
 }

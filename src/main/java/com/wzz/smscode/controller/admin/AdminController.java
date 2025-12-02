@@ -92,31 +92,84 @@ public class AdminController {
     /**
      * 列出用户列表。
      * 根据提供的参数，可以查询所有用户或特定用户的直接下级。
-     * @param parentId 可选参数，指定要查询的用户的父ID；如果提供，则返回该用户的直接下级
-     * @param page 页码，默认为1
-     * @param size 每页显示的记录数，默认为10
-     * @return 返回一个Result对象，包含操作状态、消息以及数据（用户列表）
+     *
+     * 修改点：
+     * 1. parentId 参数改为 parentName，通过上级用户名查询下级。
+     * 2. 返回结果中填充 parentName 字段。
+     *
+     * @param parentName 可选参数，指定上级用户的用户名
+     * @param userName   可选参数，模糊搜索当前用户的用户名
+     * @param page       页码，默认为1
+     * @param size       每页显示的记录数，默认为10
+     * @return 返回用户列表，包含上级用户名信息
      */
     @RequestMapping(value = "/listUsers", method = {RequestMethod.GET, RequestMethod.POST})
     public Result<?> listUsers(
-            @RequestParam(required = false) Long parentId,
+            @RequestParam(required = false) String parentName,
             @RequestParam(required = false) String userName,
             @RequestParam(defaultValue = "1") long page,
             @RequestParam(defaultValue = "10") long size) {
 
-        IPage<User> pageRequest = new Page<>(page, size);
         LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
-        if (parentId != null) {
-            queryWrapper.eq(User::getParentId, parentId);
+
+        // 1. 如果传入了上级用户名，先查询该上级用户的ID
+        if (StringUtils.hasText(parentName)) {
+            User parentUser = userService.getOne(new LambdaQueryWrapper<User>()
+                    .eq(User::getUserName, parentName)
+                    .last("LIMIT 1")); // 保证只查一条，提高效率
+
+            if (parentUser == null) {
+                // 如果指定的上级用户不存在，则其下级肯定也不存在，直接返回空分页
+                return Result.success("查询成功", new Page<User>(page, size));
+            }
+            // 设置查询条件：parent_id = 查出来的ID
+            queryWrapper.eq(User::getParentId, parentUser.getId());
         }
-        if (StringUtils.hasText(userName)){
+
+        // 2. 处理当前用户名的模糊查询
+        if (StringUtils.hasText(userName)) {
             queryWrapper.like(User::getUserName, userName);
         }
+
+        // 按创建时间倒序
         queryWrapper.orderByDesc(User::getCreateTime);
-        IPage<User> userPage = userService.page(pageRequest,queryWrapper);
+
+        // 3. 执行分页查询
+        IPage<User> pageRequest = new Page<>(page, size);
+        IPage<User> userPage = userService.page(pageRequest, queryWrapper);
+
+        List<User> records = userPage.getRecords();
+
+        // 4. 填充 parentName 字段 (批量查询以避免 N+1 问题)
+        if (!CollectionUtils.isEmpty(records)) {
+            // 提取所有涉及的 parentId (排除 null 和 0)
+            Set<Long> parentIds = records.stream()
+                    .map(User::getParentId)
+                    .filter(id -> id != null && id != 0L)
+                    .collect(Collectors.toSet());
+
+            if (!CollectionUtils.isEmpty(parentIds)) {
+                // 批量查询上级用户的信息（只查 ID 和 UserName）
+                List<User> parents = userService.list(new LambdaQueryWrapper<User>()
+                        .in(User::getId, parentIds)
+                        .select(User::getId, User::getUserName)); // 只查需要的字段
+
+                // 转为 Map<ID, UserName> 方便查找
+                Map<Long, String> parentMap = parents.stream()
+                        .collect(Collectors.toMap(User::getId, User::getUserName));
+
+                // 遍历结果集，回填 parentName
+                for (User user : records) {
+                    Long pid = user.getParentId();
+                    if (pid != null && parentMap.containsKey(pid)) {
+                        user.setParentName(parentMap.get(pid));
+                    }
+                }
+            }
+        }
+
         return Result.success("查询成功", userPage);
     }
-
     /**
      * 创建新用户或代理账户
      * @param userCreateDTO

@@ -1,5 +1,6 @@
 package com.wzz.smscode.moduleService;
 
+import com.wzz.smscode.common.CommonResultDTO;
 import com.wzz.smscode.dto.ApiConfig.ApiConfig;
 import com.wzz.smscode.entity.Project;
 import com.wzz.smscode.entity.SystemConfig;
@@ -134,7 +135,7 @@ public class SmsApiService {
 
         // 2. 轮询逻辑 (改为时间控制：5分钟)
         long startTime = System.currentTimeMillis();
-        long timeout = 5 * 60 * 1000L; // 5分钟超时
+        long timeout = 10 * 60 * 1000L; // 10分钟超时
         int attempts = 0; // 仅用于日志记录，不作为终止条件
 
         // 只要当前时间减去开始时间小于超时时间，就继续轮询
@@ -144,8 +145,11 @@ public class SmsApiService {
                 moduleUtil.executeApi(config, context);
                 String code = context.get("code"); // 约定提取变量名为 code
                 if (StringUtils.hasText(code) && !"null".equalsIgnoreCase(code.trim())) {
-                    log.info("成功获取验证码: {}, 耗时: {}ms", code, System.currentTimeMillis() - startTime);
-                    return code;
+                    if (code != null && code.matches("^\\d{4,8}$")) {
+                        log.info("成功获取验证码: {}, 耗时: {}ms", code, System.currentTimeMillis() - startTime);
+                        return code;
+                    }
+
                 }
                 log.info("未获取到验证码，第 {} 次尝试，已耗时 {}ms...", attempts, System.currentTimeMillis() - startTime);
                 Thread.sleep(1000); // 3秒轮询一次

@@ -46,6 +46,10 @@ public class NumberDTO {
      */
     private String userName;
     /**
+     * 项目名称
+     */
+    private String projectName;
+    /**
      * 获取手机号的时间
      */
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")

@@ -269,6 +269,49 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     }
 
 
+    // 在 UserServiceImpl 类中添加以下方法
+
+    @Transactional(rollbackFor = Exception.class)
+    @Override
+    public void deleteSubUsersBatch(List<Long> userIds, Long agentId) {
+        if (CollectionUtils.isEmpty(userIds)) {
+            throw new BusinessException("请选择要删除的用户");
+        }
+
+        // 1. 安全校验：查询这些ID中，真正属于该代理的下级用户ID
+        // 防止代理恶意传入非自己下级的ID进行删除
+        LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
+        queryWrapper.in(User::getId, userIds)
+                .eq(User::getParentId, agentId);
+
+        List<User> validSubUsers = this.list(queryWrapper);
+
+        if (CollectionUtils.isEmpty(validSubUsers)) {
+            throw new BusinessException("未找到属于您的下级用户，删除失败");
+        }
+
+        // 提取验证通过的ID列表
+        List<Long> validIds = validSubUsers.stream()
+                .map(User::getId)
+                .collect(Collectors.toList());
+
+        // 2. 删除关联数据：用户项目价格配置 (UserProjectLine)
+        // 如果不删除，该表会产生大量无主的死数据
+        LambdaQueryWrapper<UserProjectLine> lineWrapper = new LambdaQueryWrapper<>();
+        lineWrapper.in(UserProjectLine::getUserId, validIds);
+        userProjectLineService.remove(lineWrapper);
+
+
+        // 4. 批量删除用户主体
+        boolean success = this.removeByIds(validIds);
+
+        if (!success) {
+            throw new BusinessException("删除用户操作失败");
+        }
+
+        log.info("代理 {} 批量删除了 {} 个下级用户，IDs: {}", agentId, validIds.size(), validIds);
+    }
+
     @Override
     public CommonResultDTO<BigDecimal> getBalance(Long userId, String password) {
         return null;
@@ -538,10 +581,12 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         if (userName!=null){
             wrapper.like(User::getUserName, userName);
         }
+        wrapper.orderByDesc(User::getCreateTime);
 
         IPage<User> userPage = this.page(page, wrapper);
         return userPage;
     }
+
 
 
 

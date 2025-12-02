@@ -27,7 +27,7 @@ public interface UserLedgerService extends IService<UserLedger> {
     boolean createLedgerEntry(Long userId, FundType fundType, BigDecimal amount, BigDecimal balanceAfter, String remarks);
 
     @Transactional(rollbackFor = Exception.class) // 确保任何异常都会回滚事务
-    boolean createLedgerAndUpdateBalance(LedgerCreationDTO request);
+    BigDecimal createLedgerAndUpdateBalance(LedgerCreationDTO request);
 
     IPage<UserLedger> listSubordinateLedgers(String userName,Long agentId, Page<UserLedger> page, Long targetUserId, Date startTime, Date endTime, Integer fundType, Integer ledgerType);
 

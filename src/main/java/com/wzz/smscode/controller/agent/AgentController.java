@@ -740,5 +740,31 @@ public class AgentController {
         }
     }
 
+    /**
+     * 代理批量删除下级用户
+     * @param userIds 用户ID列表
+     */
+    @SaCheckLogin
+    @PostMapping("/deleteUsers")
+    public Result<?> deleteUsersBatch(@RequestBody List<Long> userIds) {
+        long agentId = StpUtil.getLoginIdAsLong();
+        // 再次校验代理权限
+        checkAgentPermission(agentId);
+
+        if (userIds == null || userIds.isEmpty()) {
+            return Result.error("参数不能为空");
+        }
+
+        try {
+            userService.deleteSubUsersBatch(userIds, agentId);
+            return Result.success("删除成功");
+        } catch (BusinessException e) {
+            log.warn("代理 {} 删除用户失败: {}", agentId, e.getMessage());
+            return Result.error(e.getMessage());
+        } catch (Exception e) {
+            log.error("代理 {} 批量删除用户系统异常", agentId, e);
+            return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，删除失败");
+        }
+    }
 
 }

@@ -18,6 +18,7 @@ class SmsCodeApplicationTests {
     @Test
     void contextLoads() {
         System.out.println("----------- API 客户端测试开始 -----------");
-
+        String code="暂无验证码456153";
+        System.out.println(code.matches("^\\d{4,8}$"));
     }
 }

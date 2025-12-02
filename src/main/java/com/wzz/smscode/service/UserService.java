@@ -29,6 +29,9 @@ public interface UserService extends IService<User> {
 
     User authenticateUserByUserName(String userId, String password);
 
+    @Transactional(rollbackFor = Exception.class)
+    void deleteSubUsersBatch(List<Long> userIds, Long agentId);
+
     CommonResultDTO<BigDecimal> getBalance(Long userId, String password);
 
     CommonResultDTO<BigDecimal> getBalance(String userName, String password);

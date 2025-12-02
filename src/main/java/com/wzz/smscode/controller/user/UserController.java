@@ -71,6 +71,25 @@ public class UserController {
     }
 
     /**
+     * 获取验证码
+     *
+     * @param userName      用户名称
+     * @param password    用户密码
+     * @param phoneNumber 获取到的手机号码
+     * @return CommonResultDTO，成功时 data 为验证码字符串
+     */
+    @RequestMapping(value = "/getCode", method = {RequestMethod.GET, RequestMethod.POST})
+    public CommonResultDTO<String> getCode(
+            @RequestParam String userName,
+            @RequestParam String password,
+            @RequestParam String phoneNumber,
+            @RequestParam String projectId,
+            @RequestParam String lineId) {
+
+        return numberRecordService.getCode(userName, password, phoneNumber,projectId,lineId);
+    }
+
+    /**
      * 更新密码
      */
     @PostMapping("/update/passward")
@@ -96,24 +115,7 @@ public class UserController {
         return Result.success(config.getSystemNotice());
     }
 
-    /**
-     * 获取验证码
-     *
-     * @param userName      用户名称
-     * @param password    用户密码
-     * @param phoneNumber 获取到的手机号码
-     * @return CommonResultDTO，成功时 data 为验证码字符串
-     */
-    @RequestMapping(value = "/getCode", method = {RequestMethod.GET, RequestMethod.POST})
-    public CommonResultDTO<String> getCode(
-             @RequestParam String userName,
-            @RequestParam String password,
-            @RequestParam String phoneNumber,
-             @RequestParam String projectId,
-             @RequestParam String lineId) {
 
-        return numberRecordService.getCode(userName, password, phoneNumber,projectId,lineId);
-    }
 
     /**
      * 查询账户余额

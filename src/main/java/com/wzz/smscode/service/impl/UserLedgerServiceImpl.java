@@ -228,7 +228,7 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
      */
     @Transactional(rollbackFor = Exception.class)
     @Override
-    public boolean createLedgerAndUpdateBalance(LedgerCreationDTO request) {
+    public BigDecimal createLedgerAndUpdateBalance(LedgerCreationDTO request) {
         // 1. 参数校验
         if (request.getUserId() == null || request.getAmount() == null ||
                 request.getLedgerType() == null || request.getFundType() == null ||
@@ -281,8 +281,8 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
         ledger.setCode(request.getCode());
         ledger.setLineId(request.getLineId());
         ledger.setProjectId(request.getProjectId());
-
-        return this.save(ledger);
+        this.save(ledger);
+        return newBalance;
     }
 
     @Override

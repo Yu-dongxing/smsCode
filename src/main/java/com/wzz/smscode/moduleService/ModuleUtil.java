@@ -117,119 +117,125 @@ public class ModuleUtil {
      * @param context 上下文变量 (入参为当前变量，执行后会将提取的新变量 put 进去)
      */
     public void executeApi(ApiConfig config, Map<String, String> context) {
-        // 1. 处理前置操作 (PreHooks)
-        if (config.getPreHooks() != null) {
-            for (KeyValue hook : config.getPreHooks()) {
-                String val = replaceVariables(hook.getValue(), context);
-                context.put(hook.getKey(), val);
-            }
-        }
-
-        // 2. 构建 URL
-        String rawUrl = config.getUrl();
-        if (!StringUtils.hasText(rawUrl)) {
-            throw new BusinessException("接口 URL 不能为空");
-        }
-        String finalUrl = replaceVariables(rawUrl, context);
-
-        // 3. 构建 Query 参数
-        UriComponentsBuilder uriBuilder = UriComponentsBuilder.fromHttpUrl(finalUrl);
-        if (config.getParams() != null) {
-            for (KeyValue param : config.getParams()) {
-                if (StringUtils.hasText(param.getKey())) {
-                    uriBuilder.queryParam(param.getKey(), replaceVariables(param.getValue(), context));
+        try{
+            // 1. 处理前置操作 (PreHooks)
+            if (config.getPreHooks() != null) {
+                for (KeyValue hook : config.getPreHooks()) {
+                    String val = replaceVariables(hook.getValue(), context);
+                    context.put(hook.getKey(), val);
                 }
             }
-        }
-        URI uri = uriBuilder.build().encode().toUri();
 
-        // 4. 构建请求体 & 准备日志数据
-        Object body = null;
-        Object logBody = null; // 用于打印日志的 Body 内容
-        MediaType contentType = MediaType.APPLICATION_JSON;
-
-        if ("JSON".equalsIgnoreCase(config.getBodyType())) {
-            String jsonStr = config.getJsonBody();
-            if (StringUtils.hasText(jsonStr)) {
-                String processedJson = replaceVariables(jsonStr, context);
-                body = processedJson;
-                logBody = processedJson; // JSON 直接记录字符串
-                contentType = MediaType.APPLICATION_JSON;
+            // 2. 构建 URL
+            String rawUrl = config.getUrl();
+            if (!StringUtils.hasText(rawUrl)) {
+                throw new BusinessException("接口 URL 不能为空");
             }
-        } else if ("FORM_DATA".equalsIgnoreCase(config.getBodyType()) || "X_WWW_FORM".equalsIgnoreCase(config.getBodyType())) {
-            MultiValueMap<String, String> formData = new LinkedMultiValueMap<>();
-            if (config.getFormBody() != null) {
-                for (KeyValue item : config.getFormBody()) {
-                    formData.add(item.getKey(), replaceVariables(item.getValue(), context));
-                    logBody = formData;
-                }
-            }
-            body = BodyInserters.fromFormData(formData);
-            contentType = MediaType.APPLICATION_FORM_URLENCODED;
-        }
+            String finalUrl = replaceVariables(rawUrl, context);
 
-        // 5. 发起请求
-        WebClient.RequestBodySpec requestSpec = webClient
-                .method(HttpMethod.valueOf(config.getMethod().toUpperCase()))
-                .uri(uri)
-                .contentType(contentType);
-
-        // 添加 Headers 并记录日志
-        Map<String, String> logHeaders = new HashMap<>(); // 用于日志记录
-        // 添加 Headers
-        if (config.getHeaders() != null) {
-            for (KeyValue header : config.getHeaders()) {
-                if (StringUtils.hasText(header.getKey())) {
-                    String headerVal = replaceVariables(header.getValue(), context);
-                    requestSpec.header(header.getKey(), headerVal);
-                    logHeaders.put(header.getKey(), headerVal);
-                }
-            }
-        }
-
-        if (body != null) {
-            requestSpec.body(body instanceof BodyInserters.FormInserter ? (BodyInserters.FormInserter) body : BodyInserters.fromValue(body));
-        }
-        Map<String, Object> requestLog = new LinkedHashMap<>();
-        requestLog.put("URL", uri.toString());
-        requestLog.put("Method", config.getMethod());
-        requestLog.put("Headers", logHeaders);
-        requestLog.put("Body", logBody);
-
-        log.info("准备请求 API >>> {}", requestLog);
-
-        // 6. 获取响应
-        String responseBody = requestSpec.retrieve()
-                .bodyToMono(String.class)
-                .timeout(Duration.ofSeconds(30))
-                .block();
-
-        log.info("API响应 [{}]: {}", finalUrl, responseBody);
-
-        // 7. 执行变量提取 (Extract Rules)
-        if (config.getExtractRules() != null && StringUtils.hasText(responseBody)) {
-            for (ExtractRule rule : config.getExtractRules()) {
-                try {
-                    String extractedValue = null;
-                    if ("BODY".equalsIgnoreCase(rule.getSource())) {
-                        Object val = JsonPath.parse(responseBody).read(rule.getJsonPath());
-                        extractedValue = String.valueOf(val);
-                    }
-
-                    if (extractedValue != null) {
-                        context.put(rule.getTargetVariable(), extractedValue);
-                        log.info("变量提取成功: {} = {}", rule.getTargetVariable(), extractedValue);
-                    }
-                } catch (Exception e) {
-                    log.warn("变量提取失败 [Key: {}, Path: {}]: {}", rule.getTargetVariable(), rule.getJsonPath(), e.getMessage());
-                    if(debug) {
-                        throw new BusinessException(0,"未获取到手机号，返回响应："+responseBody);
-                    }else {
-                        throw new BusinessException(0,"未获取到手机号");
+            // 3. 构建 Query 参数
+            UriComponentsBuilder uriBuilder = UriComponentsBuilder.fromHttpUrl(finalUrl);
+            if (config.getParams() != null) {
+                for (KeyValue param : config.getParams()) {
+                    if (StringUtils.hasText(param.getKey())) {
+                        uriBuilder.queryParam(param.getKey(), replaceVariables(param.getValue(), context));
                     }
                 }
             }
+            URI uri = uriBuilder.build().encode().toUri();
+
+            // 4. 构建请求体 & 准备日志数据
+            Object body = null;
+            Object logBody = null; // 用于打印日志的 Body 内容
+            MediaType contentType = MediaType.APPLICATION_JSON;
+
+            if ("JSON".equalsIgnoreCase(config.getBodyType())) {
+                String jsonStr = config.getJsonBody();
+                if (StringUtils.hasText(jsonStr)) {
+                    String processedJson = replaceVariables(jsonStr, context);
+                    body = processedJson;
+                    logBody = processedJson; // JSON 直接记录字符串
+                    contentType = MediaType.APPLICATION_JSON;
+                }
+            } else if ("FORM_DATA".equalsIgnoreCase(config.getBodyType()) || "X_WWW_FORM".equalsIgnoreCase(config.getBodyType())) {
+                MultiValueMap<String, String> formData = new LinkedMultiValueMap<>();
+                if (config.getFormBody() != null) {
+                    for (KeyValue item : config.getFormBody()) {
+                        formData.add(item.getKey(), replaceVariables(item.getValue(), context));
+                        logBody = formData;
+                    }
+                }
+                body = BodyInserters.fromFormData(formData);
+                contentType = MediaType.APPLICATION_FORM_URLENCODED;
+            }
+
+            // 5. 发起请求
+            WebClient.RequestBodySpec requestSpec = webClient
+                    .method(HttpMethod.valueOf(config.getMethod().toUpperCase()))
+                    .uri(uri)
+                    .contentType(contentType);
+
+            // 添加 Headers 并记录日志
+            Map<String, String> logHeaders = new HashMap<>(); // 用于日志记录
+            // 添加 Headers
+            if (config.getHeaders() != null) {
+                for (KeyValue header : config.getHeaders()) {
+                    if (StringUtils.hasText(header.getKey())) {
+                        String headerVal = replaceVariables(header.getValue(), context);
+                        requestSpec.header(header.getKey(), headerVal);
+                        logHeaders.put(header.getKey(), headerVal);
+                    }
+                }
+            }
+
+            if (body != null) {
+                requestSpec.body(body instanceof BodyInserters.FormInserter ? (BodyInserters.FormInserter) body : BodyInserters.fromValue(body));
+            }
+            Map<String, Object> requestLog = new LinkedHashMap<>();
+            requestLog.put("URL", uri.toString());
+            requestLog.put("Method", config.getMethod());
+            requestLog.put("Headers", logHeaders);
+            requestLog.put("Body", logBody);
+
+            log.info("准备请求 API >>> {}", requestLog);
+
+            // 6. 获取响应
+            String responseBody = requestSpec.retrieve()
+                    .bodyToMono(String.class)
+                    .timeout(Duration.ofSeconds(60))
+                    .block();
+
+            log.info("API响应 [{}]: {}", finalUrl, responseBody);
+
+            // 7. 执行变量提取 (Extract Rules)
+            if (config.getExtractRules() != null && StringUtils.hasText(responseBody)) {
+                for (ExtractRule rule : config.getExtractRules()) {
+                    try {
+                        String extractedValue = null;
+                        if ("BODY".equalsIgnoreCase(rule.getSource())) {
+                            Object val = JsonPath.parse(responseBody).read(rule.getJsonPath());
+                            extractedValue = String.valueOf(val);
+                        }
+
+                        if (extractedValue != null) {
+                            context.put(rule.getTargetVariable(), extractedValue);
+                            log.info("变量提取成功: {} = {}", rule.getTargetVariable(), extractedValue);
+                        }
+                    } catch (Exception e) {
+                        log.warn("变量提取失败 [Key: {}, Path: {}]: {}", rule.getTargetVariable(), rule.getJsonPath(), e.getMessage());
+                        if(debug) {
+                            throw new BusinessException(0,"未获取到手机号，返回响应："+responseBody);
+                        }else {
+                            throw new BusinessException(0,"未获取到手机号");
+                        }
+                    }
+                }
+            }
+        }catch (Exception e){
+            log.info("通用 API 执行方法出现错误：{}",e.getMessage());
         }
+
+
     }
 
     /**

@@ -98,9 +98,9 @@ public class NumberRecord extends BaseEntity {
     private Integer status;
 
     /**
-     * 扣费状态：0=未扣费, 1=已扣费
+     * 扣费状态(0=未扣费, 1=已扣费,2=已退款)
      */
-    @ColumnComment("扣费状态(0=未扣费, 1=已扣费)")
+    @ColumnComment("扣费状态(0=未扣费, 1=已扣费,2=已退款)")
     @TableField("charged")
     @DefaultValue("0")
     private Integer charged;
@@ -174,4 +174,12 @@ public class NumberRecord extends BaseEntity {
     @TableField("remark")
     @ColumnType("TEXT")
     private String remark;
+
+    /**
+     * 项目名称
+     */
+    @ColumnComment("项目名称")
+    @TableField("project_name")
+    @DefaultValue("'无'")
+    private String projectName;
 }

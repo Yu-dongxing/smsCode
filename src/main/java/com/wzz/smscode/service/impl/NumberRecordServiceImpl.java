@@ -17,6 +17,7 @@ import com.wzz.smscode.mapper.NumberRecordMapper;
 import com.wzz.smscode.moduleService.SmsApiService;
 import com.wzz.smscode.service.*;
 import com.wzz.smscode.util.BalanceUtil;
+import com.wzz.smscode.util.ResponseParser;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -36,6 +37,7 @@ import java.time.LocalDateTime;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.*;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -54,6 +56,8 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
     @Autowired private SmsApiService smsApiService;
     @Autowired private UserProjectLineService userProjectLineService;
 
+    private static final Pattern PHONE_NUMBER_PATTERN = Pattern.compile("^1[3-9]\\d{9}$");
+
     /**
      * 检查指定的手机号是否已经存在于特定项目的记录中。
      */
@@ -68,7 +72,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
     @Transactional
     @Override
     public CommonResultDTO<String> getNumber(String userName, String password, String projectId, Integer lineId) {
-        // 1. 身份验证与余额检查
+        // 1. 身份验证与余额检查 (保持不变)
         User user = userService.authenticateUserByUserName(userName, password);
         if (user == null) return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED, "用户验证失败");
 
@@ -101,20 +105,60 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             return CommonResultDTO.error(Constants.ERROR_INSUFFICIENT_BALANCE, "余额不足或已有进行中的任务");
         }
 
+        // ================= 重构的核心取号逻辑 =================
         final int MAX_ATTEMPTS = 3;
         Map<String, String> successfulIdentifier = null;
         boolean numberFoundAndVerified = false;
 
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-            Map<String, String> currentIdentifier;
             try {
-                currentIdentifier = smsApiService.getPhoneNumber(projectT);
+                // --- 步骤 1: 调用接口获取 ---
+                Map<String, String> currentIdentifier = smsApiService.getPhoneNumber(projectT);
 
-                if (!StringUtils.hasText(currentIdentifier.get("phone"))) {
+                // 安全获取 phone 字符串
+                String phone = (currentIdentifier != null) ? currentIdentifier.get("phone") : null;
+
+                // --- 步骤 2: 正则校验 (是否为空，是否符合手机号格式) ---
+                // 建议: PHONE_NUMBER_PATTERN = Pattern.compile("^1[3-9]\\d{9}$");
+                boolean isValidPhone = StringUtils.hasText(phone) && PHONE_NUMBER_PATTERN.matcher(phone).matches();
+
+                if (!isValidPhone) {
+                    log.warn("获取号码无效或格式不正确 (尝试 {}/{}): {}", attempt, MAX_ATTEMPTS, phone);
                     if (attempt < MAX_ATTEMPTS) Thread.sleep(500);
-                    continue;
+                    continue; // 格式不对，直接重试，不走后面逻辑
                 }
+
+                // --- 步骤 3: 重复号码检查 (Check Duplicates) ---
+                if (isPhoneNumberExistsInProject(projectId, phone)) {
+                    log.warn("号码 [{}] 已存在，重试...", phone);
+                    if (attempt < MAX_ATTEMPTS) Thread.sleep(200);
+                    continue; // 号码重复，重试
+                }
+
+                // --- 步骤 4: 号码筛选 (Filter) ---
+                if (config.getEnableNumberFiltering() && projectT.getEnableFilter()) {
+                    try {
+                        Boolean isAvailable = smsApiService.checkPhoneNumberAvailability(projectT, phone, null)
+                                .block(Duration.ofSeconds(60));
+
+                        if (!Boolean.TRUE.equals(isAvailable)) {
+                            log.warn("号码 [{}] 筛选不通过", phone);
+                            if (attempt < MAX_ATTEMPTS) Thread.sleep(200);
+                            continue; // 筛选失败，重试
+                        }
+                    } catch (Exception e) {
+                        log.error("筛选调用异常，视为筛选不通过", e);
+                        continue;
+                    }
+                }
+
+                // --- 步骤 5: 全部通过，赋值并成功 ---
+                successfulIdentifier = currentIdentifier;
+                numberFoundAndVerified = true;
+                break; // 成功拿到号，跳出循环
+
             } catch (BusinessException e) {
+                // 业务异常(如接口明确报错)通常直接中断，不建议死循环重试，除非确定是临时网络问题
                 log.error("调用接口获取号码失败 (尝试 {}/{})，终止流程: {}", attempt, MAX_ATTEMPTS, e.getMessage());
                 return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, "接口错误: " + e.getMessage());
             } catch (InterruptedException e) {
@@ -124,40 +168,11 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                 log.error("未知异常", e);
                 return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, "系统未知错误");
             }
-
-            String phoneNumber = currentIdentifier.get("phone");
-
-            // 重复号码检查
-            if (isPhoneNumberExistsInProject(projectId, phoneNumber)) {
-                log.warn("号码 [{}] 已存在，重试...", phoneNumber);
-                try { if (attempt < MAX_ATTEMPTS) Thread.sleep(200); } catch (InterruptedException ignored) {}
-                continue;
-            }
-
-            // 号码筛选 (Filter)
-            if (config.getEnableNumberFiltering() && projectT.getEnableFilter()) {
-                try {
-                    Boolean isAvailable = smsApiService.checkPhoneNumberAvailability(projectT, phoneNumber, null)
-                            .block(Duration.ofSeconds(60));
-
-                    if (Boolean.TRUE.equals(isAvailable)) {
-                        successfulIdentifier = currentIdentifier;
-                        numberFoundAndVerified = true;
-                        break;
-                    } else {
-                        log.warn("号码 [{}] 筛选不通过", phoneNumber);
-                    }
-                } catch (Exception e) {
-                    log.error("筛选异常", e);
-                }
-            } else {
-                successfulIdentifier = currentIdentifier;
-                numberFoundAndVerified = true;
-                break;
-            }
         }
+        // ====================================================
 
-        if (!numberFoundAndVerified) {
+        // 检查最终结果
+        if (!numberFoundAndVerified || successfulIdentifier == null) {
             return CommonResultDTO.error(Constants.ERROR_NO_CODE, "获取可用号码失败，请稍后重试");
         }
 
@@ -168,7 +183,6 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         record.setLineId(lineId);
         record.setUserName(user.getUserName());
         record.setPhoneNumber(successfulIdentifier.get("phone"));
-        // 【注意】: 确保前端配置中将ID提取为了 "id" 变量
         record.setApiPhoneId(successfulIdentifier.get("id"));
         record.setStatus(0);
         record.setCharged(0);
@@ -177,15 +191,13 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         record.setBalanceBefore(user.getBalance());
         record.setBalanceAfter(user.getBalance());
         record.setGetNumberTime(LocalDateTime.now());
+        record.setProjectName(projectT.getProjectName());
         this.save(record);
 
         final Long recordId = record.getId();
-        // 这里我们不再传递单一的 string identifier，而是传递记录ID，在 retrieveCode 中重建 Map
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronizationAdapter() {
             @Override
             public void afterCommit() {
-                // 注意：retrieveCode 签名我们保持不变 (Long, String)，
-                // 但第二个参数在新逻辑下实际上可以传 null 或者 phone，我们在方法内部会重新构建 Context
                 self.retrieveCode(recordId, null);
             }
         });
@@ -282,11 +294,12 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
 
                 if (codeOpt.isPresent()) {
                     String code = codeOpt.get();
-                    if (!code.isEmpty()) {
+                    if (code != null && code.matches("^\\d{4,8}$")) {
                         self.updateRecordAfterRetrieval(record, true, code);
                         return CommonResultDTO.success("验证码获取成功", code);
                     }
-                    return CommonResultDTO.error(Constants.ERROR_NO_CODE, "没有获取到验证码");
+                    log.warn("获取到的验证码格式错误（非纯数字）: [{}]", code); // 建议加上日志方便排查
+                    return CommonResultDTO.error(Constants.ERROR_NO_CODE, "获取到的验证码格式错误(非纯数字)");
                 } else {
                     return CommonResultDTO.error(Constants.ERROR_NO_CODE, "验证码获取失败");
                 }
@@ -333,8 +346,10 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                     .build();
 
             ledgerService.createLedgerAndUpdateBalance(ledgerDto);
-            User updatedUser = userService.getById(user.getId());
-            latestRecord.setBalanceAfter(updatedUser.getBalance());
+            BigDecimal realNewBalance = ledgerService.createLedgerAndUpdateBalance(ledgerDto);
+
+            latestRecord.setBalanceAfter(realNewBalance);
+
             userService.updateUserStats(user.getId());
 
             try {
