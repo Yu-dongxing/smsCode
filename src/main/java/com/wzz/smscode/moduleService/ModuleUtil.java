@@ -40,6 +40,53 @@ public class ModuleUtil {
 
     private final ProjectService projectService; // 需要更新Token到数据库
 
+
+    @Value("${admin.debug:false}") // 给个默认值防止报错
+    private Boolean debug;
+
+    /**
+     * 【新增方法】执行登录并保存Token的核心逻辑
+     * @param project 项目实体
+     * @return 获取到的新Token
+     */
+    public String executeLoginAndSave(Project project) {
+        if (project.getLoginConfig() == null || !StringUtils.hasText(project.getLoginConfig().getUrl())) {
+            throw new BusinessException("项目未配置登录接口，无法执行登录");
+        }
+
+        Map<String, String> context = new HashMap<>();
+        // 有些登录接口可能需要之前的Token作为参数（虽然少见），或者是其他固定参数
+        if (StringUtils.hasText(project.getAuthTokenValue())) {
+            context.put("token", project.getAuthTokenValue());
+        }
+
+        try {
+            log.info("开始执行项目 [{} - {}] 的强制登录...", project.getProjectName(), project.getLineId());
+
+            // 执行登录 API
+            executeApi(project.getLoginConfig(), context);
+
+            // 获取新 Token (约定提取变量名为 "token")
+            String newToken = context.get("token");
+            if (StringUtils.hasText(newToken)) {
+                // 更新对象属性
+                project.setAuthTokenValue(newToken);
+                project.setTokenExpirationTime(LocalDateTime.now());
+
+                // 持久化到数据库
+                projectService.updateById(project);
+                log.info("登录成功，数据库 Token 及时间已更新。Token: {}", newToken);
+                return newToken;
+            } else {
+                log.warn("执行登录成功，但在 Context 中未获取到 'token' 变量，请检查提取规则配置！");
+                throw new BusinessException("登录接口执行成功但未提取到Token变量");
+            }
+        } catch (Exception e) {
+            log.error("项目 [{} - {}] 执行登录失败, 错误：{}", project.getProjectName(), project.getLineId(), e);
+            throw new BusinessException("接口登录失败：" + e.getMessage());
+        }
+    }
+
     /**
      * 获取有效token
      */
@@ -83,23 +130,8 @@ public class ModuleUtil {
             // 执行登录操作
             if (needLogin) {
                 try {
-                    // 执行登录 API (executeApi 会把提取到的变量放入 context)
-                    executeApi(project.getLoginConfig(), context);
-
-                    // 获取新 Token (假设提取规则将变量名设为 "token")
-                    String newToken = context.get("token");
-                    if (StringUtils.hasText(newToken)) {
-                        // 更新对象属性
-                        project.setAuthTokenValue(newToken);
-                        // 将当前时间设为过期基准时间 (即最后更新时间)
-                        project.setTokenExpirationTime(LocalDateTime.now());
-
-                        // 持久化到数据库
-                        projectService.updateById(project);
-                        log.info("登录成功，数据库 Token 及时间已更新。");
-                    } else {
-                        log.warn("执行登录成功，但在 Context 中未获取到 'token' 变量，请检查提取规则配置！");
-                    }
+                    String newToken = executeLoginAndSave(project);
+                    context.put("token", newToken);
                 } catch (Exception e) {
                     log.error("项目 [{} - {}] 执行登录失败, 错误：{}", project.getProjectName(), project.getLineId(), e);
                     throw new BusinessException("接口登录失败，无法执行后续操作");
@@ -109,8 +141,7 @@ public class ModuleUtil {
         return context;
     }
 
-    @Value("${admin.debug}")
-    private Boolean debug;
+
     /**
      * 通用 API 执行方法
      * @param config 前端传递的接口配置

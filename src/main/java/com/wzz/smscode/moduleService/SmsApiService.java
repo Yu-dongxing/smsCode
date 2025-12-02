@@ -5,6 +5,7 @@ import com.wzz.smscode.dto.ApiConfig.ApiConfig;
 import com.wzz.smscode.entity.Project;
 import com.wzz.smscode.entity.SystemConfig;
 import com.wzz.smscode.exception.BusinessException;
+import com.wzz.smscode.service.ProjectService;
 import com.wzz.smscode.service.SystemConfigService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -81,7 +82,7 @@ public class SmsApiService {
         // 前端配置提取规则时，必须将手机号提取为 "phone"，ID提取为 "id" (约定优于配置)
         if (!context.containsKey("phone")) {
             log.error("获取手机号接口执行成功，但未提取到 phone 变量。当前Context: {}", context);
-            throw new BusinessException("未获取到手机号，请检查提取规则配置");
+            throw new BusinessException("未获取到手机号，请尝试重新获取");
         }
 
         return context;
@@ -133,7 +134,7 @@ public class SmsApiService {
             throw new BusinessException("项目未配置获取验证码接口");
         }
 
-        // 2. 轮询逻辑 (改为时间控制：5分钟)
+        // 2. 轮询逻辑 (改为时间控制：10分钟)
         long startTime = System.currentTimeMillis();
         long timeout = 10 * 60 * 1000L; // 10分钟超时
         int attempts = 0; // 仅用于日志记录，不作为终止条件
@@ -165,7 +166,7 @@ public class SmsApiService {
 
         long totalTime = System.currentTimeMillis() - startTime;
         log.error("获取验证码超时，总耗时: {}ms, 总尝试次数: {}", totalTime, attempts);
-        throw new BusinessException("获取验证码超时(5分钟未获取到)");
+        throw new BusinessException("获取验证码超时(10分钟未获取到)");
     }
 
     /**
@@ -189,11 +190,9 @@ public class SmsApiService {
             log.warn("项目未配置获取验证码接口");
             return Optional.empty();
         }
-
         try {
             log.info("进入单次验证码获取，{}，{}",config,context);
             moduleUtil.executeApi(config, context);
-
             String code = context.get("code");
             if (StringUtils.hasText(code) && !"null".equalsIgnoreCase(code.trim())) {
                 log.info("单次获取成功: {}", code);
@@ -202,7 +201,6 @@ public class SmsApiService {
         } catch (Exception e) {
             log.warn("单次获取验证码API执行异常: {}", e.getMessage());
         }
-
         return Optional.empty();
     }
 
@@ -345,5 +343,26 @@ public class SmsApiService {
                 "nb.rqjiance.com:1032",
                 "103.7.141.39:1032"
         );
+    }
+
+
+    private final ProjectService projectService;
+    /**
+     * 手动触发登录接口
+     * @param projectId 项目ID
+     * @param lineId 线路ID
+     * @return 获取到的新Token
+     */
+    public String manualLogin(String projectId, String lineId) {
+        // 1. 查询项目
+        Project project = projectService.getProject(projectId,Integer.valueOf(lineId));
+        if (project == null) {
+            throw new BusinessException("未找到项目ID为 " + projectId + " 的项目");
+        }
+        if (lineId != null && !lineId.equals(project.getLineId())) {
+            throw new BusinessException("项目ID与线路ID不匹配");
+        }
+        log.info("接收到手动登录请求：项目ID={}, 线路ID={}", projectId, lineId);
+        return moduleUtil.executeLoginAndSave(project);
     }
 }

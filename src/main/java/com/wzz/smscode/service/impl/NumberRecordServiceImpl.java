@@ -17,7 +17,6 @@ import com.wzz.smscode.mapper.NumberRecordMapper;
 import com.wzz.smscode.moduleService.SmsApiService;
 import com.wzz.smscode.service.*;
 import com.wzz.smscode.util.BalanceUtil;
-import com.wzz.smscode.util.ResponseParser;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -25,7 +24,7 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronizationAdapter;
+import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
@@ -104,61 +103,44 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         if (!BalanceUtil.canGetNumber(user, hasOngoingRecord)) {
             return CommonResultDTO.error(Constants.ERROR_INSUFFICIENT_BALANCE, "余额不足或已有进行中的任务");
         }
-
-        // ================= 重构的核心取号逻辑 =================
         final int MAX_ATTEMPTS = 3;
         Map<String, String> successfulIdentifier = null;
         boolean numberFoundAndVerified = false;
 
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
             try {
-                // --- 步骤 1: 调用接口获取 ---
                 Map<String, String> currentIdentifier = smsApiService.getPhoneNumber(projectT);
-
-                // 安全获取 phone 字符串
                 String phone = (currentIdentifier != null) ? currentIdentifier.get("phone") : null;
-
-                // --- 步骤 2: 正则校验 (是否为空，是否符合手机号格式) ---
-                // 建议: PHONE_NUMBER_PATTERN = Pattern.compile("^1[3-9]\\d{9}$");
                 boolean isValidPhone = StringUtils.hasText(phone) && PHONE_NUMBER_PATTERN.matcher(phone).matches();
-
                 if (!isValidPhone) {
                     log.warn("获取号码无效或格式不正确 (尝试 {}/{}): {}", attempt, MAX_ATTEMPTS, phone);
                     if (attempt < MAX_ATTEMPTS) Thread.sleep(500);
-                    continue; // 格式不对，直接重试，不走后面逻辑
+                    continue;
                 }
-
-                // --- 步骤 3: 重复号码检查 (Check Duplicates) ---
                 if (isPhoneNumberExistsInProject(projectId, phone)) {
                     log.warn("号码 [{}] 已存在，重试...", phone);
                     if (attempt < MAX_ATTEMPTS) Thread.sleep(200);
-                    continue; // 号码重复，重试
+                    continue;
                 }
-
-                // --- 步骤 4: 号码筛选 (Filter) ---
                 if (config.getEnableNumberFiltering() && projectT.getEnableFilter()) {
                     try {
                         Boolean isAvailable = smsApiService.checkPhoneNumberAvailability(projectT, phone, null)
                                 .block(Duration.ofSeconds(60));
-
                         if (!Boolean.TRUE.equals(isAvailable)) {
                             log.warn("号码 [{}] 筛选不通过", phone);
                             if (attempt < MAX_ATTEMPTS) Thread.sleep(200);
-                            continue; // 筛选失败，重试
+                            continue;
                         }
                     } catch (Exception e) {
                         log.error("筛选调用异常，视为筛选不通过", e);
                         continue;
                     }
                 }
-
-                // --- 步骤 5: 全部通过，赋值并成功 ---
                 successfulIdentifier = currentIdentifier;
                 numberFoundAndVerified = true;
-                break; // 成功拿到号，跳出循环
+                break;
 
             } catch (BusinessException e) {
-                // 业务异常(如接口明确报错)通常直接中断，不建议死循环重试，除非确定是临时网络问题
                 log.error("调用接口获取号码失败 (尝试 {}/{})，终止流程: {}", attempt, MAX_ATTEMPTS, e.getMessage());
                 return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, "接口错误: " + e.getMessage());
             } catch (InterruptedException e) {
@@ -169,33 +151,46 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                 return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, "系统未知错误");
             }
         }
-        // ====================================================
-
-        // 检查最终结果
         if (!numberFoundAndVerified || successfulIdentifier == null) {
             return CommonResultDTO.error(Constants.ERROR_NO_CODE, "获取可用号码失败，请稍后重试");
         }
+        String phoneNumber = successfulIdentifier.get("phone");
 
-        // 4. 写入号码记录
+        // 1. 执行扣款账本 (LedgerType=0 出账, FundType=业务扣费)
+        LedgerCreationDTO deductionDto = LedgerCreationDTO.builder()
+                .userId(user.getId())
+                .amount(price)
+                .ledgerType(0) // 出账
+                .fundType(FundType.BUSINESS_DEDUCTION)
+                .remark("取号预扣费")
+                .phoneNumber(phoneNumber)
+                .lineId(lineId)
+                .projectId(projectId)
+                .build();
+
+        // 此方法会扣除余额，如果余额不足会抛出异常回滚事务
+        BigDecimal newBalance = ledgerService.createLedgerAndUpdateBalance(deductionDto);
+
+        // 2. 写入号码记录
         NumberRecord record = new NumberRecord();
         record.setUserId(user.getId());
         record.setProjectId(projectId);
         record.setLineId(lineId);
         record.setUserName(user.getUserName());
-        record.setPhoneNumber(successfulIdentifier.get("phone"));
+        record.setPhoneNumber(phoneNumber);
         record.setApiPhoneId(successfulIdentifier.get("id"));
-        record.setStatus(0);
-        record.setCharged(0);
+        record.setStatus(0); // 待取码
+        record.setCharged(1); // 【关键】标记为已扣费
         record.setPrice(price);
         record.setCostPrice(userProjectLine.getCostPrice());
-        record.setBalanceBefore(user.getBalance());
-        record.setBalanceAfter(user.getBalance());
+        record.setBalanceBefore(user.getBalance()); // 扣费前余额
+        record.setBalanceAfter(newBalance);         // 扣费后余额
         record.setGetNumberTime(LocalDateTime.now());
         record.setProjectName(projectT.getProjectName());
         this.save(record);
 
         final Long recordId = record.getId();
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronizationAdapter() {
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
                 self.retrieveCode(recordId, null);
@@ -206,225 +201,191 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         return CommonResultDTO.success("取号成功，请稍后查询验证码", successfulIdentifier.get("phone"));
     }
 
+    /**
+     * 异步轮询取码
+     */
     @Async("taskExecutor")
     @Transactional
     @Override
     public void retrieveCode(Long numberId, String unusedIdentifier) {
         NumberRecord record = this.getById(numberId);
-        if (record == null || record.getStatus() != 0) {
+        // 如果记录不存在或已经完结（成功/超时/无效），则跳过
+        if (record == null || record.getStatus() >= 2) {
             return;
         }
 
-        record.setStatus(1); // 更新为取码中
-        record.setStartCodeTime(LocalDateTime.now());
-        this.updateById(record);
+        // 更新为取码中
+        if (record.getStatus() == 0) {
+            record.setStatus(1);
+            record.setStartCodeTime(LocalDateTime.now());
+            this.updateById(record);
+        }
 
         Project project = projectService.getProject(record.getProjectId(), record.getLineId());
-
-        // 【修改点 2】: 构建 Context Map 传递给 SmsApiService
         Map<String, String> context = new HashMap<>();
         context.put("phone", record.getPhoneNumber());
         if (StringUtils.hasText(record.getApiPhoneId())) {
             context.put("id", record.getApiPhoneId());
         }
-        // 如果项目有Token，SmsApiService 内部会自动从 Project 实体读取，这里只需传 phone/id 即可
 
-        String result;
+        String result = null;
+        boolean isSuccess = false;
         try {
-            // 调用新的 getVerificationCode(Project, Map) 接口
+            // 调用API获取验证码
             result = smsApiService.getVerificationCode(project, context);
-        } catch (BusinessException e) {
-            log.warn("获取验证码业务异常: {}", e.getMessage());
-            record.setErrorInfo(String.valueOf(CodeResult.failure()));
-            result = null;
-            record.setRemark(e.getMessage());
-            record.setStatus(3);
-            userService.updateUserStats(record.getUserId());
+            if (StringUtils.hasText(result) && !result.contains("等待")) {
+                isSuccess = true;
+            }
+        } catch (Exception e) {
+            log.warn("轮询获码异常: {}", e.getMessage());
         }
-
-        updateRecordAfterRetrieval_(record, result != null, result);
+        self.updateRecordAfterRetrieval(record, isSuccess, result);
     }
 
     /**
-     * 【修改点 3】: 同步修改 getCode (手动获取) 逻辑
+     * 手动获取验证码接口
      */
     @Override
     public CommonResultDTO<String> getCode(String userName, String password, String identifier, String projectId, String lineId) {
         User user = userService.authenticateUserByUserName(userName, password);
-        if (user == null) {
-            return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED, "用户验证失败");
-        }
-        if (!StringUtils.hasText(lineId)) {
-            return CommonResultDTO.error(Constants.ERROR_NO_CODE, "线路ID不能为空");
-        }
+        if (user == null) return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED, "用户验证失败");
 
-        Long lineIdAsLong;
-        try {
-            lineIdAsLong = Long.parseLong(lineId);
-        } catch (NumberFormatException e) {
-            return CommonResultDTO.error(Constants.ERROR_NO_CODE, "线路ID格式不正确");
-        }
+        // 查询最新的一条记录
         NumberRecord record = this.getOne(new LambdaQueryWrapper<NumberRecord>()
                 .eq(NumberRecord::getPhoneNumber, identifier)
                 .eq(NumberRecord::getUserId, user.getId())
-                .eq(NumberRecord::getLineId, lineIdAsLong)
                 .eq(NumberRecord::getProjectId, projectId)
+                // 确保查询的是最近的未完结或刚完结的记录
                 .orderByDesc(NumberRecord::getGetNumberTime)
                 .last("LIMIT 1"));
 
-        if (record == null) {
-            return CommonResultDTO.error(Constants.ERROR_NO_CODE, "无验证码记录");
-        }
+        if (record == null) return CommonResultDTO.error(Constants.ERROR_NO_CODE, "无记录");
 
+        // 1. 如果已经是成功状态，直接返回库里的码
         if (record.getStatus() == 2) {
-            return CommonResultDTO.success("验证码获取成功", record.getCode());
+            return CommonResultDTO.success("获取成功", record.getCode());
         }
 
-        if (record.getStatus() == 4 || record.getStatus() == 3 || record.getStatus() == 1 ) {
+        // 2. 如果是已退款/已失效状态，提示已结束
+        if (record.getStatus() == 3 || record.getStatus() == 4) {
+            // 允许在短暂时间内再次尝试API，防止本地状态误判，但如果 charged 已经是 2 (已退款)，则绝对不再请求
+            if (record.getCharged() == 2) {
+                return CommonResultDTO.error(Constants.ERROR_NO_CODE, "订单已失效并退款，请重新取号");
+            }
+        }
 
-            Project project = projectService.getProject(record.getProjectId(), record.getLineId());
-            if (project != null) {
-                // 【修改点】构建 Context Map
-                Map<String, String> context = new HashMap<>();
-                context.put("phone", record.getPhoneNumber());
-                if (StringUtils.hasText(record.getApiPhoneId())) {
-                    context.put("id", record.getApiPhoneId());
-                }
-                Optional<String> codeOpt = smsApiService.fetchVerificationCodeOnce(project, context);
+        // 3. 尝试调用API获取
+        Project project = projectService.getProject(record.getProjectId(), record.getLineId());
+        Map<String, String> context = new HashMap<>();
+        context.put("phone", record.getPhoneNumber());
+        if (StringUtils.hasText(record.getApiPhoneId())) {
+            context.put("id", record.getApiPhoneId());
+        }
 
-                if (codeOpt.isPresent()) {
-                    String code = codeOpt.get();
-                    if (code != null && code.matches("^\\d{4,8}$")) {
-                        self.updateRecordAfterRetrieval(record, true, code);
-                        return CommonResultDTO.success("验证码获取成功", code);
-                    }
-                    log.warn("获取到的验证码格式错误（非纯数字）: [{}]", code); // 建议加上日志方便排查
-                    return CommonResultDTO.error(Constants.ERROR_NO_CODE, "获取到的验证码格式错误(非纯数字)");
-                } else {
-                    return CommonResultDTO.error(Constants.ERROR_NO_CODE, "验证码获取失败");
+        Optional<String> codeOpt = smsApiService.fetchVerificationCodeOnce(project, context);
+
+        if (codeOpt.isPresent()) {
+            String code = codeOpt.get();
+            if (StringUtils.hasText(code) && code.matches("^\\d{4,8}$")) {
+                // 【重点】这里传入 success=true，后续逻辑会处理补扣款
+                try {
+                    self.updateRecordAfterRetrieval(record, true, code);
+                    return CommonResultDTO.success("获取成功", code);
+                } catch (BusinessException e) {
+                    return CommonResultDTO.error(Constants.ERROR_INSUFFICIENT_BALANCE, e.getMessage());
                 }
             }
         }
 
-        return switch (record.getStatus()) {
-            case 2 -> CommonResultDTO.success("验证码获取成功", record.getCode());
-            case 3 -> CommonResultDTO.error(Constants.ERROR_NO_CODE, "验证码获取超时/失败");
-            case 4 -> CommonResultDTO.error(Constants.ERROR_NO_CODE, "该号码无效，请重新取号");
-            default -> CommonResultDTO.error(Constants.ERROR_NO_CODE, "验证码尚未获取，请稍后重试");
-        };
+        // 4. 如果没获取到
+        // 如果已经是已退款状态(charged=2)，就不需要再做什么了
+        // 如果是已扣费状态(charged=1)且超时，则触发退款
+        long minutesElapsed = Duration.between(record.getGetNumberTime(), LocalDateTime.now()).toMinutes();
+        if (record.getCharged() == 1 && minutesElapsed >= 15) {
+            self.updateRecordAfterRetrieval(record, false, null);
+            return CommonResultDTO.error(Constants.ERROR_NO_CODE, "获取超时，已自动退款");
+        }
+
+        return CommonResultDTO.error(Constants.ERROR_NO_CODE, "尚未获取到验证码，请稍后重试");
     }
 
-    @Transactional
+    /**
+     * 核心逻辑：更新记录状态，并处理 代理返利 或 用户退款
+     * 该方法需要是线程安全的或利用数据库锁，这里通过事务+状态检查实现
+     */
+    @Transactional(rollbackFor = Exception.class)
     @Override
     public void updateRecordAfterRetrieval(NumberRecord record, boolean isSuccess, String result) {
-        // 重新从数据库获取记录
-        NumberRecord latestRecord = this.getById(record.getId());
-        if (latestRecord.getStatus() != 1 && latestRecord.getStatus() != 3 && latestRecord.getStatus() != 4) {
-            // 允许从3(超时)或4(失败)状态通过手动刷新变更为成功，但不能重复处理已成功的
-            if(latestRecord.getStatus() == 2) return;
+        NumberRecord latestRecord = baseMapper.selectByIdForUpdate(record.getId());
+
+        // 如果已经是成功状态，直接返回
+        if (latestRecord.getStatus() == 2) {
+            return;
         }
 
-        latestRecord.setCodeReceivedTime(LocalDateTime.now());
-
-        if (isSuccess && result != null) {
+        if (isSuccess && StringUtils.hasText(result)) {
+            if (latestRecord.getCharged() == 2) {
+                log.info("订单 {} 已退款但手动获码成功，执行再扣款", latestRecord.getId());
+                User user = userService.getById(latestRecord.getUserId());
+                if (user.getBalance().compareTo(latestRecord.getPrice()) < 0) {
+                    throw new BusinessException("获取成功，但账户余额不足以支付，无法查看验证码");
+                }
+                LedgerCreationDTO reDeductDto = LedgerCreationDTO.builder()
+                        .userId(latestRecord.getUserId())
+                        .amount(latestRecord.getPrice())
+                        .ledgerType(0) // 出账
+                        .fundType(FundType.BUSINESS_DEDUCTION)
+                        .remark("超时后获码成功，重新扣费")
+                        .phoneNumber(latestRecord.getPhoneNumber())
+                        .lineId(latestRecord.getLineId())
+                        .projectId(latestRecord.getProjectId())
+                        .build();
+                BigDecimal newBalance = ledgerService.createLedgerAndUpdateBalance(reDeductDto);
+                latestRecord.setBalanceAfter(newBalance);
+                latestRecord.setCharged(1);
+            }
+            latestRecord.setCodeReceivedTime(LocalDateTime.now());
             latestRecord.setStatus(2);
             latestRecord.setCode(result);
-            latestRecord.setCharged(1);
+            latestRecord.setErrorInfo(null); // 清除可能的错误信息
             this.updateById(latestRecord);
-            User user = userService.getById(latestRecord.getUserId());
-
-            LedgerCreationDTO ledgerDto = LedgerCreationDTO.builder()
-                    .userId(user.getId())
-                    .amount(latestRecord.getPrice())
-                    .ledgerType(0)
-                    .fundType(FundType.BUSINESS_DEDUCTION)
-                    .remark("业务扣费")
-                    .phoneNumber(record.getPhoneNumber())
-                    .code(result)
-                    .lineId(record.getLineId())
-                    .projectId(record.getProjectId())
-                    .build();
-
-            ledgerService.createLedgerAndUpdateBalance(ledgerDto);
-            BigDecimal realNewBalance = ledgerService.createLedgerAndUpdateBalance(ledgerDto);
-
-            latestRecord.setBalanceAfter(realNewBalance);
-
-            userService.updateUserStats(user.getId());
-
+            userService.updateUserStats(latestRecord.getUserId());
             try {
                 userService.processRebates(latestRecord);
             } catch (Exception e) {
-                log.error("处理代理返款时发生严重错误，事务将回滚。记录ID: {}", latestRecord.getId(), e);
-                throw new BusinessException("业务扣费成功，但代理返款失败: " + e.getMessage());
+                log.error("代理返款失败，记录ID: {}", latestRecord.getId(), e);
             }
         } else {
-            // 如果原本就是3或4，保持原状；如果是1（取码中）变成3（超时）
-            if(latestRecord.getStatus() == 1) {
+            if (latestRecord.getCharged() == 1) {
+                log.info("号码 {} 获取失败/超时，执行退款", latestRecord.getPhoneNumber());
                 latestRecord.setStatus(3);
-                latestRecord.setCharged(0);
+                latestRecord.setCodeReceivedTime(LocalDateTime.now());
+                latestRecord.setCharged(2);
+                latestRecord.setErrorInfo("获取超时，自动退款");
+                LedgerCreationDTO refundDto = LedgerCreationDTO.builder()
+                        .userId(latestRecord.getUserId())
+                        .amount(latestRecord.getPrice())
+                        .ledgerType(1)
+                        .fundType(FundType.ADMIN_OUT_TIME_REBATE)
+                        .remark("取码失败/超时退款")
+                        .phoneNumber(latestRecord.getPhoneNumber())
+                        .lineId(latestRecord.getLineId())
+                        .projectId(latestRecord.getProjectId())
+                        .build();
+
+                BigDecimal balanceAfterRefund = ledgerService.createLedgerAndUpdateBalance(refundDto);
+                latestRecord.setBalanceAfter(balanceAfterRefund);
+
+                this.updateById(latestRecord);
+                userService.updateUserStats(latestRecord.getUserId());
             }
         }
-
-        latestRecord.setRemark(record.getRemark());
-        this.updateById(latestRecord);
     }
-
 
     public void updateRecordAfterRetrieval_(NumberRecord record, boolean isSuccess, String result) {
-        // 重新从数据库获取记录
-        NumberRecord latestRecord = this.getById(record.getId());
-        if (latestRecord.getStatus() != 1 && latestRecord.getStatus() != 3 && latestRecord.getStatus() != 4) {
-            // 允许从3(超时)或4(失败)状态通过手动刷新变更为成功，但不能重复处理已成功的
-            if(latestRecord.getStatus() == 2) return;
-        }
-
-        latestRecord.setCodeReceivedTime(LocalDateTime.now());
-
-        if (isSuccess && result != null) {
-            latestRecord.setStatus(2);
-            latestRecord.setCode(result);
-            latestRecord.setCharged(1);
-            this.updateById(latestRecord);
-            User user = userService.getById(latestRecord.getUserId());
-
-            LedgerCreationDTO ledgerDto = LedgerCreationDTO.builder()
-                    .userId(user.getId())
-                    .amount(latestRecord.getPrice())
-                    .ledgerType(0)
-                    .fundType(FundType.BUSINESS_DEDUCTION)
-                    .remark("业务扣费")
-                    .phoneNumber(record.getPhoneNumber())
-                    .code(result)
-                    .lineId(record.getLineId())
-                    .projectId(record.getProjectId())
-                    .build();
-
-            ledgerService.createLedgerAndUpdateBalance(ledgerDto);
-            User updatedUser = userService.getById(user.getId());
-            latestRecord.setBalanceAfter(updatedUser.getBalance());
-            userService.updateUserStats(user.getId());
-
-            try {
-                userService.processRebates(latestRecord);
-            } catch (Exception e) {
-                log.error("处理代理返款时发生严重错误，事务将回滚。记录ID: {}", latestRecord.getId(), e);
-                throw new BusinessException("业务扣费成功，但代理返款失败: " + e.getMessage());
-            }
-        } else {
-            // 如果原本就是3或4，保持原状；如果是1（取码中）变成3（超时）
-            if(latestRecord.getStatus() == 1) {
-                latestRecord.setStatus(3);
-                latestRecord.setCharged(0);
-            }
-        }
-
-        latestRecord.setRemark(record.getRemark());
-        this.updateById(latestRecord);
+        self.updateRecordAfterRetrieval(record, isSuccess, result);
     }
 
-    // ... 其他统计查询代码 (listUserNumbers, listAllNumbers, getStatisticsReport 等) 保持不变 ...
-    // 为节省篇幅，此处省略未变动的统计和列表查询方法
 
     @Override
     public IPage<NumberDTO> listUserNumbers(Long userId, String password, Integer statusFilter, Date startTime, Date endTime, IPage<NumberRecord> page) {
@@ -890,8 +851,6 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             dtoList.add(dto);
             resultUserIds.add(uId);
         }
-
-        // 批量补全用户名 (避免循环查库 N+1 问题)
         if (!resultUserIds.isEmpty()) {
             Map<Long, String> userMap = userService.listByIds(resultUserIds).stream()
                     .collect(Collectors.toMap(User::getId, User::getUserName));
@@ -900,8 +859,6 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                 dto.setUserName(userMap.getOrDefault(dto.getUserId(), "未知用户"));
             }
         }
-
-        // 构造最终返回的 Page 对象
         Page<UserLineStatsDTO> finalPage = new Page<>(requestDTO.getPage(), requestDTO.getSize());
         finalPage.setTotal(resultPage.getTotal());
         finalPage.setRecords(dtoList);

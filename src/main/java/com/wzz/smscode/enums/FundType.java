@@ -27,11 +27,18 @@ public enum FundType {
      * 代理回款
      */
     ADMIN_REBATE(4,"代理回款"),
+
+
+    /**
+     * 超时退款
+     */
+    ADMIN_OUT_TIME_REBATE(5,"超时退款"),
     /**
      * 代表管理员操作的资金交易类型。
      * 此枚举值用于标识与管理员相关的资金操作，如调整余额、退款等。
      */
     ADMIN_OPERATION(3, "管理员操作");
+
 
 
 

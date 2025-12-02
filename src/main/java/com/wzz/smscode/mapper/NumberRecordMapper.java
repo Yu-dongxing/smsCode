@@ -11,4 +11,7 @@ import java.util.List;
 @Mapper
 public interface NumberRecordMapper extends BaseMapper<NumberRecord> {
 
+    @Select("SELECT * FROM number_record WHERE id = #{id} FOR UPDATE")
+    NumberRecord selectByIdForUpdate(@Param("id") Long id);
+
 }

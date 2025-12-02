@@ -1113,4 +1113,20 @@ public class AdminController {
             return Result.error("获取统计数据失败");
         }
     }
+
+    /**
+     * 手动触发项目登录
+     * @param projectId 项目ID
+     * @param lineId 线路ID (可选，通过 @RequestParam 传参)
+     */
+    @PostMapping("/project/login")
+    public Result<?> manualLogin(@RequestParam String projectId,
+                                               @RequestParam String lineId) {
+        try {
+            String token = smsApiService.manualLogin(projectId, lineId);
+            return Result.success(token, "登录成功");
+        } catch (Exception e) {
+            return Result.error("登录失败: " + e.getMessage());
+        }
+    }
 }
