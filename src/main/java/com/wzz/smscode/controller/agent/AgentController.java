@@ -17,24 +17,19 @@ import com.wzz.smscode.dto.agent.AgentProjectLineUpdateDTO;
 import com.wzz.smscode.dto.number.NumberDTO;
 import com.wzz.smscode.dto.project.SubUserProjectPriceDTO;
 import com.wzz.smscode.dto.update.UserUpdateDtoByUser;
-import com.wzz.smscode.entity.SystemConfig;
-import com.wzz.smscode.entity.User;
-import com.wzz.smscode.entity.UserLedger;
-import com.wzz.smscode.entity.UserProjectLine;
+import com.wzz.smscode.entity.*;
 import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.service.*;
 import jakarta.validation.constraints.NotNull;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
-import java.util.Collections;
-import java.util.Date;
-import java.util.List;
-import java.util.Objects;
+import java.util.*;
 
 /**
  * 代理后台接口控制器
@@ -442,6 +437,7 @@ public class AgentController {
      */
     @GetMapping("/project/price")
     public Result<?> getProjectPrice() {
+        //todo 从模板查询代理的价格配置
         try {
             StpUtil.checkLogin();
             long agentId = StpUtil.getLoginIdAsLong();
@@ -577,6 +573,7 @@ public class AgentController {
     }
 
     @Autowired
+    @Lazy
     private PriceTemplateService priceTemplateService;
 
     /**
@@ -589,7 +586,7 @@ public class AgentController {
     public Result<?> createAgentPriceTemplate(@RequestBody PriceTemplateCreateDTO createDTO) {
         long agentId = StpUtil.getLoginIdAsLong();
         try {
-            boolean success = priceTemplateService.createTemplate(createDTO, agentId);
+            boolean success = priceTemplateService.saveOrUpdateTemplate(createDTO, agentId);
             return success ? Result.success("创建成功") : Result.error("创建失败");
         } catch (BusinessException e) {
             return Result.error(e.getMessage());
@@ -765,6 +762,86 @@ public class AgentController {
             log.error("代理 {} 批量删除用户系统异常", agentId, e);
             return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，删除失败");
         }
+    }
+    /**
+     * 获取所有可用模板 (用于创建用户时的下拉框)
+     */
+    @GetMapping("/template/list")
+    public Result<?> listTemplates() {
+        try{
+            StpUtil.checkLogin();
+            long operatorId = StpUtil.getLoginIdAsLong();
+            // 管理员看所有，代理看自己创建的
+            LambdaQueryWrapper<PriceTemplate> wrapper = new LambdaQueryWrapper<>();
+            if (operatorId != 0L) {
+                wrapper.eq(PriceTemplate::getCreatId, operatorId);
+            }
+            return Result.success(priceTemplateService.list(wrapper));
+        }catch (BusinessException e){
+            return Result.error(e.getMessage());
+        }
+    }
+
+    /**
+     * 获取用户的配置信息
+     * 返回：关联的模板ID (templateId) 和 项目黑名单 (blacklist)
+     *
+     * @param userId 用户ID
+     * @return Map包含配置信息
+     */
+    @GetMapping("/user/config-info")
+    public Result<?> getUserConfigInfo(@RequestParam @NotNull Long userId) {
+        try {
+            User user = userService.getById(userId);
+            if (user == null) {
+                return Result.error("用户不存在");
+            }
+            Map<String, Object> result = new HashMap<>();
+            result.put("templateId", user.getTemplateId());
+            result.put("blacklist", user.getProjectBlacklist());
+            if (user.getTemplateId() != null) {
+                PriceTemplate template = priceTemplateService.getById(user.getTemplateId());
+                if (template != null) {
+                    result.put("templateName", template.getName());
+                }
+            }
+            return Result.success("查询成功", result);
+        } catch (Exception e) {
+            log.error("获取用户配置信息失败: userId={}", userId, e);
+            return Result.error("系统错误，获取配置失败");
+        }
+    }
+
+    /**
+     * 获取指定价格模板的详细配置项
+     * @param templateId 模板ID
+     */
+    @GetMapping("/price-templates/{templateId}/items")
+    public Result<List<PriceTemplateItem>> getTemplateItems(@PathVariable Long templateId) {
+        try {
+            List<PriceTemplateItem> items = priceTemplateService.getTemplateItems(templateId);
+            return Result.success(items);
+        } catch (Exception e) {
+            log.error("获取模板详情失败", e);
+            return Result.error("获取模板详情失败");
+        }
+    }
+
+    /**
+     * 获取代理自己的项目价格配置模板
+     */
+    @GetMapping("/price-templates/my")
+    public Result<?> getMyTemplates() {
+        try{
+            StpUtil.checkLogin();
+            Long operatorId = StpUtil.getLoginIdAsLong();
+            User user = userService.getById(operatorId);
+            List<PriceTemplateItem> items = priceTemplateService.getTemplateItems(user.getTemplateId());
+            return Result.success(items);
+        }catch (BusinessException e){
+            return Result.error(e.getMessage());
+        }
+
     }
 
 }

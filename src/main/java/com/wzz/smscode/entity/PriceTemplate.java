@@ -30,4 +30,12 @@ public class PriceTemplate extends BaseEntity {
     @DefaultValue("0")
     @TableField("creat_id")
     private Long creatId;
+
+    /**
+     * 使用该模板的用户ID列表
+     * 格式: "1001,1002,1005"
+     */
+    @ColumnComment("关联用户ID列表")
+    @TableField("user_ids")
+    private String userIds;
 }

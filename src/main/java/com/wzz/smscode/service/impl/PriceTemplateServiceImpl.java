@@ -5,26 +5,21 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.wzz.smscode.dto.PriceTemplateCreateDTO;
 import com.wzz.smscode.dto.PriceTemplateItemDTO;
 import com.wzz.smscode.dto.PriceTemplateResponseDTO;
-import com.wzz.smscode.entity.PriceTemplate;
-import com.wzz.smscode.entity.PriceTemplateItem;
-import com.wzz.smscode.entity.Project;
-import com.wzz.smscode.entity.UserProjectLine;
+import com.wzz.smscode.entity.*;
 import com.wzz.smscode.exception.BusinessException;
+import com.wzz.smscode.mapper.PriceTemplateItemMapper;
 import com.wzz.smscode.mapper.PriceTemplateMapper;
-import com.wzz.smscode.service.PriceTemplateItemService;
-import com.wzz.smscode.service.PriceTemplateService;
-import com.wzz.smscode.service.ProjectService;
-import com.wzz.smscode.service.UserProjectLineService;
+import com.wzz.smscode.service.*;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -40,6 +35,105 @@ public class PriceTemplateServiceImpl extends ServiceImpl<PriceTemplateMapper, P
 
     @Autowired
     private ProjectService projectService;
+
+    @Autowired
+    @Lazy
+    private UserService userService;
+
+
+    @Transactional(rollbackFor = Exception.class)
+    @Override
+    public boolean saveOrUpdateTemplate(PriceTemplateCreateDTO dto, Long operatorId) {
+        boolean isAdmin = (operatorId == 0L);
+        User agent = isAdmin ? null : userService.getById(operatorId);
+
+        // 1. 获取操作员自己的价格配置（如果是代理）
+        Map<String, BigDecimal> agentCostMap = new HashMap<>();
+        if (!isAdmin) {
+            if(agent == null || agent.getIsAgent() != 1) throw new BusinessException("无权操作");
+            // 代理的成本来自于他自己的模板
+            Long agentTemplateId = agent.getTemplateId();
+            List<PriceTemplateItem> agentItems = priceTemplateItemService.list(new LambdaQueryWrapper<PriceTemplateItem>()
+                    .eq(PriceTemplateItem::getTemplateId, agentTemplateId));
+            agentCostMap = agentItems.stream().collect(Collectors.toMap(
+                    k -> k.getProjectId() + "-" + k.getLineId(),
+                    PriceTemplateItem::getPrice
+            ));
+        }
+
+        // 2. 处理模板主体
+        PriceTemplate template = new PriceTemplate();
+        if (dto.getId() != null) {
+            template = this.getById(dto.getId());
+            if (template == null) throw new BusinessException("模板不存在");
+            if (!template.getCreatId().equals(operatorId)) throw new BusinessException("无权修改他人模板");
+        } else {
+            template.setCreatId(operatorId);
+            template.setUserIds(""); // 初始化
+        }
+        template.setName(dto.getName());
+        this.saveOrUpdate(template);
+
+        // 3. 处理模板项 (全量覆盖或增量更新，这里简化为删除旧的插入新的，实际生产建议做Diff)
+        // 为了保持ID稳定，这里建议做 upsert，以下为简化逻辑：
+        if(dto.getId() != null){
+            priceTemplateItemService.remove(new LambdaQueryWrapper<PriceTemplateItem>().eq(PriceTemplateItem::getTemplateId, template.getId()));
+        }
+
+        List<Project> allProjects = projectService.list();
+        Map<String, Project> projectMap = allProjects.stream().collect(Collectors.toMap(
+                k -> k.getProjectId() + "-" + k.getLineId(), v -> v
+        ));
+
+        List<PriceTemplateItem> itemsToSave = new ArrayList<>();
+
+        for (PriceTemplateItemDTO itemDto : dto.getItems()) {
+            String key = itemDto.getProjectId() + "-" + itemDto.getLineId();
+            Project sysProject = projectMap.get(key);
+            if(sysProject == null || !sysProject.isStatus()) continue; // 跳过无效项目
+
+            BigDecimal setPrice = itemDto.getPrice();
+            BigDecimal costPrice;
+            BigDecimal minAllowed;
+            BigDecimal maxAllowed = sysProject.getPriceMax(); // 系统最高价
+
+            if (isAdmin) {
+                // 管理员：成本 = 系统成本，最低价 = 系统最低价
+                costPrice = sysProject.getCostPrice();
+                minAllowed = sysProject.getCostPrice(); // 管理员售价不能低于成本
+            } else {
+                // 代理：成本 = 代理自己的进货价
+                if (!agentCostMap.containsKey(key)) {
+                    throw new BusinessException("代理自身未配置项目 " + key + "，无法创建下级模板");
+                }
+                costPrice = agentCostMap.get(key);
+                minAllowed = costPrice; // 代理售价不能低于自己的成本
+            }
+
+            // 价格校验
+            if (setPrice.compareTo(minAllowed) < 0) {
+                throw new BusinessException("项目 " + sysProject.getProjectName() + " 设置价格低于允许的最低价：" + minAllowed);
+            }
+            if (setPrice.compareTo(maxAllowed) > 0) {
+                throw new BusinessException("项目 " + sysProject.getProjectName() + " 设置价格高于系统最高价：" + maxAllowed);
+            }
+
+            PriceTemplateItem item = new PriceTemplateItem();
+            item.setTemplateId(template.getId());
+            item.setProjectTableId(sysProject.getId());
+            item.setProjectId(Long.valueOf(sysProject.getProjectId()));
+            item.setLineId(Long.valueOf(sysProject.getLineId()));
+            item.setProjectName(sysProject.getProjectName());
+            item.setPrice(setPrice);
+            item.setCostPrice(costPrice);
+            item.setMaxPrice(maxAllowed);
+            item.setMinPrice(minAllowed);
+            itemsToSave.add(item);
+        }
+
+        priceTemplateItemService.saveBatch(itemsToSave);
+        return true;
+    }
 
     @Transactional(rollbackFor = Exception.class)
     @Override
@@ -178,6 +272,7 @@ public class PriceTemplateServiceImpl extends ServiceImpl<PriceTemplateMapper, P
             List<PriceTemplateItemDTO> itemDTOs = items.stream().map(item -> {
                 PriceTemplateItemDTO itemDTO = new PriceTemplateItemDTO();
                 BeanUtils.copyProperties(item, itemDTO);
+                itemDTO.setProjectId(String.valueOf(item.getProjectId()));
                 return itemDTO;
             }).collect(Collectors.toList());
 
@@ -238,5 +333,56 @@ public class PriceTemplateServiceImpl extends ServiceImpl<PriceTemplateMapper, P
         }
         // 由于设置了外键级联删除，理论上只需要删除主表即可。
         return this.removeById(templateId);
+    }
+    @Autowired private PriceTemplateItemMapper itemMapper;
+
+
+    @Override
+    public PriceTemplateItem getPriceConfig(Long templateId, String projectId, Integer lineId) {
+        return itemMapper.selectOne(new LambdaQueryWrapper<PriceTemplateItem>()
+                .eq(PriceTemplateItem::getTemplateId, templateId)
+                .eq(PriceTemplateItem::getProjectId, projectId)
+                .eq(PriceTemplateItem::getLineId, lineId)
+                .last("LIMIT 1")
+        );
+    }
+
+    @Override
+    public void addUserToTemplate(Long templateId, Long userId) {
+        PriceTemplate template = this.getById(templateId);
+        if (template == null) return;
+
+        String ids = template.getUserIds();
+        if (!StringUtils.hasText(ids)) {
+            ids = userId.toString();
+        } else {
+            // 简单排重
+            List<String> idList = new ArrayList<>(Arrays.asList(ids.split(",")));
+            if (!idList.contains(userId.toString())) {
+                idList.add(userId.toString());
+                ids = String.join(",", idList);
+            }
+        }
+        template.setUserIds(ids);
+        this.updateById(template);
+    }
+
+    @Override
+    public void removeUserFromTemplate(Long templateId, Long userId) {
+        PriceTemplate template = this.getById(templateId);
+        if (template == null || !StringUtils.hasText(template.getUserIds())) return;
+
+        List<String> idList = new ArrayList<>(Arrays.asList(template.getUserIds().split(",")));
+        if (idList.remove(userId.toString())) {
+            template.setUserIds(String.join(",", idList));
+            this.updateById(template);
+        }
+    }
+    @Override
+    public List<PriceTemplateItem> getTemplateItems(Long templateId) {
+        return itemMapper.selectList(new LambdaQueryWrapper<PriceTemplateItem>()
+                .eq(PriceTemplateItem::getTemplateId, templateId)
+                .orderByAsc(PriceTemplateItem::getProjectId) // 可选：按项目ID排序
+        );
     }
 }

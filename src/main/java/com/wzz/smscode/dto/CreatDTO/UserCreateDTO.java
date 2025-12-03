@@ -32,9 +32,15 @@ public class UserCreateDTO {
     private BigDecimal initialBalance;
 
     /**
-     * 项目价格配置，为新用户设置各项目价格（改为ProjectPriceDTO列表）
+     * 必须指定一个价格模板ID
      */
-    private List<ProjectPriceDTO> projectPrices; // <-- 这里已修改
+    private Long templateId;
+
+    /**
+     * 禁用的项目线路列表 (前端传 List，后端转 String 存库)
+     * 格式示例: ["1001-1", "1002-5"]
+     */
+    private List<String> blacklistedProjects;
 
     /**
      * 是否赋予代理权限

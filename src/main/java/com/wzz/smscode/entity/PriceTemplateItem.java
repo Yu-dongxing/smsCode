@@ -71,4 +71,27 @@ public class PriceTemplateItem extends BaseEntity {
     @ColumnComment("成本价")
     @TableField("cost_price") // 【添加】指定数据库列名
     private BigDecimal costPrice;
+
+    /**
+     * 允许设置的最低价 (冗余字段)
+     * <p>用于校验：price 不能低于 minPrice。通常 minPrice = costPrice</p>
+     */
+    @ColumnComment("允许最低价")
+    @TableField("min_price")
+    private BigDecimal minPrice;
+
+    /**
+     * 允许设置的最高价 (冗余字段)
+     * <p>用于校验：price 不能高于 maxPrice。通常同步自总项目的 maxPrice</p>
+     */
+    @ColumnComment("允许最高价")
+    @TableField("max_price")
+    private BigDecimal maxPrice;
+
+    /**
+     * 项目表id
+     */
+    @ColumnComment("项目表id")
+    @TableField("project_table_id")
+    private Long projectTableId;
 }

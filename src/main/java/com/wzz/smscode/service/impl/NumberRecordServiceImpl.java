@@ -68,6 +68,11 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         return count > 0;
     }
 
+    @Autowired
+    @Lazy
+    private PriceTemplateService priceTemplateService;
+
+
     @Transactional
     @Override
     public CommonResultDTO<String> getNumber(String userName, String password, String projectId, Integer lineId) {
@@ -83,11 +88,30 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, "回码率过低封禁");
         }
 
-        UserProjectLine userProjectLine = userProjectLineService.getByProjectIdLineID(projectId, lineId, user.getId());
-        if (userProjectLine == null) return CommonResultDTO.error(-5, "项目线路不存在用户项目中");
+        // 2. 【核心修改】检查黑名单
+        String blacklist = user.getProjectBlacklist();
+        String currentKey = projectId + "-" + lineId;
+        if (StringUtils.hasText(blacklist)) {
+            // 简单的字符串包含检查，建议优化为 split 后 Set 检查以防止部分匹配
+            String[] blocked = blacklist.split(",");
+            for (String s : blocked) {
+                if (s.trim().equals(currentKey)) {
+                    return CommonResultDTO.error(-5, "您已被禁止使用该项目线路");
+                }
+            }
+        }
 
-        BigDecimal price = userProjectLine.getAgentPrice();
-        if (price == null) return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, "项目价格设置错误");
+        // 3. 【核心修改】从模板获取价格
+        Long templateId = user.getTemplateId();
+        if (templateId == null) return CommonResultDTO.error(-5, "用户未配置价格模板");
+
+        PriceTemplateItem priceItem = priceTemplateService.getPriceConfig(templateId, projectId, lineId);
+        if (priceItem == null) {
+            return CommonResultDTO.error(-5, "当前价格模板未配置该项目线路");
+        }
+
+        BigDecimal price = priceItem.getPrice(); // 用户售价
+        BigDecimal costPrice = priceItem.getCostPrice(); // 成本价
 
         Project projectT = projectService.getProject(projectId, lineId);
         if (projectT == null) return CommonResultDTO.error(-5, "总项目表中不存在这个项目和线路！");
@@ -100,8 +124,11 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         }
         boolean hasOngoingRecord = this.hasOngoingRecord(user.getId());
 
-        if (!BalanceUtil.canGetNumber(user, hasOngoingRecord)) {
-            return CommonResultDTO.error(Constants.ERROR_INSUFFICIENT_BALANCE, "余额不足或已有进行中的任务");
+//        if (!BalanceUtil.canGetNumber(user, hasOngoingRecord)) {
+//            return CommonResultDTO.error(Constants.ERROR_INSUFFICIENT_BALANCE, "余额不足或已有进行中的任务");
+//        }
+        if (!hasOngoingRecord) {
+            return CommonResultDTO.error(Constants.ERROR_INSUFFICIENT_BALANCE, "已有进行中的取号任务");
         }
         final int MAX_ATTEMPTS = 3;
         Map<String, String> successfulIdentifier = null;
@@ -182,7 +209,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         record.setStatus(0); // 待取码
         record.setCharged(1); // 【关键】标记为已扣费
         record.setPrice(price);
-        record.setCostPrice(userProjectLine.getCostPrice());
+        record.setCostPrice(costPrice);
         record.setBalanceBefore(user.getBalance()); // 扣费前余额
         record.setBalanceAfter(newBalance);         // 扣费后余额
         record.setGetNumberTime(LocalDateTime.now());

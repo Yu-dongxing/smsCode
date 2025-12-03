@@ -32,6 +32,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
@@ -970,6 +971,7 @@ public class AdminController {
     }
 
     @Autowired
+    @Lazy
     private PriceTemplateService priceTemplateService;
 
 
@@ -981,7 +983,7 @@ public class AdminController {
     @PostMapping("/price-templates")
     public Result<?> createPriceTemplate(@RequestBody PriceTemplateCreateDTO createDTO) {
         try {
-            boolean success = priceTemplateService.createTemplate(createDTO,0L);
+            boolean success = priceTemplateService.saveOrUpdateTemplate(createDTO,0L);
             return success ? Result.success("创建成功") : Result.error("创建失败");
         } catch (BusinessException e) {
             return Result.error(e.getMessage());
@@ -1127,6 +1129,64 @@ public class AdminController {
             return Result.success(token, "登录成功");
         } catch (Exception e) {
             return Result.error("登录失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 获取所有可用模板 (用于创建用户时的下拉框)
+     */
+    @GetMapping("/template/list")
+    public Result<?> listTemplates() {
+        try{
+            LambdaQueryWrapper<PriceTemplate> wrapper = new LambdaQueryWrapper<>();
+            return Result.success(priceTemplateService.list(wrapper));
+        }catch (BusinessException e){
+            return Result.error(e.getMessage());
+        }
+    }
+
+    /**
+     * 获取用户的配置信息
+     * 返回：关联的模板ID (templateId) 和 项目黑名单 (blacklist)
+     *
+     * @param userId 用户ID
+     * @return Map包含配置信息
+     */
+    @GetMapping("/user/config-info")
+    public Result<?> getUserConfigInfo(@RequestParam @NotNull Long userId) {
+        try {
+            User user = userService.getById(userId);
+            if (user == null) {
+                return Result.error("用户不存在");
+            }
+            Map<String, Object> result = new HashMap<>();
+            result.put("templateId", user.getTemplateId());
+            result.put("blacklist", user.getProjectBlacklist());
+            if (user.getTemplateId() != null) {
+                PriceTemplate template = priceTemplateService.getById(user.getTemplateId());
+                if (template != null) {
+                    result.put("templateName", template.getName());
+                }
+            }
+            return Result.success("查询成功", result);
+        } catch (Exception e) {
+            log.error("获取用户配置信息失败: userId={}", userId, e);
+            return Result.error("系统错误，获取配置失败");
+        }
+    }
+
+    /**
+     * 获取指定价格模板的详细配置项
+     * @param templateId 模板ID
+     */
+    @GetMapping("/price-templates/{templateId}/items")
+    public Result<?> getTemplateItems(@PathVariable Long templateId) {
+        try {
+            List<PriceTemplateItem> items = priceTemplateService.getTemplateItems(templateId);
+            return Result.success(items);
+        } catch (Exception e) {
+            log.error("获取模板详情失败", e);
+            return Result.error("获取模板详情失败");
         }
     }
 }

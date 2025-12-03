@@ -167,36 +167,6 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
         return calculatedBalance != null ? calculatedBalance : BigDecimal.ZERO;
     }
 
-    /*
-     * Java Stream 版本的实现 (适用于记录数不多的情况):
-     *
-     * List<UserLedger> records = this.list(new LambdaQueryWrapper<UserLedger>().eq(UserLedger::getUserId, userId));
-     * if (records.isEmpty()) {
-     *     return BigDecimal.ZERO;
-     * }
-     * return records.stream()
-     *               .map(UserLedger::getAmount) // 假设变动金额字段为 amount
-     *               .reduce(BigDecimal.ZERO, BigDecimal::add);
-     */
-
-    @Transactional
-    @Override
-    public boolean createLedgerEntry(Long userId, FundType fundType, BigDecimal amount, BigDecimal balanceAfter, String remarks) {
-        if (userId == null || fundType == null || amount == null || balanceAfter == null) {
-            throw new IllegalArgumentException("创建账本记录的参数不能为空");
-        }
-
-        UserLedger ledger = new UserLedger();
-        ledger.setUserId(userId);
-        ledger.setFundType(fundType.getCode());
-        //todo 用户变动金额出现问题
-        ledger.setBalanceAfter(balanceAfter); // 变动后余额
-        ledger.setBalanceBefore(balanceAfter.subtract(amount)); // 推算出变动前余额
-        ledger.setRemark(remarks);
-        ledger.setTimestamp(LocalDateTime.now()); // 设置当前时间
-
-        return this.save(ledger);
-    }
 
     /**
      * 私有辅助方法：将 UserLedger 实体转换为 LedgerDTO

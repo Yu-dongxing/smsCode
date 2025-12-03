@@ -23,8 +23,6 @@ public interface UserLedgerService extends IService<UserLedger> {
 
     BigDecimal calculateUserBalanceFromLedger(Long userId);
 
-    @Transactional
-    boolean createLedgerEntry(Long userId, FundType fundType, BigDecimal amount, BigDecimal balanceAfter, String remarks);
 
     @Transactional(rollbackFor = Exception.class) // 确保任何异常都会回滚事务
     BigDecimal createLedgerAndUpdateBalance(LedgerCreationDTO request);

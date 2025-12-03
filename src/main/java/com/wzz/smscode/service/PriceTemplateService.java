@@ -4,10 +4,15 @@ import com.baomidou.mybatisplus.extension.service.IService;
 import com.wzz.smscode.dto.PriceTemplateCreateDTO;
 import com.wzz.smscode.dto.PriceTemplateResponseDTO;
 import com.wzz.smscode.entity.PriceTemplate;
+import com.wzz.smscode.entity.PriceTemplateItem;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
 public interface PriceTemplateService extends IService<PriceTemplate> {
+
+    @Transactional(rollbackFor = Exception.class)
+    boolean saveOrUpdateTemplate(PriceTemplateCreateDTO dto, Long operatorId);
 
     /**
      * 创建模板，并指定创建者ID
@@ -40,4 +45,12 @@ public interface PriceTemplateService extends IService<PriceTemplate> {
      * @return 是否成功
      */
     boolean deleteTemplate(Long templateId, Long operatorId);
+
+    PriceTemplateItem getPriceConfig(Long templateId, String projectId, Integer lineId);
+
+    void addUserToTemplate(Long templateId, Long userId);
+
+    void removeUserFromTemplate(Long templateId, Long userId);
+
+    List<PriceTemplateItem> getTemplateItems(Long templateId);
 }

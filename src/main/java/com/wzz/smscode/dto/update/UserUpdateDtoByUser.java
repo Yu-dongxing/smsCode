@@ -3,6 +3,8 @@ package com.wzz.smscode.dto.update;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Data;
 
+import java.util.List;
+
 @Data
 public class UserUpdateDtoByUser {
     /*
@@ -26,4 +28,9 @@ public class UserUpdateDtoByUser {
      * 用户状态（0=正常，1=冻结/禁用等）
      */
     private Integer status;
+
+    // 变更模板
+    private Long templateId;
+    // 变更黑名单
+    private List<String> blacklistedProjects;
 }

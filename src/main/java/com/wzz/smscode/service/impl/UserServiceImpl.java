@@ -30,10 +30,7 @@ import com.wzz.smscode.enums.FundType;
 import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.mapper.NumberRecordMapper;
 import com.wzz.smscode.mapper.UserMapper;
-import com.wzz.smscode.service.ProjectService;
-import com.wzz.smscode.service.UserLedgerService;
-import com.wzz.smscode.service.UserProjectLineService;
-import com.wzz.smscode.service.UserService;
+import com.wzz.smscode.service.*;
 import com.wzz.smscode.util.BalanceUtil;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -41,11 +38,13 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 //import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.interceptor.TransactionAspectSupport;
 import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -60,7 +59,7 @@ import java.util.stream.Collectors;
 public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements UserService {
 
     //    @Autowired private PasswordEncoder passwordEncoder;
-    @Autowired private ProjectService projectService;
+    @Autowired @Lazy private ProjectService projectService;
     @Autowired private UserLedgerService ledgerService;
     @Autowired private ObjectMapper objectMapper;
     @Autowired
@@ -182,18 +181,40 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     }
 
     @Override
-    public boolean updateUserByAgent(UserUpdateDtoByUser userDTO, long l) {
-        if (userDTO.getId() == null) {
-            throw new BusinessException(0,"传入参数，用户id不正确");
-        }
+    public boolean updateUserByAgent(UserUpdateDtoByUser userDTO, long operatorId) {
         User user = this.getById(userDTO.getId());
-        if (user == null) {
-            throw new BusinessException(0,"该用户不存在！");
-        }
+        if (user == null) throw new BusinessException(0, "该用户不存在！");
+
+        Long oldTemplateId = user.getTemplateId();
+        Long newTemplateId = userDTO.getTemplateId();
+
         user.setUserName(userDTO.getUsername());
-        user.setPassword(userDTO.getPassword());
+        if (StringUtils.hasText(userDTO.getPassword())) {
+            user.setPassword(userDTO.getPassword());
+        }
         user.setIsAgent(userDTO.isAgent() ? 1 : 0);
         user.setStatus(userDTO.getStatus());
+
+        // 更新黑名单
+        if (userDTO.getBlacklistedProjects() != null) {
+            user.setProjectBlacklist(String.join(",", userDTO.getBlacklistedProjects()));
+        }
+
+        // 更新模板关联
+        if (newTemplateId != null && !newTemplateId.equals(oldTemplateId)) {
+            // 校验新模板
+            if (priceTemplateService.getById(newTemplateId) == null) {
+                throw new BusinessException("新指定的价格模板不存在");
+            }
+            user.setTemplateId(newTemplateId);
+
+            // 维护模板表中的 userId 列表
+            if (oldTemplateId != null) {
+                priceTemplateService.removeUserFromTemplate(oldTemplateId, user.getId());
+            }
+            priceTemplateService.addUserToTemplate(newTemplateId, user.getId());
+        }
+
         return updateById(user);
     }
 
@@ -257,10 +278,10 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             return null; // 账号被禁用或状态异常
         }
 
-        // 6. 认证通过，更新最后登录时间
-        user.setLastLoginTime(LocalDateTime.now());
-        // 优化点：只更新非空字段，或者使用 updateById
-        boolean updateResult = this.updateById(user);
+        boolean updateResult =  this.update(new LambdaUpdateWrapper<User>()
+                .eq(User::getId, user.getId())
+                .set(User::getLastLoginTime, LocalDateTime.now())
+        );
         if (!updateResult) {
             log.error("用户 {} 登录时间更新失败", userName);
         }
@@ -349,6 +370,10 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     @Autowired
     private UserProjectLineService userProjectLineService;
 
+    @Autowired
+    @Lazy
+    PriceTemplateService priceTemplateService;
+
     @Transactional(rollbackFor = Exception.class)
     @Override
     public boolean createUser(UserCreateDTO dto, Long operatorId) {
@@ -364,6 +389,15 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             if (operator.getIsAgent() != 1) throw new BusinessException("无权创建用户");
         }
         List<User> existingUsers = this.listByUserName(dto.getUsername());
+
+        // 校验模板是否存在
+        if (dto.getTemplateId() == null) {
+            throw new BusinessException("必须指定价格模板");
+        }
+        PriceTemplate template = priceTemplateService.getById(dto.getTemplateId());
+        if (template == null) {
+            throw new BusinessException("指定的价格模板不存在");
+        }
 
         // 判断列表是否不为空
         if (!existingUsers.isEmpty()) {
@@ -396,15 +430,23 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
 
         log.info("创建的用户：{}", user);
 
-        // 3. 保存用户，以获取新用户的ID
+        // 设置模板ID
+        user.setTemplateId(dto.getTemplateId());
+
+        // 设置黑名单 (List -> String)
+        if (dto.getBlacklistedProjects() != null && !dto.getBlacklistedProjects().isEmpty()) {
+            user.setProjectBlacklist(String.join(",", dto.getBlacklistedProjects()));
+        }
+
         if (!this.save(user)) {
-            throw new RuntimeException("创建用户基础信息失败");
+            throw new RuntimeException("创建用户失败");
         }
 
         // 4. [核心改造] 处理价格配置
-        processAndSaveUserPrices(user, dto.getProjectPrices(), operator);
+//        processAndSaveUserPrices(user, dto.getProjectPrices(), operator);
+        // 【需求实现】将用户ID保存到模板数据库中的用户ID列表中
+        priceTemplateService.addUserToTemplate(user.getTemplateId(), user.getId());
 
-        // 5. [核心改造] 通过统一的账本服务处理初始余额 (与您之前的代码相同)
         BigDecimal initialBalance = dto.getInitialBalance();
         if (initialBalance != null && initialBalance.compareTo(BigDecimal.ZERO) > 0) {
             try {
@@ -442,64 +484,6 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         return true;
     }
 
-    /**
-     * [重构] 处理并保存用户的项目价格配置
-     *
-     * @param user          新创建的用户实体
-     * @param priceSettings 来自DTO的价格配置列表
-     * @param operator      操作员实体
-     */
-    private void processAndSaveUserPrices(User user, List<ProjectPriceDTO> priceSettings, User operator) {
-        // 如果前端未提供价格配置，则为其生成默认配置
-        if (CollectionUtils.isEmpty(priceSettings)) {
-            priceSettings = generateInitialPricesFor(operator); // 沿用您之前的默认价格生成逻辑
-        } else {
-            validateProjectPrices(priceSettings, operator); // 沿用您之前的价格校验逻辑
-        }
-
-        if (CollectionUtils.isEmpty(priceSettings)) {
-            log.info("用户 {} 创建时没有配置任何项目价格。", user.getUserName());
-            return; // 如果没有价格，直接返回
-        }
-
-        // 1. [性能优化] 从传入的价格配置中提取所有不重复的 Project ID
-        Set<Long> projectIds = priceSettings.stream()
-                .map(ProjectPriceDTO::getProjectId)
-                .collect(Collectors.toSet());
-
-        // 2. [性能优化] 一次性查询所有相关的项目元数据，而不是加载全表
-        Map<String, Project> projMetaMap = projectService.lambdaQuery()
-                .in(Project::getProjectId, projectIds)
-                .list()
-                .stream()
-                .collect(Collectors.toMap(
-                        p -> p.getProjectId() + "-" + p.getLineId(), // 使用复合键
-                        p -> p,
-                        (existing, replacement) -> existing // 处理重复键（理论上不应发生）
-                ));
-
-        List<UserProjectLine> linesToInsert = new ArrayList<>();
-        for (ProjectPriceDTO priceDto : priceSettings) {
-            String compositeKey = priceDto.getProjectId() + "-" + priceDto.getLineId();
-            Project meta = projMetaMap.get(compositeKey);
-            if (meta == null) {
-                throw new BusinessException("配置失败：项目ID " + priceDto.getProjectId() + " 或线路ID " + priceDto.getLineId() + " 无效。");
-            }
-            UserProjectLine upl = new UserProjectLine();
-            upl.setUserId(user.getId());
-            upl.setProjectId(String.valueOf(priceDto.getProjectId()));
-            upl.setLineId(String.valueOf(priceDto.getLineId()));
-            upl.setAgentPrice(priceDto.getPrice()); // 这是为新用户设置的售价
-            upl.setProjectName(meta.getProjectName()); // 从元数据中获取
-            upl.setCostPrice(meta.getCostPrice());   // 从元数据中获取成本价
-            upl.setProjectTableId(meta.getId());
-            upl.setStatus(priceDto.getStatus());
-            linesToInsert.add(upl);
-        }
-        // 4. 批量保存，提高效率
-        userProjectLineService.saveBatch(linesToInsert);
-        log.info("成功为用户 {} 批量插入 {} 条项目价格配置。", user.getUserName(), linesToInsert.size());
-    }
 
 
     @Transactional
@@ -1379,20 +1363,23 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             Long parentId = currentUser.getParentId();
             User parentUser = this.getById(parentId);
 
-            if (parentUser == null) {
-                log.error("返款流程中断：找不到ID为 {} 的上级代理。", parentId);
+            if (parentUser.getTemplateId() == null) {
+                log.warn("代理 {} 无模板配置，跳过返点", parentId);
                 break;
             }
 
-            // 3. 获取上级代理的“售价”，这相当于当前用户的“成本价”
-            UserProjectLine parentLine = userProjectLineService.getByProjectIdLineID(projectId, lineId, parentId);
+            PriceTemplateItem parentItem = priceTemplateService.getPriceConfig(
+                    parentUser.getTemplateId(),
+                    successfulRecord.getProjectId(),
+                    successfulRecord.getLineId()
+            );
 
-            if (parentLine == null) {
-                log.warn("返款流程中断：上级代理 {} (ID: {}) 没有为项目 {}-{} 配置价格，无法计算返款。",
-                        parentUser.getUserName(), parentId, projectId, lineId);
+            if (parentItem == null) {
+                // 上级没有配置该项目，可能意味着无法获利或数据异常
                 break;
             }
-            BigDecimal parentPrice = parentLine.getAgentPrice();
+
+            BigDecimal parentPrice = parentItem.getPrice(); // 上级的拿货价
 
             // 4. 计算返款金额（即利润）
             BigDecimal rebateAmount = lastLevelPrice.subtract(parentPrice);
