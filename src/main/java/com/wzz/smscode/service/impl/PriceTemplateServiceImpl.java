@@ -281,37 +281,141 @@ public class PriceTemplateServiceImpl extends ServiceImpl<PriceTemplateMapper, P
         }).collect(Collectors.toList());
     }
 
+
     @Transactional(rollbackFor = Exception.class)
     @Override
-    public boolean updateTemplate(Long templateId, PriceTemplateCreateDTO updateDTO, Long operatorId) { // 修改点 5: 增加 operatorId
+    public boolean updateTemplate(Long templateId, PriceTemplateCreateDTO updateDTO, Long operatorId) {
         if (templateId == null || updateDTO == null || updateDTO.getName() == null) {
             throw new BusinessException("参数无效");
         }
 
-        // 修改点 6: 增加权限校验
+        // 1. 校验权限与模板存在性
         PriceTemplate existingTemplate = this.getById(templateId);
-        if (existingTemplate == null || !existingTemplate.getCreatId().equals(operatorId)) {
-            throw new BusinessException("模板不存在或无权操作");
+        if (existingTemplate == null) {
+            throw new BusinessException("模板不存在");
+        }
+        // 如果不是管理员(0)，则校验是否是该模板的创建者
+        if (operatorId != 0L && !existingTemplate.getCreatId().equals(operatorId)) {
+            throw new BusinessException("无权操作此模板");
         }
 
-        // 1. 更新模板名称
+        // 2. 更新模板主表名称
         PriceTemplate template = new PriceTemplate();
         template.setId(templateId);
         template.setName(updateDTO.getName());
         this.updateById(template);
 
-        // 2. 删除旧的配置项
-        priceTemplateItemService.remove(new LambdaQueryWrapper<PriceTemplateItem>().eq(PriceTemplateItem::getTemplateId, templateId));
+        // 3. 准备数据环境
+        boolean isAdmin = (operatorId == 0L);
 
-        // 3. 插入新的配置项
+        // 3.1 获取系统所有启用项目 (作为基础数据结构)
+        List<Project> allProjects = projectService.list();
+        Map<String, Project> sysProjectMap = allProjects.stream()
+                .collect(Collectors.toMap(
+                        k -> k.getProjectId() + "-" + k.getLineId(),
+                        v -> v,
+                        (k1, k2) -> k1
+                ));
+
+        // 3.2 关键修改：获取代理商自己的成本价 Map
+        Map<String, BigDecimal> agentCostMap = new HashMap<>();
+
+        if (!isAdmin) {
+            // A. 查询当前代理商用户信息
+            User agent = userService.getById(operatorId);
+            if (agent == null) {
+                throw new BusinessException("代理商账号异常");
+            }
+
+            // B. 获取代理商绑定的上级模板 ID
+            Long agentTemplateId = agent.getTemplateId();
+            if (agentTemplateId == null || agentTemplateId <= 0) {
+                throw new BusinessException("您当前未绑定任何价格模板，无法创建/编辑下级模板");
+            }
+
+            // C. 查询该模板下的所有价格配置 (这就是代理商的成本)
+            List<PriceTemplateItem> agentTemplateItems = priceTemplateItemService.list(
+                    new LambdaQueryWrapper<PriceTemplateItem>()
+                            .eq(PriceTemplateItem::getTemplateId, agentTemplateId)
+            );
+
+            if (CollectionUtils.isEmpty(agentTemplateItems)) {
+                throw new BusinessException("您的上级模板未配置任何项目价格");
+            }
+
+            // D. 转为 Map (Key: projectId-lineId, Value: price)
+            agentCostMap = agentTemplateItems.stream().collect(Collectors.toMap(
+                    k -> k.getProjectId() + "-" + k.getLineId(),
+                    PriceTemplateItem::getPrice, // 代理商买入价 = 上级模板里的售价
+                    (v1, v2) -> v1
+            ));
+        }
+
+        // 4. 删除旧的配置项
+        priceTemplateItemService.remove(new LambdaQueryWrapper<PriceTemplateItem>()
+                .eq(PriceTemplateItem::getTemplateId, templateId));
+
+        // 5. 构建并插入新的配置项
         if (!CollectionUtils.isEmpty(updateDTO.getItems())) {
-            List<PriceTemplateItem> newItems = updateDTO.getItems().stream().map(itemDTO -> {
+            List<PriceTemplateItem> newItems = new ArrayList<>();
+
+            for (PriceTemplateItemDTO itemDTO : updateDTO.getItems()) {
+                String key = itemDTO.getProjectId() + "-" + itemDTO.getLineId();
+                Project sysProject = sysProjectMap.get(key);
+
+                // 如果系统项目已下架，跳过
+                if (sysProject == null) continue;
+
+                BigDecimal setPrice = itemDTO.getPrice(); // 设定的售价
+                BigDecimal costPrice; // 成本价
+                BigDecimal minAllowed; // 允许最低
+                BigDecimal maxAllowed = sysProject.getPriceMax(); // 系统允许最高
+
+                if (isAdmin) {
+                    // 管理员：成本即系统成本
+                    costPrice = sysProject.getCostPrice();
+                    minAllowed = sysProject.getPriceMin() != null ? sysProject.getPriceMin() : sysProject.getCostPrice();
+                } else {
+                    // 代理：成本来自 agentCostMap (即上级模板给的价格)
+                    if (!agentCostMap.containsKey(key)) {
+                        // 报错原因：代理商自己的模板里没有这个项目，所以他不能卖给下级
+                        throw new BusinessException("您未配置项目 [" + sysProject.getProjectName() + "] (ID:" + itemDTO.getProjectId() + ")，无法设置模板");
+                    }
+                    costPrice = agentCostMap.get(key);
+                    minAllowed = costPrice; // 代理售价不能低于成本
+                }
+
+                // 简单的后端校验
+                if (setPrice == null) setPrice = minAllowed;
+
+                if (setPrice.compareTo(minAllowed) < 0) {
+                    throw new BusinessException("项目 [" + sysProject.getProjectName() + "] 售价(" + setPrice + ")不能低于您的成本价(" + minAllowed + ")");
+                }
+
+                // 校验最高价 (如果系统设置了最高价)
+                if (maxAllowed != null && maxAllowed.compareTo(BigDecimal.ZERO) > 0 && setPrice.compareTo(maxAllowed) > 0) {
+                    throw new BusinessException("项目 [" + sysProject.getProjectName() + "] 售价(" + setPrice + ")不能高于系统最高价(" + maxAllowed + ")");
+                }
+
+                // 创建实体
                 PriceTemplateItem item = new PriceTemplateItem();
-                BeanUtils.copyProperties(itemDTO, item);
                 item.setTemplateId(templateId);
-                return item;
-            }).collect(Collectors.toList());
-            priceTemplateItemService.saveBatch(newItems);
+                item.setProjectTableId(sysProject.getId());
+                item.setProjectId(Long.valueOf(sysProject.getProjectId()));
+                item.setLineId(Long.valueOf(sysProject.getLineId()));
+                item.setProjectName(sysProject.getProjectName());
+
+                item.setPrice(setPrice);
+                item.setCostPrice(costPrice);
+                item.setMinPrice(minAllowed);
+                item.setMaxPrice(maxAllowed);
+
+                newItems.add(item);
+            }
+
+            if (!newItems.isEmpty()) {
+                priceTemplateItemService.saveBatch(newItems);
+            }
         }
         return true;
     }

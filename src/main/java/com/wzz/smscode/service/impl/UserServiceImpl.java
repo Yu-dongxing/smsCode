@@ -31,7 +31,6 @@ import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.mapper.NumberRecordMapper;
 import com.wzz.smscode.mapper.UserMapper;
 import com.wzz.smscode.service.*;
-import com.wzz.smscode.util.BalanceUtil;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
@@ -57,28 +56,23 @@ import java.util.stream.Collectors;
 @Slf4j
 @Service
 public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements UserService {
-
-    //    @Autowired private PasswordEncoder passwordEncoder;
     @Autowired @Lazy private ProjectService projectService;
     @Autowired private UserLedgerService ledgerService;
-    @Autowired private ObjectMapper objectMapper;
-    @Autowired
-    private UserMapper userMapper;
+    @Autowired private UserMapper userMapper;
+    @Autowired private NumberRecordMapper numberRecordMapper;
+    @Autowired private UserProjectLineService userProjectLineService;
+    @Autowired @Lazy private PriceTemplateService priceTemplateService;
+    @Autowired private UserLedgerService userLedgerService;
 
 
-    @Autowired
-    private NumberRecordMapper numberRecordMapper;
+
 
     @Override
     public User authenticate(Long userId, String password) {
         User user = this.getById(userId);
-        return null;
+        if (user == null) return null;
+        return user;
     }
-
-
-    @Autowired
-    private UserLedgerService userLedgerService;
-
     /**
      * 获取代理仪表盘的统计数据
      * @param agentId 代理的用户ID
@@ -87,18 +81,13 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     @Override
     public AgentDashboardStatsDTO getAgentDashboardStats(Long agentId) {
         AgentDashboardStatsDTO statsDTO = new AgentDashboardStatsDTO();
-
-        // 1. 获取代理自身信息，查询"我的余额"
         User agent = this.getById(agentId);
         if (agent == null) {
             throw new BusinessException("代理用户不存在");
         }
         statsDTO.setMyBalance(agent.getBalance());
-
-        // 2. 查询该代理的所有下级用户
         LambdaQueryWrapper<User> subUsersQuery = new LambdaQueryWrapper<User>().eq(User::getParentId, agentId);
         List<User> subUsers = this.list(subUsersQuery);
-
         if (subUsers.isEmpty()) {
             // 如果没有下级，直接返回默认值
             statsDTO.setTotalSubUsers(0L);
@@ -106,35 +95,26 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             statsDTO.setSubUsersCodeRate(0.0);
             return statsDTO;
         }
-
         // 3. 计算"我的下级总人数"
         statsDTO.setTotalSubUsers((long) subUsers.size());
         List<Long> subUserIds = subUsers.stream().map(User::getId).collect(Collectors.toList());
-
         // 4. 计算"我的下级所有人今日充值"
         LocalDateTime todayStart = LocalDateTime.of(LocalDate.now(), LocalTime.MIN);
         LocalDateTime todayEnd = LocalDateTime.of(LocalDate.now(), LocalTime.MAX);
-
         LambdaQueryWrapper<UserLedger> ledgerWrapper = new LambdaQueryWrapper<>();
         ledgerWrapper.in(UserLedger::getUserId, subUserIds)
-                // FundType.AGENT_RECHARGE 代表上级给下级充值，是下级的入账记录
                 .eq(UserLedger::getFundType, FundType.AGENT_RECHARGE.getCode())
-                // ledgerType 1 代表入账
                 .eq(UserLedger::getLedgerType, 1)
                 .ge(UserLedger::getTimestamp, todayStart)
                 .le(UserLedger::getTimestamp, todayEnd);
-
         List<UserLedger> todayRechargeLedgers = userLedgerService.list(ledgerWrapper);
         BigDecimal totalRecharge = todayRechargeLedgers.stream()
-                .map(UserLedger::getPrice) // price 字段记录了变动金额
+                .map(UserLedger::getPrice)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         statsDTO.setTodaySubUsersRecharge(totalRecharge);
-
         // 5. 计算"我的下级的回码率"
-        // 累加所有下级的总取号数和总成功取码数来计算总回码率
         long totalGetCount = subUsers.stream().mapToLong(User::getTotalGetCount).sum();
         long totalCodeCount = subUsers.stream().mapToLong(User::getTotalCodeCount).sum();
-
         if (totalGetCount == 0) {
             statsDTO.setSubUsersCodeRate(0.0);
         } else {
@@ -154,10 +134,17 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         return baseMapper.selectByIdForUpdate(userId);
     }
 
+    /**
+     * 核心加锁方法：通过用户名查询并锁定用户行
+     */
+    public User findAndLockByUserName(String userName) {
+        return userMapper.selectByUserNameForUpdate(userName);
+    }
+
     @Override
     @Transactional(rollbackFor = Exception.class)
     public User AgentLogin(String username, String password) {
-        User user = this.getByUserName(username);
+        User user = findAndLockByUserName(username);
         if (user == null) {
             return null;
         }
@@ -172,17 +159,11 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         return null;
     }
 
-    @Override
-    public boolean updateUserByEn(User userDTO, long l) {
-        if (userDTO.getId() == null) {
-            throw new BusinessException(0,"传入参数，用户id不正确");
-        }
-        return updateById(userDTO);
-    }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public boolean updateUserByAgent(UserUpdateDtoByUser userDTO, long operatorId) {
-        User user = this.getById(userDTO.getId());
+        User user = findAndLockById(userDTO.getId());
         if (user == null) throw new BusinessException(0, "该用户不存在！");
 
         Long oldTemplateId = user.getTemplateId();
@@ -219,8 +200,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public Boolean updatePassWardByUserId(UpdateUserDto id) {
-        User user = userMapper.selectById(id.getUserId());
+        User user = findAndLockById(id.getUserId());
         if (user==null){
             throw new BusinessException(0,"用户查询失败");
         }
@@ -229,8 +211,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public Boolean updatePassWardByUserName(UserUpdatePasswardDTO updateUserDto) {
-        User user = getByUserName(updateUserDto.getUserName());
+        User user = findAndLockByUserName(updateUserDto.getUserName());
         if (user == null){
             throw new BusinessException(0,"没有该用户！");
         }
@@ -334,11 +317,6 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     }
 
     @Override
-    public CommonResultDTO<BigDecimal> getBalance(Long userId, String password) {
-        return null;
-    }
-
-    @Override
     public CommonResultDTO<BigDecimal> getBalance(String userName, String password) {
         User user = authenticateUserByUserName(userName, password);
         if (user == null) {
@@ -367,12 +345,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         return this.list(queryWrapper); // 使用 list() 方法代替 getOne()
     }
 
-    @Autowired
-    private UserProjectLineService userProjectLineService;
 
-    @Autowired
-    @Lazy
-    PriceTemplateService priceTemplateService;
 
     @Transactional(rollbackFor = Exception.class)
     @Override
@@ -486,92 +459,56 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
 
 
 
-    @Transactional
-    @Override
-    public boolean updateUser(UserDTO userDTO, Long operatorId) {
-        User targetUser = this.getById(userDTO.getUserId());
-        if (targetUser == null) throw new IllegalArgumentException("目标用户不存在");
-
-        boolean isAdmin = (operatorId == 0L);
-
-        if (!isAdmin) {
-            User operator = this.getById(operatorId);
-            if (operator == null) throw new IllegalArgumentException("操作员不存在");
-            if (!Objects.equals(targetUser.getParentId(), operatorId)) {
-                throw new SecurityException("无权修改该用户信息");
-            }
-        }
-
-        boolean changed = false;
-
-        if (userDTO.getStatus() != null && isAdmin) {
-            targetUser.setStatus(userDTO.getStatus());
-            changed = true;
-        }
-
-        if(userDTO.getIsAgent() != null && isAdmin) {
-            targetUser.setIsAgent(userDTO.getIsAgent() ? 1 : 0);
-            changed = true;
-        }
-
-        if(changed) {
-            this.updateById(targetUser);
-        }
-
-        // [核心改造] 修改价格配置
-        if (userDTO.getProjectPrices() != null) {
-            User operatorForValidation = isAdmin ? new User() {{ setId(0L); }} : this.getById(operatorId);
-
-            // 构造 ProjectPriceDTO 列表用于校验
-            List<ProjectPriceDTO> pricesToValidate = userDTO.getProjectPrices().entrySet().stream().map(entry -> {
-                String[] ids = entry.getKey().split("-");
-                ProjectPriceDTO dto = new ProjectPriceDTO();
-                dto.setProjectId(Long.parseLong(ids[0]));
-                dto.setLineId(Long.parseLong(ids[1]));
-                dto.setPrice(entry.getValue());
-                return dto;
-            }).collect(Collectors.toList());
-
-            validateProjectPrices(pricesToValidate, operatorForValidation);
-
-            // 更新价格：先删除旧的，再插入新的
-//            userProjectLineService.remove(new LambdaQueryWrapper<UserProjectLine>().eq(UserProjectLine::getUserId, userDTO.getUserId()));
-
-            List<UserProjectLine> linesToInsert = pricesToValidate.stream().map(priceDto -> {
-                UserProjectLine upl = new UserProjectLine();
-                upl.setUserId(userDTO.getUserId());
-                upl.setProjectId(String.valueOf(priceDto.getProjectId()));
-                upl.setLineId(String.valueOf(priceDto.getLineId()));
-                upl.setAgentPrice(priceDto.getPrice());
-                // projectName 可以在此从 projectService 获取并设置
-                return upl;
-            }).collect(Collectors.toList());
-
-            if (!linesToInsert.isEmpty()) {
-                userProjectLineService.saveBatch(linesToInsert);
-            }
-            return true; // 价格操作已执行
-        }
-
-        return changed;
-    }
-
 
     @Override
-    public IPage<User> listSubUsers(String userName,Long operatorId, IPage<User> page) {
-
+    public IPage<User> listSubUsers(String userName, Long operatorId, IPage<User> page) {
+        // 1. 基础查询条件
         LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(User::getParentId, operatorId);
-        if (userName!=null){
+        wrapper.eq(User::getParentId, operatorId); // 限制只能查自己的下级
+
+        if (userName != null && !userName.trim().isEmpty()) {
             wrapper.like(User::getUserName, userName);
         }
+
         wrapper.orderByDesc(User::getCreateTime);
 
+        // 2. 执行分页查询
         IPage<User> userPage = this.page(page, wrapper);
+        List<User> records = userPage.getRecords();
+
+        // 3. 填充模板名称 (批量查询优化)
+        if (!CollectionUtils.isEmpty(records)) {
+            // A. 提取所有非空的模板ID
+            Set<Long> templateIds = records.stream()
+                    .map(User::getTemplateId)
+                    .filter(id -> id != null && id != 0L)
+                    .collect(Collectors.toSet());
+
+            // B. 批量查询模板表
+            if (!CollectionUtils.isEmpty(templateIds)) {
+                // 只查询 ID 和 Name 字段，减少数据传输
+                List<PriceTemplate> templates = priceTemplateService.list(
+                        new LambdaQueryWrapper<PriceTemplate>()
+                                .in(PriceTemplate::getId, templateIds)
+                                .select(PriceTemplate::getId, PriceTemplate::getName)
+                );
+
+                // C. 转为 Map<ID, Name>
+                Map<Long, String> templateMap = templates.stream()
+                        .collect(Collectors.toMap(PriceTemplate::getId, PriceTemplate::getName));
+
+                // D. 回填数据
+                for (User user : records) {
+                    Long tid = user.getTemplateId();
+                    if (tid != null && templateMap.containsKey(tid)) {
+                        user.setTemplateName(templateMap.get(tid));
+                    }
+                }
+            }
+        }
+
         return userPage;
     }
-
-
 
 
 
@@ -645,53 +582,12 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     }
 
 
-    @Override
-    public boolean isUserAllowed(Long userId) {
-        User user = this.getById(userId);
-        if (user == null || user.getStatus() != 0) return false;
-        // 假设 `hasOngoingRecord` 从号码记录表中查询
-        boolean hasOngoingRecord = false;
-        return BalanceUtil.canGetNumber(user, hasOngoingRecord);
-    }
 
 
-    @Override
-    public void updateUserStatsForNewNumber(Long userId, boolean codeReceived) {
-        // 使用原子更新，性能更高且避免并发问题
-        LambdaUpdateWrapper<User> updateWrapper = new LambdaUpdateWrapper<User>()
-                .eq(User::getId, userId);
 
-        if (codeReceived) {
-            // 成功获取到验证码
-            // 1. 每日和总获取次数 +1
-            // 2. 每日和总成功次数 +1
-            // 3. 基于更新后的计数值，重新计算每日和总回码率
-            updateWrapper.setSql(
-                    "daily_get_count = daily_get_count + 1, " +
-                            "total_get_count = total_get_count + 1, " +
-                            "daily_code_count = daily_code_count + 1, " +
-                            "total_code_count = total_code_count + 1, " +
-                            "daily_code_rate = (daily_code_count + 1) * 1.0 / (daily_get_count + 1), " +
-                            "total_code_rate = (total_code_count + 1) * 1.0 / (total_get_count + 1)"
-            );
-        } else {
-            // 未获取到验证码
-            // 1. 每日和总获取次数 +1
-            // 2. 成功次数不变
-            // 3. 基于更新后的获取次数，重新计算每日和总回码率
-            updateWrapper.setSql(
-                    "daily_get_count = daily_get_count + 1, " +
-                            "total_get_count = total_get_count + 1, " +
-                            "daily_code_rate = daily_code_count * 1.0 / (daily_get_count + 1), " +
-                            "total_code_rate = total_code_count * 1.0 / (total_get_count + 1)"
-            );
-        }
 
-        this.update(updateWrapper);
-    }
-
-    @Override
     @Scheduled(cron = "0 0 0 * * ?")
+    @Override
     public void resetDailyStatsAllUsers() {
         log.info("开始执行每日统计数据重置任务...");
         boolean success = this.update(new LambdaUpdateWrapper<User>()
@@ -702,15 +598,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         log.info("每日统计数据重置任务完成，结果: {}", success);
     }
 
-    // --- 私有辅助方法 ---
 
-    /**
-     * [新增] 获取指定用户的项目线路价格配置
-     */
-    @Override
-    public List<UserProjectLine> getUserProjectLines(Long userId) {
-        return userProjectLineService.getLinesByUserId(userId);
-    }
 
     /**
      * [已废弃 -> 移除]
@@ -974,42 +862,6 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         userLedgerService.createLedgerAndUpdateBalance(agentAddRequest);
     }
 
-    @Override
-    public List<AgentProjectPriceDTO> getAgentProjectPrices(Long agentId) {
-        List<UserProjectLine> agentLines = userProjectLineService.getLinesByUserId(agentId);
-        if (CollectionUtils.isEmpty(agentLines)) {
-            return Collections.emptyList(); // 如果代理没有任何项目线路，直接返回空列表
-        }
-        List<Long> projectTableIds = agentLines.stream()
-                .map(UserProjectLine::getProjectTableId)
-                .distinct()
-                .collect(Collectors.toList());
-        Map<Long, Project> projectMap = projectService.listByIds(projectTableIds).stream()
-                .collect(Collectors.toMap(Project::getId, project -> project));
-        return agentLines.stream().map(line -> {
-            AgentProjectPriceDTO dto = new AgentProjectPriceDTO();
-            dto.setProjectTableId(line.getProjectTableId());
-            dto.setProjectId(line.getProjectId());
-            dto.setProjectName(line.getProjectName());
-            dto.setLineId(line.getLineId());
-
-            dto.setCostPrice(line.getCostPrice());
-            dto.setCurrentAgentPrice(line.getAgentPrice());
-
-            // 从 projectMap 中获取对应的系统最高限价
-            Project project = projectMap.get(line.getProjectTableId());
-            if (project != null) {
-                dto.setPriceMax(project.getPriceMax());
-            } else {
-                // 容错处理：如果 Project 表找不到对应记录，给一个默认值或成本价
-                dto.setPriceMax(line.getCostPrice());
-                log.warn("数据不一致：UserProjectLine ID {} 对应的项目在线路表(project)中未找到", line.getProjectTableId());
-            }
-
-            return dto;
-        }).collect(Collectors.toList());
-    }
-
     @Transactional
     @Override
     public void updateAgentProjectConfig(Long agentId, AgentProjectLineUpdateDTO updateDTO) {
@@ -1181,97 +1033,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
 
         return userMapper.deleteById(user) >0;
     }
-    /**
-     * 为指定用户新增一个或多个项目价格配置的核心实现
-     */
-    @Transactional(rollbackFor = Exception.class)
-    @Override
-    public void addProjectPricesForUser( AddUserProjectPricesRequestDTO request, Long operatorId) {
-        Long targetUserId = request.getUserId();
-        List<ProjectPriceDTO> pricesToAdd = request.getPricesToAdd();
 
-        // 1. --- 基础校验 ---
-        User targetUser = this.getById(targetUserId);
-        if (targetUser == null) {
-            throw new BusinessException("目标用户不存在");
-        }
-
-        // 2. --- 权限和价格校验 ---
-        boolean isAdmin = (operatorId == 0L);
-        if (isAdmin) {
-            // 如果是管理员，创建虚拟操作员对象以复用校验逻辑
-            User adminOperator = new User();
-            adminOperator.setId(0L);
-            validateProjectPrices(pricesToAdd, adminOperator);
-        } else {
-            // 如果是代理，进行严格的权限校验
-            User agent = this.getById(operatorId);
-            if (agent == null || agent.getIsAgent() != 1) {
-                throw new SecurityException("操作员不是代理或不存在，无权操作");
-            }
-            if (!operatorId.equals(targetUser.getParentId())) {
-                throw new SecurityException("无权为非下级用户添加价格配置");
-            }
-            // 复用已有的价格校验逻辑，它会自动检查代理的成本价
-            validateProjectPrices(pricesToAdd, agent);
-        }
-
-        // 3. --- 数据准备和去重 ---
-        // 获取目标用户已有的价格配置，用于防止重复添加
-        List<UserProjectLine> existingLines = userProjectLineService.getLinesByUserId(targetUserId);
-        Set<String> existingKeys = existingLines.stream()
-                .map(line -> line.getProjectId() + "-" + line.getLineId())
-                .collect(Collectors.toSet());
-
-        // 一次性获取所有项目元数据，避免在循环中查询数据库
-        Map<String, Project> projectMetaMap = projectService.list().stream()
-                .collect(Collectors.toMap(
-                        p -> p.getProjectId() + "-" + p.getLineId(),
-                        p -> p,
-                        (p1, p2) -> p1 // 如果有重复键，保留第一个
-                ));
-
-        List<UserProjectLine> linesToInsert = new ArrayList<>();
-
-        for (ProjectPriceDTO priceDto : pricesToAdd) {
-            String priceKey = priceDto.getProjectId() + "-" + priceDto.getLineId();
-
-            // 如果配置已存在，则记录日志并跳过
-            if (existingKeys.contains(priceKey)) {
-                log.warn("用户 {} 已存在项目线路配置 {}，跳过添加。", targetUser.getUserName(), priceKey);
-                continue;
-            }
-
-            // 校验要添加的项目线路是否存在于系统中
-            Project projectMeta = projectMetaMap.get(priceKey);
-            if (projectMeta == null) {
-                throw new BusinessException("添加失败：项目线路 " + priceKey + " 不存在。");
-            }
-
-            // 构建新的 UserProjectLine 实体
-            UserProjectLine newLine = new UserProjectLine();
-            newLine.setUserId(targetUserId);
-            newLine.setProjectTableId(projectMeta.getId()); // 关联 project 表主键
-            newLine.setProjectName(projectMeta.getProjectName());
-            newLine.setProjectId(projectMeta.getProjectId());
-            newLine.setLineId(projectMeta.getLineId());
-            newLine.setAgentPrice(priceDto.getPrice()); // 设置为用户的新售价
-            newLine.setCostPrice(projectMeta.getCostPrice()); // 从系统项目表中获取成本价
-
-            linesToInsert.add(newLine);
-        }
-
-        // 4. --- 批量保存 ---
-        if (!CollectionUtils.isEmpty(linesToInsert)) {
-            boolean success = userProjectLineService.saveBatch(linesToInsert);
-            if (!success) {
-                throw new BusinessException("批量保存用户项目价格配置失败");
-            }
-            log.info("成功为用户 {} 添加了 {} 条新的项目价格配置。", targetUser.getUserName(), linesToInsert.size());
-        } else {
-            log.info("没有新的项目价格配置需要为用户 {} 添加（可能所有提供的配置都已存在）。", targetUser.getUserName());
-        }
-    }
 
     /**
      * 根据号码记录表重新计算并更新用户的统计数据。
@@ -1281,6 +1043,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
      */
     @Override
     public void updateUserStats(Long userId) {
+
+        User user = findAndLockById(userId);
+        if (user == null) return;
         // 1. 定义时间范围：今天零点
         LocalDateTime startOfToday = LocalDate.now().atStartOfDay();
 
@@ -1318,16 +1083,14 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
                 : BigDecimal.ZERO;
 
         // 5. 使用 LambdaUpdateWrapper 一次性原子更新 User 表
-        LambdaUpdateWrapper<User> updateWrapper = new LambdaUpdateWrapper<User>()
-                .eq(User::getId, userId)
-                .set(User::getTotalGetCount, totalGetCount)
-                .set(User::getTotalCodeCount, totalCodeCount)
-                .set(User::getDailyGetCount, dailyGetCount)
-                .set(User::getDailyCodeCount, dailyCodeCount)
-                .set(User::getTotalCodeRate, totalCodeRate)
-                .set(User::getDailyCodeRate, dailyCodeRate);
+        user.setTotalGetCount((int) totalGetCount);
+        user.setTotalCodeCount((int) totalCodeCount);
+        user.setDailyGetCount((int) dailyGetCount);
+        user.setDailyCodeCount((int) dailyCodeCount);
+        user.setTotalCodeRate(totalCodeRate.doubleValue());
+        user.setDailyCodeRate(dailyCodeRate.doubleValue());
 
-        this.update(updateWrapper);
+        this.updateById(user);
         log.info("用户 {} 的统计数据已更新。今日取码/成功: {}/{}, 总计取码/成功: {}/{}",
                 userId, dailyGetCount, dailyCodeCount, totalGetCount, totalCodeCount);
     }

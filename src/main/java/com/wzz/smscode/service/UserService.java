@@ -19,6 +19,7 @@ import com.wzz.smscode.dto.update.UserUpdatePasswardDTO;
 import com.wzz.smscode.entity.NumberRecord;
 import com.wzz.smscode.entity.User;
 import com.wzz.smscode.entity.UserProjectLine;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -32,18 +33,15 @@ public interface UserService extends IService<User> {
     @Transactional(rollbackFor = Exception.class)
     void deleteSubUsersBatch(List<Long> userIds, Long agentId);
 
-    CommonResultDTO<BigDecimal> getBalance(Long userId, String password);
 
     CommonResultDTO<BigDecimal> getBalance(String userName, String password);
 
     @Transactional
     boolean createUser(UserCreateDTO dto, Long operatorId);
 
-    @Transactional
-    boolean updateUser(UserDTO userDTO, Long operatorId);
 
 
-    IPage<User> listSubUsers(String userName,Long operatorId, IPage<User> page);
+    IPage<User> listSubUsers(String userName, Long operatorId, IPage<User> page);
 
     @Transactional
     CommonResultDTO<?> chargeUser(Long targetUserId, BigDecimal amount, Long operatorId, boolean isRecharge);
@@ -52,13 +50,9 @@ public interface UserService extends IService<User> {
 
     CommonResultDTO<?> deductUser(Long targetUserId, BigDecimal amount, Long operatorId);
 
-    boolean isUserAllowed(Long userId);
 
-    void updateUserStatsForNewNumber(Long userId, boolean codeReceived);
-
+    @Scheduled(cron = "0 0 0 * * ?")
     void resetDailyStatsAllUsers();
-
-    List<UserProjectLine> getUserProjectLines(Long userId);
 
     User getByUserName(String userName);
 
@@ -72,7 +66,6 @@ public interface UserService extends IService<User> {
 
     User AgentLogin(String username, String password);
 
-    boolean updateUserByEn(User userDTO, long l);
 
     boolean updateUserByAgent(UserUpdateDtoByUser userDTO, long l);
 
@@ -81,14 +74,11 @@ public interface UserService extends IService<User> {
     Boolean updatePassWardByUserName(UserUpdatePasswardDTO updateUserDto);
 
     @Transactional(rollbackFor = Exception.class)
-        // 如果您已在 UserService 接口中声明此方法
     void rechargeUserFromAgentBalance(Long targetUserId, BigDecimal amount, Long agentId);
 
     @Transactional(rollbackFor = Exception.class)
-        // 如果您已在 UserService 接口中声明此方法
     void deductUserToAgentBalance(Long targetUserId, BigDecimal amount, Long agentId);
 
-    List<AgentProjectPriceDTO> getAgentProjectPrices(Long agentId);
 
     @Transactional
     void updateAgentProjectConfig(Long agentId, AgentProjectLineUpdateDTO updateDTO);
@@ -99,18 +89,7 @@ public interface UserService extends IService<User> {
 
     boolean delectByuserId(Long userId);
 
-    /**
-     * 为指定用户新增一个或多个项目价格配置
-     * <p>
-     * 此方法会根据 operatorId 自动处理管理员和代理的不同权限与价格校验逻辑。
-     *
-     * @param request    包含目标用户ID和待添加价格列表的请求体
-     * @param operatorId 操作员ID (0L 代表管理员, 其他为代理ID)
-     */
-    void addProjectPricesForUser(AddUserProjectPricesRequestDTO request, Long operatorId);
-
     void updateUserStats(Long userId);
-
 
     /**
      * [新增] 处理多级代理业务返款

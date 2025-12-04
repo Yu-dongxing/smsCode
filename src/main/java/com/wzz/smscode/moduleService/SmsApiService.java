@@ -134,10 +134,10 @@ public class SmsApiService {
             throw new BusinessException("项目未配置获取验证码接口");
         }
 
-        // 2. 轮询逻辑 (改为时间控制：10分钟)
+        // 2. 轮询逻辑 (10分钟)
         long startTime = System.currentTimeMillis();
-        long timeout = 10 * 60 * 1000L; // 10分钟超时
-        int attempts = 0; // 仅用于日志记录，不作为终止条件
+        long timeout = 10 * 60 * 1000L;
+        int attempts = 0;
 
         // 只要当前时间减去开始时间小于超时时间，就继续轮询
         while (System.currentTimeMillis() - startTime < timeout) {

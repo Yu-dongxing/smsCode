@@ -14,7 +14,6 @@ import java.util.Date;
 
 public interface UserLedgerService extends IService<UserLedger> {
 
-    IPage<LedgerDTO> listUserLedger(Long userId, String password, Date startTime, Date endTime, Page<UserLedger> page);
 
     IPage<UserLedger> listUserLedgerByUSerId(Long userId, Page<UserLedger> page);
 

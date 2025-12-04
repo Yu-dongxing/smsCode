@@ -169,7 +169,13 @@ public class User extends BaseEntity {
      */
     @ColumnComment("项目线路黑名单(pid-lid,pid-lid)")
     @TableField("project_blacklist")
+    @ColumnType("TEXT")
     private String projectBlacklist;
 
+    /**
+     * 关联的价格模板名称（非数据库字段，仅用于展示）
+     */
+    @TableField(exist = false)
+    private String templateName;
 
 }

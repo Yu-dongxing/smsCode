@@ -127,7 +127,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
 //        if (!BalanceUtil.canGetNumber(user, hasOngoingRecord)) {
 //            return CommonResultDTO.error(Constants.ERROR_INSUFFICIENT_BALANCE, "余额不足或已有进行中的任务");
 //        }
-        if (!hasOngoingRecord) {
+        if (hasOngoingRecord) {
             return CommonResultDTO.error(Constants.ERROR_INSUFFICIENT_BALANCE, "已有进行中的取号任务");
         }
         final int MAX_ATTEMPTS = 3;

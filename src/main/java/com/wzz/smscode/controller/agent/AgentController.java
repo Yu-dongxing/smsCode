@@ -48,6 +48,12 @@ public class AgentController {
     @Autowired
     private UserLedgerService userLedgerService;
 
+    @Autowired
+    @Lazy
+    private PriceTemplateService priceTemplateService;
+
+
+
     /**
      * 代理登录接口
      *
@@ -466,90 +472,7 @@ public class AgentController {
         }
     }
 
-    /**
-     * 为指定下级用户新增项目价格配置
-     * <p>
-     * 代理只能为自己的直接下级用户添加配置。
-     * 添加的价格不能低于代理自身的成本价。
-     * 如果尝试添加的配置已存在，则会自动跳过。
-     *
-     * @param request 包含下级用户ID和要添加的价格配置列表
-     * @return 操作结果
-     */
-    @SaCheckLogin
-    @PostMapping("/sub-user-project-prices/add")
-    public Result<?> addSubUserProjectPrices(@RequestBody AddUserProjectPricesRequestDTO request) {
-        try {
-            // 从 Sa-Token 获取当前登录的代理ID
-            long agentId = StpUtil.getLoginIdAsLong();
 
-            // 调用统一的 Service 方法，传入代理ID
-            userService.addProjectPricesForUser(request, agentId);
-            return Result.success("新增配置成功");
-        } catch (BusinessException | SecurityException e) {
-            log.warn("代理 [{}] 新增下级项目配置业务校验失败: {}", StpUtil.getLoginId(), e.getMessage());
-            return Result.error(e.getMessage());
-        } catch (Exception e) {
-            log.error("代理 [{}] 新增下级项目配置时发生系统内部错误", StpUtil.getLoginId(), e);
-            return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，新增失败");
-        }
-    }
-
-    /**
-     * 编辑或更新指定用户的项目价格配置
-     * @param subUserProjectPriceDTO 包含用户ID和该用户全新的项目价格配置列表
-     * @return 返回操作结果
-     */
-    @PostMapping("/sub-user-project-prices/update")
-    public Result<?> updateUserProjectPrices(@RequestBody SubUserProjectPriceDTO subUserProjectPriceDTO) {
-        log.info("代理更新，{}", subUserProjectPriceDTO);
-        try {
-            Long agentId = StpUtil.getLoginIdAsLong();
-            // 调用包含事务处理的 Service 方法
-            boolean success = userProjectLineService.updateUserProjectLines(subUserProjectPriceDTO,agentId);
-            return success ? Result.success("更新成功") : Result.error("更新失败或数据无变化");
-        } catch (BusinessException e) {
-            log.warn("编辑用户项目配置业务校验失败: {}", e.getMessage());
-            return Result.error(e.getMessage());
-        } catch (Exception e) {
-            log.error("编辑用户项目配置时发生系统内部错误", e);
-            return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，更新失败");
-        }
-    }
-
-    /**
-     * 根据下级用户ID获取其项目价格配置列表
-     * @param userId 下级用户的ID
-     * @return 该用户的项目价格配置列表
-     */
-    @SaCheckLogin
-    @GetMapping("/user/project-prices")
-    public Result<?> getSubUserProjectPricesByUserId(@RequestParam Long userId) {
-        try {
-            long agentId = StpUtil.getLoginIdAsLong();
-
-            // 权限校验：确保查询的是自己的下级用户
-            User targetUser = userService.getById(userId);
-            if (targetUser == null || !Objects.equals(targetUser.getParentId(), agentId)) {
-                return Result.error(403, "无权查看该用户的项目配置");
-            }
-
-            // 调用 Service 获取数据
-            List<UserProjectLine> userProjectLines = userProjectLineService.getLinesByUserId(userId);
-
-            if (userProjectLines == null || userProjectLines.isEmpty()) {
-                return Result.success("查询成功，该用户暂无项目配置", Collections.emptyList());
-            }
-
-            return Result.success("查询成功", userProjectLines);
-        } catch (BusinessException e) {
-            log.warn("代理 [{}] 查询下级 [{}] 项目配置失败: {}", StpUtil.getLoginId(), userId, e.getMessage());
-            return Result.error(e.getMessage());
-        } catch (Exception e) {
-            log.error("代理 [{}] 查询下级 [{}] 项目配置时发生系统内部错误", StpUtil.getLoginId(), userId, e);
-            return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，查询失败");
-        }
-    }
 
     /**
      * 分页查询代理下级用户的取号记录（支持多条件筛选）
@@ -572,9 +495,6 @@ public class AgentController {
         }
     }
 
-    @Autowired
-    @Lazy
-    private PriceTemplateService priceTemplateService;
 
     /**
      * [代理] 创建自己的价格模板

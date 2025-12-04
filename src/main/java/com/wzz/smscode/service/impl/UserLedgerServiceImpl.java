@@ -39,45 +39,15 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
     @Lazy
     private UserService userService; // 注入用户服务用于身份认证
 
-    /**
-     * 查询用户资金列表
-     * @param userId 用户id
-     * @param password 用户密码
-     * @param startTime 开始时间
-     * @param endTime 结束时间
-     * @param page 分页
-     * @return 分页的用户资金列表
-     */
-    @Override
-    public IPage<LedgerDTO> listUserLedger(Long userId, String password, Date startTime, Date endTime, Page<UserLedger> page){
-        // 1. 身份验证
-        User user = userService.authenticate(userId, password);
-        if (user == null) {
-            log.warn("用户 {} 账本查询失败：身份验证未通过", userId);
-            return null;
-        }
 
-        // 2. 构建查询条件
-        LambdaQueryWrapper<UserLedger> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(UserLedger::getUserId, userId); // 严格限制只能查询自己的记录
-        wrapper.ge(startTime != null, UserLedger::getTimestamp, startTime);
-        wrapper.le(endTime != null, UserLedger::getTimestamp, endTime);
-        wrapper.orderByDesc(UserLedger::getTimestamp);
-
-        Page<UserLedger> ledgerPage = this.page(page, wrapper);
-        return ledgerPage.convert(this::convertToDTO);
-    }
 
     @Override
     public IPage<UserLedger> listUserLedgerByUSerId(Long userId, Page<UserLedger> page){
-        // 1. 身份验证
         User user = userService.getById(userId);
         if (user == null) {
             log.warn("用户 {} 账本查询失败：身份验证未通过", userId);
             return null;
         }
-
-        // 2. 构建查询条件
         LambdaQueryWrapper<UserLedger> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(UserLedger::getUserId, userId); // 严格限制只能查询自己的记录
         wrapper.orderByDesc(UserLedger::getTimestamp);
@@ -111,22 +81,14 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
             String remark,
             Integer fundType,   // 新增：资金类型
             Integer ledgerType) { // 新增：账本类型
-
-        // 2. 构建查询条件
         LambdaQueryWrapper<UserLedger> wrapper = new LambdaQueryWrapper<>();
-
-        // 优先根据 username 进行模糊查询
         if (username != null && !username.trim().isEmpty()) {
             List<Long> userIds = userService.findUserIdsByUsernameLike(username);
-
-            // 如果根据用户名模糊查询没有找到任何用户，直接返回空的分页结果
             if (CollectionUtils.isEmpty(userIds)) {
                 return new Page<LedgerDTO>(page.getCurrent(), page.getSize(), 0).setRecords(Collections.emptyList());
             }
             wrapper.in(UserLedger::getUserId, userIds);
-
         } else if (filterByUserId != null && filterByUserId > 0) {
-            // 只有在 username 未提供时，才使用 filterByUserId
             wrapper.eq(UserLedger::getUserId, filterByUserId);
         }
 
@@ -134,18 +96,11 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
         if (remark != null && !remark.trim().isEmpty()) {
             wrapper.like(UserLedger::getRemark, remark);
         }
-
-        // 4. 添加其他筛选条件
-        // ----- 新增的筛选条件 -----
         wrapper.eq(fundType != null, UserLedger::getFundType, fundType);
         wrapper.eq(ledgerType != null, UserLedger::getLedgerType, ledgerType);
-        // -------------------------
-
         wrapper.ge(startTime != null, UserLedger::getTimestamp, startTime);
         wrapper.le(endTime != null, UserLedger::getTimestamp, endTime);
         wrapper.orderByDesc(UserLedger::getTimestamp);
-
-        // 5. 执行分页查询
         Page<UserLedger> ledgerPage = this.page(page, wrapper);
 
         // 6. 转换 DTO
@@ -176,10 +131,7 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
     private LedgerDTO convertToDTO(UserLedger ledger) {
         if (ledger == null) return null;
         LedgerDTO dto = new LedgerDTO();
-        // 使用 Spring 的 BeanUtils 快速复制属性
         BeanUtils.copyProperties(ledger, dto);
-        // 如果字段名不完全匹配，需要手动设置
-        // dto.setPrice(ledger.getAmount());
         return dto;
     }
 
@@ -199,11 +151,13 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
     @Transactional(rollbackFor = Exception.class)
     @Override
     public BigDecimal createLedgerAndUpdateBalance(LedgerCreationDTO request) {
+
+        log.info("开始执行创建账本方法，创建数据：{}", request);
         // 1. 参数校验
         if (request.getUserId() == null || request.getAmount() == null ||
                 request.getLedgerType() == null || request.getFundType() == null ||
                 request.getAmount().compareTo(BigDecimal.ZERO) <= 0) { // 金额必须是正数
-            throw new IllegalArgumentException("创建账本和更新余额的必要参数缺失或无效");
+            throw new BusinessException(0,"创建账本和更新余额的必要参数缺失或无效");
         }
         User user = userService.findAndLockById(request.getUserId());
         if (user == null) {
@@ -228,19 +182,22 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
             throw new IllegalArgumentException("无效的账本类型: " + request.getLedgerType());
         }
 
+        log.info("开始执行创建用户账本中的更新用户余额：原余额：{}，扣款：{},新余额：{}", user.getBalance(), request.getAmount(),newBalance);
+
         // 4. 更新用户余额
         user.setBalance(newBalance);
         boolean userUpdateSuccess = userService.updateById(user);
         if (!userUpdateSuccess) {
-            log.error("更新用户 {} 余额失败!", user.getId());
+            log.error("更新用户 {} 余额失败!", user.getUserName());
             throw new RuntimeException("更新用户余额失败，事务已回滚");
         }
+        log.info("账本-更新用户余额成功：创建并保存账本记录");
 
         // 5. 创建并保存账本记录
         UserLedger ledger = new UserLedger();
         ledger.setUserId(request.getUserId());
         ledger.setUserName(user.getUserName());
-        ledger.setPrice(amount); // `price` 字段记录变动额，始终为正
+        ledger.setPrice(amount);
         ledger.setLedgerType(request.getLedgerType());
         ledger.setBalanceBefore(balanceBefore);
         ledger.setBalanceAfter(newBalance);
@@ -252,6 +209,7 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
         ledger.setLineId(request.getLineId());
         ledger.setProjectId(request.getProjectId());
         this.save(ledger);
+        log.info("账本-更新用户余额成功：创建并保存账本记录，创建的账本数据：{}", ledger);
         return newBalance;
     }
 
@@ -284,30 +242,19 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
         } else {
             ledgerWrapper.in(UserLedger::getUserId, subUserIds);
         }
-
-        // 4. 添加其他筛选条件
         if (startTime != null) {
             ledgerWrapper.ge(UserLedger::getTimestamp, startTime);
         }
         if (endTime != null) {
             ledgerWrapper.le(UserLedger::getTimestamp, endTime);
         }
-
-        // ==================== 新增筛选条件 ====================
-        // 如果传入了资金类型，则添加为查询条件
         if (fundType != null) {
             ledgerWrapper.eq(UserLedger::getFundType, fundType);
         }
-        // 如果传入了账本类型，则添加为查询条件
         if (ledgerType != null) {
             ledgerWrapper.eq(UserLedger::getLedgerType, ledgerType);
         }
-        // ====================================================
-
-        // 5. 按时间倒序排序
         ledgerWrapper.orderByDesc(UserLedger::getTimestamp);
-
-        // 6. 执行分页查询并返回
         return this.page(page, ledgerWrapper);
     }
 

@@ -67,12 +67,15 @@ public class AdminController {
     @Autowired private SystemConfigService systemConfigService;
     @Autowired private ProjectService projectService;
 
-    private final ErrorLogService errorLogService;
 
+    @Autowired
+    @Lazy
+    private PriceTemplateService priceTemplateService;
+
+    private final ErrorLogService errorLogService;
     public AdminController(ErrorLogService errorLogService) {
         this.errorLogService = errorLogService;
     }
-    // @Autowired private ErrorLogService errorLogService; // 假设存在错误日志服务
 
     /**
      * 管理员用户登录
@@ -141,30 +144,54 @@ public class AdminController {
 
         List<User> records = userPage.getRecords();
 
-        // 4. 填充 parentName 字段 (批量查询以避免 N+1 问题)
+        // 4. 数据填充 (上级用户名 & 模板名称)
         if (!CollectionUtils.isEmpty(records)) {
-            // 提取所有涉及的 parentId (排除 null 和 0)
-            Set<Long> parentIds = records.stream()
-                    .map(User::getParentId)
-                    .filter(id -> id != null && id != 0L)
-                    .collect(Collectors.toSet());
+            // --- 提取 ID 集合 ---
+            Set<Long> parentIds = new HashSet<>();
+            Set<Long> templateIds = new HashSet<>();
 
+            for (User user : records) {
+                if (user.getParentId() != null && user.getParentId() != 0L) {
+                    parentIds.add(user.getParentId());
+                }
+                if (user.getTemplateId() != null && user.getTemplateId() != 0L) {
+                    templateIds.add(user.getTemplateId());
+                }
+            }
+
+            // --- A. 批量查询并填充上级用户名 ---
+            Map<Long, String> parentMap = new HashMap<>();
             if (!CollectionUtils.isEmpty(parentIds)) {
-                // 批量查询上级用户的信息（只查 ID 和 UserName）
                 List<User> parents = userService.list(new LambdaQueryWrapper<User>()
                         .in(User::getId, parentIds)
-                        .select(User::getId, User::getUserName)); // 只查需要的字段
+                        .select(User::getId, User::getUserName));
+                parentMap = parents.stream().collect(Collectors.toMap(User::getId, User::getUserName));
+            }
 
-                // 转为 Map<ID, UserName> 方便查找
-                Map<Long, String> parentMap = parents.stream()
-                        .collect(Collectors.toMap(User::getId, User::getUserName));
+            // --- B. 批量查询并填充模板名称 (新增逻辑) ---
+            Map<Long, String> templateMap = new HashMap<>();
+            if (!CollectionUtils.isEmpty(templateIds)) {
+                // 使用 PriceTemplateService 批量查询
+                List<PriceTemplate> templates = priceTemplateService.list(new LambdaQueryWrapper<PriceTemplate>()
+                        .in(PriceTemplate::getId, templateIds)
+                        .select(PriceTemplate::getId, PriceTemplate::getName)); // 只查ID和Name优化性能
 
-                // 遍历结果集，回填 parentName
-                for (User user : records) {
-                    Long pid = user.getParentId();
-                    if (pid != null && parentMap.containsKey(pid)) {
-                        user.setParentName(parentMap.get(pid));
-                    }
+                templateMap = templates.stream()
+                        .collect(Collectors.toMap(PriceTemplate::getId, PriceTemplate::getName));
+            }
+
+            // --- C. 遍历回填数据 ---
+            for (User user : records) {
+                // 回填上级名称
+                Long pid = user.getParentId();
+                if (pid != null && parentMap.containsKey(pid)) {
+                    user.setParentName(parentMap.get(pid));
+                }
+
+                // 回填模板名称 (新增逻辑)
+                Long tid = user.getTemplateId();
+                if (tid != null && templateMap.containsKey(tid)) {
+                    user.setTemplateName(templateMap.get(tid));
                 }
             }
         }
@@ -616,43 +643,10 @@ public class AdminController {
         return Result.success(errorLogService.getErrorDetail(errorId));
     }
 
-    // --- 私有辅助方法 ---
 
-    /**
-     * 检查用户是否为管理员
-     * @param user 用户实体
-     * @return true 如果是管理员
-     */
-    private boolean isAdmin(User user) {
-        return user != null && user.getId() == 1;
-    }
-
-    /**
-     * 校验管理员身份和权限
-     * @param adminId 管理员ID
-     * @param password 密码
-     * @return CommonResultDTO，成功时 status=0
-     */
-    private CommonResultDTO<?> checkAdminPermission(Long adminId, String password) {
-        User admin = userService.authenticate(adminId, password);
-        if (admin == null || !isAdmin(admin)) {
-            return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED, "管理员验证失败或无权限");
-        }
-        return CommonResultDTO.success();
-    }
-
-    /**
-     * + DTO for daily statistics trend
-     */
     @Data
     public static class DailyStatsDTO {
-        /**
-         * 日期
-         */
         private String date;
-        /**
-         *
-         */
         private Long numberCount;
         private Long codeCount;
     }
@@ -946,33 +940,7 @@ public class AdminController {
         }
     }
 
-    /**
-     * 为指定用户新增项目价格配置
-     * <p>
-     * 此接口用于为现有用户添加一个或多个新的项目线路价格，而不会影响其已有的配置。
-     * 如果尝试添加的配置已存在，则会自动跳过。
-     *
-     * @param request 包含用户ID和要添加的价格配置列表
-     * @return 操作结果
-     */
-    @PostMapping("/user-project-prices/add")
-    public Result<?> addUserProjectPrices(@RequestBody AddUserProjectPricesRequestDTO request) {
-        try {
-            // 调用统一的 Service 方法，管理员 operatorId 固定为 0L
-            userService.addProjectPricesForUser(request, 0L);
-            return Result.success("新增配置成功");
-        } catch (BusinessException | SecurityException e) {
-            log.warn("管理员新增用户项目配置业务校验失败: {}", e.getMessage());
-            return Result.error(e.getMessage());
-        } catch (Exception e) {
-            log.error("管理员新增用户项目配置时发生系统内部错误", e);
-            return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，新增失败");
-        }
-    }
 
-    @Autowired
-    @Lazy
-    private PriceTemplateService priceTemplateService;
 
 
     /**
