@@ -9,8 +9,14 @@ import com.wzz.smscode.service.ProjectService;
 import com.wzz.smscode.service.SystemConfigService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.ResponseEntity;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
+import org.springframework.web.client.RestTemplate;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.util.UriComponentsBuilder;
 import reactor.core.publisher.Flux;
@@ -20,6 +26,7 @@ import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import com.jayway.jsonpath.JsonPath;
@@ -63,6 +70,12 @@ public class SmsApiService {
      */
     public Map<String, String> getPhoneNumber(Project project, String... dynamicParams) {
         log.info("开始为项目 [{} - {}] 获取手机号", project.getProjectName(), project.getLineId());
+
+        if (Boolean.TRUE.equals(project.getSpecialApiStatus())) {
+            log.info("开始为特殊api项目 [{} - {}] 执行获取手机号的特殊接口", project.getProjectName(), project.getLineId());
+            return getPhoneNumberSpecial(project);
+        }
+
         // 1. 初始化上下文变量 (Context)
         Map<String, String> context =null;
         try {
@@ -95,6 +108,10 @@ public class SmsApiService {
     public String getApiBalance(Project project, String... dynamicParams){
         // 1. 初始化上下文变量 (Context)
         Map<String, String> context =null;
+
+        if (Boolean.TRUE.equals(project.getSpecialApiStatus())) {
+            return getApiBalanceSpecial(project);
+        }
         try {
             context =moduleUtil.getApiToken(project, dynamicParams);
         }catch (Exception e) {
@@ -121,6 +138,10 @@ public class SmsApiService {
      */
 
     public String getVerificationCode(Project project, Map<String, String> identifierParams) {
+
+        if (Boolean.TRUE.equals(project.getSpecialApiStatus())) {
+            return getVerificationCodeSpecial(project, identifierParams, false);
+        }
         log.info("开始获取验证码，参数: {}", identifierParams);
 
         // 1. 准备上下文
@@ -364,5 +385,155 @@ public class SmsApiService {
         }
         log.info("接收到手动登录请求：项目ID={}, 线路ID={}", projectId, lineId);
         return moduleUtil.executeLoginAndSave(project);
+    }
+
+    //--------------------特殊api----------------------------------
+
+    // 使用 SimpleClientHttpRequestFactory (基于 JDK HttpURLConnection) 比 Netty 更抗造
+    private final RestTemplate specialRestTemplate = new RestTemplate(new SimpleClientHttpRequestFactory() {{
+        setConnectTimeout(60000); // 连接超时 10秒
+        setReadTimeout(60000);    // 读取超时 60秒 (对应您之前设置的长时间等待)
+    }});
+
+
+    /**
+     * 特殊API：获取手机号
+     * URL格式: http://host:port/GETPHONE
+     * 响应: 11位手机号 或 NO
+     * 修改说明：使用 RestTemplate 替代 WebClient 以解决 PrematureCloseException
+     */
+    private Map<String, String> getPhoneNumberSpecial(Project project) {
+        log.info("调用特殊API获取号码: {}", project.getProjectName());
+        // 基础 URL
+        String requestUrl = "http://154.86.26.17:51777/GETPHONE";
+
+        try {
+            // 1. 设置请求头：Connection: close 明确告知服务器不保持连接
+            HttpHeaders headers = new HttpHeaders();
+            headers.add("Connection", "Keep-Alive");
+            headers.add("User-Agent", "Mozilla/5.0"); // 模拟浏览器
+            HttpEntity<String> entity = new HttpEntity<>(headers);
+
+            // 2. 发起请求 (阻塞式)
+            ResponseEntity<String> response = specialRestTemplate.exchange(
+                    requestUrl,
+                    HttpMethod.GET,
+                    entity,
+                    String.class
+            );
+
+            String result = response.getBody();
+            log.info("调用特殊API获取号码返回响应:{}", result);
+
+            if (StringUtils.hasText(result)) {
+                result = result.trim();
+                // 排除 NO 和 长度不足的情况
+                if ("NO".equalsIgnoreCase(result) || result.length() < 11) {
+                    throw new BusinessException("特殊API无号返回: " + result);
+                }
+                Map<String, String> map = new HashMap<>();
+                map.put("phone", result);
+                // 这里为了兼容通用逻辑，建议把 id 也放进去，虽然特殊api没有id
+                map.put("id", result);
+                return map;
+            }
+        } catch (Exception e) {
+            log.error("特殊API取号异常", e);
+            throw new BusinessException("特殊API取号失败: " + e.getMessage());
+        }
+        throw new BusinessException("特殊API返回空");
+    }
+
+    /**
+     * 特殊API：获取验证码
+     * 逻辑：等待30s -> 请求一次 -> 成功返回码，失败返回null/抛异常
+     * URL格式: http://host:port/GETCODE&phone&token
+     * @param isManual 是否手动触发（手动触发不等待30s）
+     */
+    public String getVerificationCodeSpecial(Project project, Map<String, String> context, boolean isManual) {
+        String phone = context.get("phone");
+        // 【修复 BUG】：原代码是 hasText 就抛异常，应该是 !hasText 才抛异常
+        if (!StringUtils.hasText(phone)) {
+            throw new BusinessException(0, "调用获取验证码接口中，手机号参数为空");
+        }
+
+        String token = project.getSpecialApiToken() == null ? "815BA9C64F8B7C43" : project.getSpecialApiToken();
+        String baseUrl = "http://154.86.26.17:51777";
+        // 构造特殊 URL
+        String fullUrl = String.format("%s/GETCODE&%s&%s", baseUrl, phone, token);
+
+        // 等待逻辑
+        if (!isManual) {
+            int delaySeconds = project.getSpecialApiDelay() != null ? project.getSpecialApiDelay() : 30;
+            log.info("特殊API机制：等待 {} 秒后请求验证码...", delaySeconds);
+            try {
+                TimeUnit.SECONDS.sleep(delaySeconds);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new BusinessException("等待被中断");
+            }
+        }
+
+        log.info("特殊API机制：发起请求 -> {}", fullUrl);
+        try {
+            // 1. 设置请求头
+            HttpHeaders headers = new HttpHeaders();
+            headers.add("Connection", "close");
+            headers.add("User-Agent", "Mozilla/5.0");
+            HttpEntity<String> entity = new HttpEntity<>(headers);
+
+            // 2. 发起请求
+            // 注意：RestTemplate 直接传 String URL 不会自动过度转义特殊字符，适合这种 & 连接的 URL
+            ResponseEntity<String> response = specialRestTemplate.exchange(
+                    fullUrl,
+                    HttpMethod.GET,
+                    entity,
+                    String.class
+            );
+
+            String result = response.getBody();
+            log.info("特殊API响应: {}", result);
+
+            if (StringUtils.hasText(result)) {
+                result = result.trim();
+                if (!"NO".equalsIgnoreCase(result)) {
+                    // 尝试提取验证码
+                    Matcher matcher = Pattern.compile("\\d{4,8}").matcher(result);
+                    if (matcher.find()) {
+                        return matcher.group();
+                    }
+                    // 如果没有匹配到纯数字，返回原始内容
+                    return result;
+                }
+            }
+        } catch (Exception e) {
+            log.error("特殊API获码请求异常: {}", e.getMessage());
+            // 这里不抛出异常，返回 null 代表本次没取到，交给上层逻辑处理退款或重试
+        }
+        return null;
+    }
+
+    // 特殊API查询余额
+    public String getApiBalanceSpecial(Project project) {
+        String token = project.getSpecialApiToken() == null ? "815BA9C64F8B7C43" : project.getSpecialApiToken();
+        String baseUrl = "http://154.86.26.17:51777";
+        String url = String.format("%s/CX&%s", baseUrl, token);
+
+        try {
+            HttpHeaders headers = new HttpHeaders();
+            headers.add("Connection", "close");
+            HttpEntity<String> entity = new HttpEntity<>(headers);
+
+            ResponseEntity<String> response = specialRestTemplate.exchange(
+                    url,
+                    HttpMethod.GET,
+                    entity,
+                    String.class
+            );
+            return response.getBody();
+        } catch (Exception e) {
+            log.error("余额查询失败", e);
+            return "Error";
+        }
     }
 }

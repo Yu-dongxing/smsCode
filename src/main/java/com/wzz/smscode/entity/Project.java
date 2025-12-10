@@ -238,5 +238,38 @@ public class Project extends BaseEntity {
     @ColumnType("TEXT")
     private String projectInfo;
 
+    //---------------对特殊API的配置
+
+    /**
+     * 是否启用MM-Api的接口配置
+     */
+    @ColumnComment("是否启用MM-Api的接口配置")
+    @TableField("special_api_status")
+    @DefaultValue("0")
+    private Boolean specialApiStatus;
+
+    /**
+     * 等待多少s后请求获取验证码的接口
+     */
+    @ColumnComment("等待多少s后请求获取验证码的接口")
+    @DefaultValue("30")
+    @TableField("special_api_delay")
+    private Integer specialApiDelay;
+
+    /**
+     * 取码超时时间
+     */
+    @ColumnComment("获取验证码请求超时时间")
+    @DefaultValue("150")
+    @TableField("special_api_get_code_out_time")
+    private Integer specialApiGetCodeOutTime;
+
+    /**
+     * 特殊api请求token
+     */
+    @ColumnComment("特殊api请求token")
+    @TableField("special_api_token")
+    private String specialApiToken;
+
 
 }

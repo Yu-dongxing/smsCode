@@ -16,6 +16,7 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.util.*;
@@ -121,44 +122,80 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
 
     @Override
     public List<Map<String, Object>> listLinesWithCamelCaseKeyFor(Long userId, String projectId) {
+        // 1. 基础参数校验
         if (userId == null || projectId == null || projectId.isEmpty()) {
             throw new BusinessException("用户ID和项目ID不能为空");
         }
-        // 这里依然保留查询 UserProjectLine 的逻辑，因为这属于“查询用户权限”，
-        // 但具体的 UserProjectLine 数据维护可能由其他逻辑（如分配模板）来触发，而不是由 Project 的 CRUD 触发。
-        LambdaQueryWrapper<UserProjectLine> userLineQuery = new LambdaQueryWrapper<>();
-        userLineQuery.eq(UserProjectLine::getUserId, userId)
-                .eq(UserProjectLine::getProjectId, projectId)
-                .eq(UserProjectLine::isStatus, true)
-                .select(UserProjectLine::getLineId, UserProjectLine::getProjectTableId);
 
-        List<UserProjectLine> userLines = userProjectLineService.list(userLineQuery);
+        // 2. 获取用户信息（为了拿到 templateId 和 projectBlacklist）
+        User user = userService.getById(userId);
+        if (user == null) {
+            throw new BusinessException("用户不存在");
+        }
 
-        if (CollectionUtils.isEmpty(userLines)) {
+        // 如果用户没有绑定模板，则无可用线路
+        if (user.getTemplateId() == null) {
             return Collections.emptyList();
         }
 
-        List<Long> projectTableIds = userLines.stream()
-                .map(UserProjectLine::getProjectTableId)
+        // 3. 从价格模板项中查询该项目下的配置项
+        // 注意：入参 projectId 是 String，数据库是 Long，需要转换
+        LambdaQueryWrapper<PriceTemplateItem> itemQuery = new LambdaQueryWrapper<>();
+        itemQuery.eq(PriceTemplateItem::getTemplateId, user.getTemplateId())
+                .eq(PriceTemplateItem::getProjectId, Long.valueOf(projectId))
+                .select(PriceTemplateItem::getLineId, PriceTemplateItem::getProjectTableId, PriceTemplateItem::getProjectId);
+
+        List<PriceTemplateItem> templateItems = priceTemplateItemService.list(itemQuery);
+
+        if (CollectionUtils.isEmpty(templateItems)) {
+            return Collections.emptyList();
+        }
+
+        // 4. 解析黑名单 (格式: "pid-lid,pid-lid")
+//        Set<String> blacklist = new HashSet<>();
+//        if (StringUtils.hasText(user.getProjectBlacklist())) {
+//            String[] blocks = user.getProjectBlacklist().split(",");
+//            blacklist.addAll(Arrays.asList(blocks));
+//        }
+
+        // 5. 提取项目主表ID，用于查询线路名称和系统开关状态
+        List<Long> projectTableIds = templateItems.stream()
+                .map(PriceTemplateItem::getProjectTableId)
                 .distinct()
                 .collect(Collectors.toList());
 
+        if (CollectionUtils.isEmpty(projectTableIds)) {
+            return Collections.emptyList();
+        }
         LambdaQueryWrapper<Project> projectQuery = new LambdaQueryWrapper<>();
         projectQuery.in(Project::getId, projectTableIds)
-                .select(Project::getId, Project::getLineName, Project::getLineId);
+                .select(Project::getId, Project::getLineName);
 
-        Map<Long, Project> projectInfoMap = this.list(projectQuery).stream()
-                .collect(Collectors.toMap(Project::getId, Function.identity()));
+        Map<Long, String> activeProjectMap = this.list(projectQuery).stream()
+                .collect(Collectors.toMap(Project::getId, Project::getLineName));
 
-        return userLines.stream()
-                .map(userLine -> {
-                    Project projectInfo = projectInfoMap.get(userLine.getProjectTableId());
-                    Map<String, Object> map = new HashMap<>();
-                    map.put("lineId", userLine.getLineId());
-                    map.put("lineName", (projectInfo != null) ? projectInfo.getLineName() : "未知线路");
-                    return map;
-                })
-                .collect(Collectors.toList());
+        // 7. 组装结果
+        List<Map<String, Object>> result = new ArrayList<>();
+
+        for (PriceTemplateItem item : templateItems) {
+            // A. 黑名单过滤
+//            String key = item.getProjectId() + "-" + item.getLineId();
+//            if (blacklist.contains(key)) {
+//                continue;
+//            }
+
+            // B. 系统状态校验 & 名称获取
+            // 如果 activeProjectMap 中不存在该ID，说明该项目在系统层面被禁用了
+            String lineName = activeProjectMap.get(item.getProjectTableId());
+            if (lineName != null) {
+                Map<String, Object> map = new HashMap<>();
+                map.put("lineId", item.getLineId());
+                map.put("lineName", lineName);
+                result.add(map);
+            }
+        }
+
+        return result;
     }
 
     @Override
