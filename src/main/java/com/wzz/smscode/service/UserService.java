@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.wzz.smscode.common.CommonResultDTO;
 import com.wzz.smscode.dto.AddUserProjectPricesRequestDTO;
+import com.wzz.smscode.dto.BatchChargeRequestDTO;
 import com.wzz.smscode.dto.agent.AgentDashboardStatsDTO;
 import com.wzz.smscode.dto.agent.AgentProjectLineUpdateDTO;
 import com.wzz.smscode.dto.agent.AgentProjectPriceDTO;
@@ -96,4 +97,7 @@ public interface UserService extends IService<User> {
      * @param successfulRecord 成功扣费的号码记录
      */
     void processRebates(NumberRecord successfulRecord);
+
+    @Transactional(rollbackFor = Exception.class)
+    int batchFundOperation(BatchChargeRequestDTO dto, Long operatorId);
 }

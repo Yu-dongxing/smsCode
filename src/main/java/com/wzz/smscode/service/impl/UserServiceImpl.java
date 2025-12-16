@@ -6,10 +6,9 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.wzz.smscode.common.CommonResultDTO;
 import com.wzz.smscode.common.Constants;
-import com.wzz.smscode.dto.AddUserProjectPricesRequestDTO;
+import com.wzz.smscode.dto.BatchChargeRequestDTO;
 import com.wzz.smscode.dto.CreatDTO.LedgerCreationDTO;
 import com.wzz.smscode.dto.CreatDTO.UserCreateDTO;
 import com.wzz.smscode.dto.EntityDTO.UserDTO;
@@ -17,7 +16,6 @@ import com.wzz.smscode.dto.LoginDTO.UserLoginDto;
 import com.wzz.smscode.dto.ResultDTO.UserResultDTO;
 import com.wzz.smscode.dto.agent.AgentDashboardStatsDTO;
 import com.wzz.smscode.dto.agent.AgentProjectLineUpdateDTO;
-import com.wzz.smscode.dto.agent.AgentProjectPriceDTO;
 import com.wzz.smscode.dto.project.ProjectPriceDTO;
 import com.wzz.smscode.dto.project.ProjectPriceInfoDTO;
 import com.wzz.smscode.dto.project.ProjectPriceSummaryDTO;
@@ -1185,5 +1183,78 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         log.info("记录ID {} 的返款流程处理完毕。", successfulRecord.getId());
     }
 
+    @Transactional(rollbackFor = Exception.class)
+    @Override
+    public int batchFundOperation(BatchChargeRequestDTO dto, Long operatorId) {
+        // 1. 基础校验
+        if (CollectionUtils.isEmpty(dto.getUserIds())) {
+            throw new BusinessException("请至少选择一个用户");
+        }
+        if (dto.getAmount() == null || dto.getAmount().compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BusinessException("金额必须为正数");
+        }
+
+        boolean isRecharge = Boolean.TRUE.equals(dto.getIsRecharge());
+        boolean isAdmin = (operatorId == 0L);
+
+        // 如果是代理操作，先获取代理信息
+        User operator = null;
+        if (!isAdmin) {
+            operator = this.findAndLockById(operatorId);
+            if (operator == null) throw new BusinessException("操作员不存在");
+            if (operator.getIsAgent() != 1) throw new BusinessException("无权操作");
+
+            // 如果是充值，先检查代理余额是否足够支付所有人的总和
+            if (isRecharge) {
+                BigDecimal totalNeed = dto.getAmount().multiply(new BigDecimal(dto.getUserIds().size()));
+                if (operator.getBalance().compareTo(totalNeed) < 0) {
+                    throw new BusinessException("您的余额不足以支付本次批量充值，共需: " + totalNeed);
+                }
+            }
+        }
+
+        int successCount = 0;
+
+        // 2. 循环处理每一个用户
+        for (Long targetUserId : dto.getUserIds()) {
+            // 防止操作自己
+            if (targetUserId.equals(operatorId)) {
+                continue;
+            }
+
+            // --- A. 操作目标用户 ---
+            LedgerCreationDTO targetLedger = LedgerCreationDTO.builder()
+                    .userId(targetUserId)
+                    .amount(dto.getAmount())
+                    .ledgerType(isRecharge ? 1 : 0) // 1入账，0出账
+                    // 根据操作类型选择资金类型
+                    .fundType(isRecharge ? FundType.AGENT_RECHARGE : FundType.AGENT_DEDUCTION)
+                    .remark((StringUtils.hasText(dto.getRemark()) ? dto.getRemark() : "") +
+                            (isRecharge ? " [批量充值]" : " [批量扣款]"))
+                    .build();
+
+            // 调用核心账本服务 (会自动处理加锁、余额计算、流水写入)
+            userLedgerService.createLedgerAndUpdateBalance(targetLedger);
+
+            // --- B. 如果是代理操作，需反向操作代理账户 ---
+            if (!isAdmin) {
+                // 如果是给下级充值(isRecharge=true)，代理自己要扣钱(ledgerType=0)
+                // 如果是扣下级钱(isRecharge=false)，代理自己要加钱(ledgerType=1)
+                LedgerCreationDTO operatorLedger = LedgerCreationDTO.builder()
+                        .userId(operatorId)
+                        .amount(dto.getAmount())
+                        .ledgerType(isRecharge ? 0 : 1)
+                        .fundType(isRecharge ? FundType.AGENT_DEDUCTION : FundType.AGENT_RECHARGE)
+                        .remark("对用户 " + targetUserId + (isRecharge ? " 批量充值扣除" : " 批量扣款回收"))
+                        .build();
+
+                userLedgerService.createLedgerAndUpdateBalance(operatorLedger);
+            }
+
+            successCount++;
+        }
+
+        return successCount;
+    }
 
 }

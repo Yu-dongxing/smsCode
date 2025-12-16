@@ -128,8 +128,6 @@ public class UserController {
     public CommonResultDTO<BigDecimal> getBalance(
             @RequestParam String userName,
             @RequestParam String password) {
-
-
         return userService.getBalance(userName, password);
     }
 

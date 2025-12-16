@@ -27,6 +27,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import com.jayway.jsonpath.JsonPath;
@@ -137,7 +138,7 @@ public class SmsApiService {
      * @param identifierParams 上一步获取到的所有变量 (包含 phone, id, token 等)
      */
 
-    public String getVerificationCode(Project project, Map<String, String> identifierParams) {
+    public String getVerificationCode(Project project, Map<String, String> identifierParams , Supplier<Boolean> stopCondition) {
 
         if (Boolean.TRUE.equals(project.getSpecialApiStatus())) {
             return getVerificationCodeSpecial(project, identifierParams, false);
@@ -162,6 +163,10 @@ public class SmsApiService {
 
         // 只要当前时间减去开始时间小于超时时间，就继续轮询
         while (System.currentTimeMillis() - startTime < timeout) {
+            if (stopCondition != null && stopCondition.get()) {
+                log.info("检测到外部终止条件（如：已通过其他途径获码或订单已关闭），停止轮询。");
+                throw new BusinessException("已获取验证码码或订单已关闭，请前往号码记录中查询");
+            }
             attempts++;
             try {
                 moduleUtil.executeApi(config, context);
@@ -191,7 +196,7 @@ public class SmsApiService {
     }
 
     /**
-     * 【新增】单次尝试获取验证码 (无轮询)
+     *单次尝试获取验证码 (无轮询)
      * 用于用户手动刷新或状态检查
      *
      * @param project 项目配置
@@ -236,42 +241,37 @@ public class SmsApiService {
      * @return 返回一个 Mono<Boolean>。如果号码可用，返回 true；否则返回 false。
      */
     public Mono<Boolean> checkPhoneNumberAvailability(Project project, String phoneNumber, String countryCode) {
-        // 1. 获取系统配置并检查功能总开关
+        //获取系统配置并检查功能总开关
         SystemConfig systemConfig = systemConfigService.getConfig();
         if (project.getEnableFilter() == null || !project.getEnableFilter() || !systemConfig.getEnableNumberFiltering()) {
             log.info("系统配置：{},项目 [{}] 未开启号码筛选功能，默认号码 [{}] 可用。",systemConfig.getEnableNumberFiltering(), project.getProjectName(), phoneNumber);
             return Mono.just(true); // 功能未开启，默认可用
         }
-
-        // 2. 从系统配置中获取服务器地址列表
+        // 从系统配置中获取服务器地址列表
         List<String> servers = getServerList();
         if (servers.isEmpty()) {
             log.info("号码筛选功能已开启，但系统未配置任何有效的筛选服务器地址。号码 [{}] 将被视为不可用。", phoneNumber);
             return Mono.just(false);
         }
-
         String token = systemConfig.getFilterApiKey();
         String cpid = project.getSelectNumberApiRequestValue();
-
         if (!StringUtils.hasText(token) || !StringUtils.hasText(cpid)) {
             log.info("项目 [{}] 配置错误：缺少必要的API Token或CPID。", project.getProjectName());
             return Mono.error(new BusinessException("项目配置不完整，无法进行号码筛选"));
         }
-
         final String finalCountryCode = StringUtils.hasText(countryCode) ? countryCode : "86";
-        // 4. 【核心逻辑】响应式服务器轮询与请求
+        //响应式服务器轮询与请求
         return Flux.fromIterable(servers)
                 .concatMapDelayError(serverIp -> {
                     // 为当前服务器构建请求
                     URI requestUri = buildRequestUri(serverIp, phoneNumber, token, cpid, finalCountryCode);
-//                    log.info("正在尝试服务器 [{}] 筛选号码 [{}]...", serverIp, phoneNumber);
+                    log.info("正在尝试服务器 [{}] 筛选号码 [{}]...", serverIp, phoneNumber);
                     return webClient.get()
                             .uri(requestUri)
                             .retrieve()
                             .bodyToMono(String.class)
                             .timeout(Duration.ofSeconds(50)) // 根据建议设置45-60秒超时
                             .flatMap(responseBody -> {
-                                // 请求成功，解析响应体
                                 log.info("服务器 [{}] 响应: {}", serverIp, responseBody);
                                 boolean isAvailable = parseAvailabilityResponse(responseBody, cpid);
                                 log.info("号码 [{}] 在服务器 [{}] 的筛选结果: {}", phoneNumber, serverIp, isAvailable ? "可用" : "不可用");
@@ -288,7 +288,6 @@ public class SmsApiService {
      * 根据文档构建请求URI
      */
     private URI buildRequestUri(String serverIp, String phone, String token, String cpid, String cnty) {
-        // 确保服务器地址以 http:// 开头
         String baseUrl = serverIp.startsWith("http") ? serverIp : "http://" + serverIp;
         UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl(baseUrl)
                 .path("/check")
@@ -298,7 +297,6 @@ public class SmsApiService {
         if (StringUtils.hasText(cnty) && !"86".equals(cnty)) {
             builder.queryParam("cnty", cnty);
         }
-
         return builder.build().toUri();
     }
 
@@ -312,40 +310,40 @@ public class SmsApiService {
      */
     private boolean parseAvailabilityResponse(String responseBody, String cpid) {
         if (!StringUtils.hasText(responseBody)) {
-//            log.info("API响应体为空，判定为不可用。");
             return false;
         }
-
         try {
-            // 使用 Jayway JsonPath 解析JSON
             Map<String, Object> responseJson = JsonPath.parse(responseBody).read("$");
-            // 1. 检查 'code' 字段
             Object codeObj = responseJson.get("code");
             if (!(codeObj instanceof Number) || ((Number) codeObj).intValue() != 0) {
-//                log.info("API返回的code不为0 (value: {}), 判定为不可用。响应: {}", codeObj, responseBody);
                 return false;
             }
-            // 2. 检查 'state' 字段
             Object stateObj = responseJson.get("state");
-
             if (!(stateObj instanceof String)) {
-//                log.info("API响应中缺少有效的 'state' 字符串, 判定为不可用。响应: {}", responseBody);
                 return false;
             }
+            // 3. URL解码
             String encodedState = (String) stateObj;
             String state = URLDecoder.decode(encodedState, StandardCharsets.UTF_8.name());
-
-            log.info("解码后的state值为: '{}'", state); // 增加一条日志，方便调试
+            log.info("解码后的state值为: '{}'", state);
+            // 定义不可用的关键词正则：包含 "封禁"、"老号"、"已绑"、"已注"、"异常" 任意一个即视为不可用
+            // .* 表示匹配前后任意字符
+            String unavailableRegex = ".*(封禁|老号|已绑|已注|异常).*";
+            // 定义明确的新号正则
+            String newAccountRegex = ".*(新号|未注).*";
             if ("ks".equalsIgnoreCase(cpid)) {
-                if (state.contains("封禁")) {
+                if (state.matches(unavailableRegex)) {
+                    log.info("检测到不良状态关键词，判定不可用: {}", state);
                     return false;
                 }
                 return true;
             }
-            return "新号".equals(state);
+            // 默认逻辑：必须明确包含 "新号" 或 "未注" 才是 true，其他情况（包括老号）均为 false
+            return state.matches(newAccountRegex);
+
         } catch (Exception e) {
             log.error("解析API响应JSON失败，响应体: '{}'。错误: {}", responseBody, e.getMessage());
-            return false; // 解析失败，安全起见，视为不可用
+            return false;
         }
     }
 
@@ -452,7 +450,6 @@ public class SmsApiService {
      */
     public String getVerificationCodeSpecial(Project project, Map<String, String> context, boolean isManual) {
         String phone = context.get("phone");
-        // 【修复 BUG】：原代码是 hasText 就抛异常，应该是 !hasText 才抛异常
         if (!StringUtils.hasText(phone)) {
             throw new BusinessException(0, "调用获取验证码接口中，手机号参数为空");
         }

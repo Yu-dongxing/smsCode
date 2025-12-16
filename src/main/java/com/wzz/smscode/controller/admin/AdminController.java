@@ -1157,4 +1157,38 @@ public class AdminController {
             return Result.error("获取模板详情失败");
         }
     }
+
+    /**
+     * 批量资金操作（充值/扣款）
+     * 支持管理员给用户批量充值/扣款
+     */
+    @PostMapping("/batch/fund/operate")
+    public Result<?> batchFundOperate(@RequestBody BatchChargeRequestDTO batchDTO) {
+        try {
+            Long operatorId = 0L;
+            int count = userService.batchFundOperation(batchDTO, operatorId);
+            return Result.success("批量操作成功，共处理 " + count + " 个用户");
+        } catch (BusinessException e) {
+            return Result.error(e.getMessage());
+        } catch (Exception e) {
+            log.error("批量资金操作失败", e);
+            return Result.error("系统内部错误，操作失败");
+        }
+    }
+    /**
+     * 根据时间段批量退款（针对已扣费但状态为待取码的记录）
+     */
+    @PostMapping("/batch/refund/by-date")
+    public Result<?> batchRefundByDate(@RequestBody BatchRefundQueryDTO queryDTO) {
+        try {
+            int count = numberRecordService.batchRefundByQuery(queryDTO);
+            return Result.success("批量退款完成，共处理 " + count + " 条记录");
+        } catch (BusinessException e) {
+            return Result.error(e.getMessage());
+        } catch (Exception e) {
+            log.error("批量退款失败", e);
+            return Result.error("系统错误");
+        }
+    }
+
 }

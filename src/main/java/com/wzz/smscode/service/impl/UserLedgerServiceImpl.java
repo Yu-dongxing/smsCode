@@ -182,7 +182,7 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
             throw new IllegalArgumentException("无效的账本类型: " + request.getLedgerType());
         }
 
-        log.info("开始执行创建用户账本中的更新用户余额：原余额：{}，扣款：{},新余额：{}", user.getBalance(), request.getAmount(),newBalance);
+        log.info("开始执行创建用户账本中的更新用户余额：原余额：{}，扣款：{},新余额：{}.手机号：{}", user.getBalance(), request.getAmount(),newBalance,request.getPhoneNumber()==null?"":request.getPhoneNumber());
 
         // 4. 更新用户余额
         user.setBalance(newBalance);

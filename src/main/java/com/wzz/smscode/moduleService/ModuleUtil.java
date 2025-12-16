@@ -230,7 +230,7 @@ public class ModuleUtil {
 
             log.info("准备请求 API >>> {}", requestLog);
 
-            // 6. 获取响应
+            //获取响应
             String responseBody = requestSpec.retrieve()
                     .bodyToMono(String.class)
                     .timeout(Duration.ofSeconds(60))
@@ -238,7 +238,7 @@ public class ModuleUtil {
 
             log.info("API响应 [{}]: {}", finalUrl, responseBody);
 
-            // 7. 执行变量提取 (Extract Rules)
+            //执行变量提取 (Extract Rules)
             if (config.getExtractRules() != null && StringUtils.hasText(responseBody)) {
                 for (ExtractRule rule : config.getExtractRules()) {
                     try {
@@ -255,9 +255,9 @@ public class ModuleUtil {
                     } catch (Exception e) {
                         log.warn("变量提取失败 [Key: {}, Path: {}]: {}", rule.getTargetVariable(), rule.getJsonPath(), e.getMessage());
                         if(debug) {
-                            throw new BusinessException(0,"未获取到手机号，返回响应："+responseBody);
+                            throw new BusinessException(0,"未获取到数据，返回响应："+responseBody);
                         }else {
-                            throw new BusinessException(0,"未获取到手机号");
+                            throw new BusinessException(0,"未获取到数据");
                         }
                     }
                 }

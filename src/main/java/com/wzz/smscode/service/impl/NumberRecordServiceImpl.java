@@ -16,7 +16,6 @@ import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.mapper.NumberRecordMapper;
 import com.wzz.smscode.moduleService.SmsApiService;
 import com.wzz.smscode.service.*;
-import com.wzz.smscode.util.BalanceUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -36,24 +35,23 @@ import java.time.LocalDateTime;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.*;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Slf4j
 @Service
 public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, NumberRecord> implements NumberRecordService {
-
     @Autowired private UserService userService;
     @Autowired private ProjectService projectService;
     @Autowired private UserLedgerService ledgerService;
-
-    @Lazy @Autowired private NumberRecordService self;
-
+    @Autowired @Lazy private NumberRecordService self;
     @Autowired private SystemConfigService systemConfigService;
-
-    // 注入重构后的通用 API 服务
+    @Autowired private UserLedgerService userLedgerService; // 引入账本服务
+    @Autowired @Lazy private PriceTemplateService priceTemplateService;
     @Autowired private SmsApiService smsApiService;
     @Autowired private UserProjectLineService userProjectLineService;
+
 
     private static final Pattern PHONE_NUMBER_PATTERN = Pattern.compile("^1[3-9]\\d{9}$");
 
@@ -68,12 +66,32 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         return count > 0;
     }
 
-    @Autowired
-    @Lazy
-    private PriceTemplateService priceTemplateService;
 
 
+
+    /**
+     * 恢复中断的任务
+     */
+    @Async("taskExecutor")
     @Transactional
+    @Override
+    public void recoverInterruptedTask(NumberRecord record) {
+        //计算已经消耗的时间
+        LocalDateTime now = LocalDateTime.now();
+        long elapsedSeconds = Duration.between(record.getCreateTime(), now).getSeconds();
+        long maxWaitSeconds = 15 * 60;
+        if (elapsedSeconds > maxWaitSeconds) {
+            log.info("恢复任务[VT]: 记录[{}] 在宕机期间已超时，执行退款。", record.getId());
+
+            this.updateRecordAfterRetrieval(record, false, null);
+        } else {
+            log.info("恢复任务[VT]: 记录[{}] 尚在有效期，重新加入轮询队列。", record.getId());
+            self.retrieveCode(record.getId(), null);
+        }
+    }
+
+
+//    @Transactional
     @Override
     public CommonResultDTO<String> getNumber(String userName, String password, String projectId, Integer lineId) {
         // 1. 身份验证与余额检查
@@ -178,50 +196,129 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         if (!numberFoundAndVerified || successfulIdentifier == null) {
             return CommonResultDTO.error(Constants.ERROR_NO_CODE, "获取可用号码失败，请稍后重试");
         }
-        String phoneNumber = successfulIdentifier.get("phone");
+//        String phoneNumber = successfulIdentifier.get("phone");
 
-        // 1. 执行扣款账本 (LedgerType=0 出账, FundType=业务扣费)
+//        // 1. 执行扣款账本 (LedgerType=0 出账, FundType=业务扣费)
+//        LedgerCreationDTO deductionDto = LedgerCreationDTO.builder()
+//                .userId(user.getId())
+//                .amount(price)
+//                .ledgerType(0) // 出账
+//                .fundType(FundType.BUSINESS_DEDUCTION)
+//                .remark("取号预扣费")
+//                .phoneNumber(phoneNumber)
+//                .lineId(lineId)
+//                .projectId(projectId)
+//                .build();
+//
+//        // 此方法会扣除余额，如果余额不足会抛出异常回滚事务
+//        BigDecimal newBalance = ledgerService.createLedgerAndUpdateBalance(deductionDto);
+//
+//        // 2. 写入号码记录
+//        NumberRecord record = new NumberRecord();
+//        record.setUserId(user.getId());
+//        record.setProjectId(projectId);
+//        record.setLineId(lineId);
+//        record.setUserName(user.getUserName());
+//        record.setPhoneNumber(phoneNumber);
+//        record.setApiPhoneId(successfulIdentifier.get("id"));
+//        record.setStatus(0); // 待取码
+//        record.setCharged(1); // 【关键】标记为已扣费
+//        record.setPrice(price);
+//        record.setCostPrice(costPrice);
+//        record.setBalanceBefore(user.getBalance()); // 扣费前余额
+//        record.setBalanceAfter(newBalance);         // 扣费后余额
+//        record.setGetNumberTime(LocalDateTime.now());
+//        record.setProjectName(projectT.getProjectName());
+//        this.save(record);
+//
+//        final Long recordId = record.getId();
+//        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+//            @Override
+//            public void afterCommit() {
+//                try {
+//                    self.retrieveCode(recordId, null);
+//                } catch (Exception e) {
+//                    log.error("取号任务启动异常，记录ID: {}", recordId, e);
+//                }
+//            }
+//        });
+//
+//        userService.updateUserStats(user.getId());
+        try {
+            return self.createOrderTransaction(
+                    user.getId(),
+                    projectId,
+                    lineId,
+                    price,
+                    costPrice,
+                    successfulIdentifier,
+                    projectT.getProjectName()
+            );
+        } catch (BusinessException e) {
+            return CommonResultDTO.error(Constants.ERROR_INSUFFICIENT_BALANCE, e.getMessage());
+        }
+//        return CommonResultDTO.success("取号成功，请稍后查询验证码", successfulIdentifier.get("phone"));
+    }
+
+
+    /**
+     * 专门处理数据库事务的方法
+     * 只有这个方法上有 @Transactional
+     */
+    @Transactional(rollbackFor = Exception.class)
+    @Override
+    public CommonResultDTO<String> createOrderTransaction(Long userId, String projectId, Integer lineId,
+                                                          BigDecimal price, BigDecimal costPrice,
+                                                          Map<String, String> successfulIdentifier, String projectName) {
+        // 1. 扣费逻辑 (UserLedgerService 内部也会有事务，会加入到当前事务中)
+        User user = userService.getById(userId);
+        // 双重检查余额(可选)
+        if (user.getBalance().compareTo(price) < 0) {
+            throw new BusinessException("余额不足");
+        }
         LedgerCreationDTO deductionDto = LedgerCreationDTO.builder()
-                .userId(user.getId())
+                .userId(userId)
                 .amount(price)
                 .ledgerType(0) // 出账
                 .fundType(FundType.BUSINESS_DEDUCTION)
                 .remark("取号预扣费")
-                .phoneNumber(phoneNumber)
+                .phoneNumber(successfulIdentifier.get("phone"))
                 .lineId(lineId)
                 .projectId(projectId)
                 .build();
-
-        // 此方法会扣除余额，如果余额不足会抛出异常回滚事务
+        // 执行扣款
         BigDecimal newBalance = ledgerService.createLedgerAndUpdateBalance(deductionDto);
-
         // 2. 写入号码记录
         NumberRecord record = new NumberRecord();
-        record.setUserId(user.getId());
+        record.setUserId(userId);
         record.setProjectId(projectId);
         record.setLineId(lineId);
         record.setUserName(user.getUserName());
-        record.setPhoneNumber(phoneNumber);
+        record.setPhoneNumber(successfulIdentifier.get("phone"));
         record.setApiPhoneId(successfulIdentifier.get("id"));
-        record.setStatus(0); // 待取码
-        record.setCharged(1); // 【关键】标记为已扣费
+        record.setStatus(0);
+        record.setCharged(1);
         record.setPrice(price);
         record.setCostPrice(costPrice);
-        record.setBalanceBefore(user.getBalance()); // 扣费前余额
-        record.setBalanceAfter(newBalance);         // 扣费后余额
+        record.setBalanceBefore(user.getBalance());
+        record.setBalanceAfter(newBalance);
         record.setGetNumberTime(LocalDateTime.now());
-        record.setProjectName(projectT.getProjectName());
-        this.save(record);
-
+        record.setProjectName(projectName);
+        this.save(record); // 落库
         final Long recordId = record.getId();
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                self.retrieveCode(recordId, null);
+                try {
+                    self.retrieveCode(recordId, null);
+                } catch (Exception e) {
+                    log.error("取号任务启动异常，记录ID: {}", recordId, e);
+                }
             }
         });
 
-        userService.updateUserStats(user.getId());
+        // 4. 更新用户统计等其他操作
+        userService.updateUserStats(userId);
         return CommonResultDTO.success("取号成功，请稍后查询验证码", successfulIdentifier.get("phone"));
     }
 
@@ -229,51 +326,55 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
      * 异步轮询取码
      */
     @Async("taskExecutor")
-    @Transactional
     @Override
     public void retrieveCode(Long numberId, String unusedIdentifier) {
         NumberRecord record = this.getById(numberId);
-        // 如果记录不存在或已经完结（成功/超时/无效），则跳过
         if (record == null || record.getStatus() >= 2) {
             return;
         }
-
         // 更新为取码中
         if (record.getStatus() == 0) {
             record.setStatus(1);
             record.setStartCodeTime(LocalDateTime.now());
             this.updateById(record);
         }
-
         Project project = projectService.getProject(record.getProjectId(), record.getLineId());
         Map<String, String> context = new HashMap<>();
         context.put("phone", record.getPhoneNumber());
         if (StringUtils.hasText(record.getApiPhoneId())) {
             context.put("id", record.getApiPhoneId());
         }
-
         String result = null;
         boolean isSuccess = false;
         try {
             if (Boolean.TRUE.equals(project.getSpecialApiStatus())) {
                 log.info("记录[{}] 进入特殊获码流程 (等待{}s -> 请求一次)", numberId, project.getSpecialApiDelay());
-                // 调用特殊方法，传入 isManual=false，内部会执行 sleep 等待
-                result = smsApiService.getVerificationCodeSpecial(project, context, false);
-
-                if (StringUtils.hasText(result) && !result.equals("NO")) {
-                    isSuccess = true;
-                } else {
-                    log.info("记录[{}] 特殊流程获码失败，返回: {}", numberId, result);
+                try {
+                    result = smsApiService.getVerificationCodeSpecial(project, context, false);
+                    if (StringUtils.hasText(result) && !result.equalsIgnoreCase("NO")) {
+                        isSuccess = true;
+                    } else {
+                        log.info("记录[{}] 特殊API返回无码或NO，准备退款", numberId);
+                        isSuccess = false;
+                    }
+                } catch (Exception e) {
+                    log.error("记录[{}] 特殊API请求发生异常: {}", numberId, e.getMessage());
+                    isSuccess = false; // 异常视为失败
                 }
             }else {
-                // 调用API获取验证码
-                result = smsApiService.getVerificationCode(project, context);
+                // 每次循环都会执行这个 Lambda。如果数据库中状态变成了 2(成功) 或 3(失败)，则停止轮询
+                Supplier<Boolean> stopCondition = () -> {
+                    NumberRecord current = baseMapper.selectById(numberId);
+                    return current == null || current.getStatus() != 1;
+                };
+                // 传入停止条件
+                result = smsApiService.getVerificationCode(project, context, stopCondition);
                 if (StringUtils.hasText(result) && !result.contains("等待")) {
                     isSuccess = true;
                 }
             }
         } catch (Exception e) {
-            log.warn("轮询获码异常: {}", e.getMessage());
+            log.info("轮询获码异常: {}", e.getMessage());
         }
         self.updateRecordAfterRetrieval(record, isSuccess, result);
     }
@@ -287,47 +388,43 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
      */
     @Override
     public CommonResultDTO<String> getCode(String userName, String password, String identifier, String projectId, String lineId) {
-        // 1. 身份校验
+        //份校验
         User user = userService.authenticateUserByUserName(userName, password);
         if (user == null) return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED, "用户验证失败");
-
-        // 2. 查询最新记录
+        //查询最新记录
         NumberRecord record = this.getOne(new LambdaQueryWrapper<NumberRecord>()
                 .eq(NumberRecord::getPhoneNumber, identifier)
                 .eq(NumberRecord::getUserId, user.getId())
                 .eq(NumberRecord::getProjectId, projectId)
-                // 确保查询的是最近的未完结或刚完结的记录
                 .orderByDesc(NumberRecord::getGetNumberTime)
                 .last("LIMIT 1"));
-
         if (record == null) return CommonResultDTO.error(Constants.ERROR_NO_CODE, "无记录");
-
-        // 3. 如果已经是成功状态，直接返回库里的码
+        //如果已经是成功状态，直接返回库里的码
         if (record.getStatus() == 2 && StringUtils.hasText(record.getCode())) {
             return CommonResultDTO.success("获取成功", record.getCode());
         }
-
-        // 4. 如果是已退款/已失效状态，提示已结束
+        //如果是已退款/已失效状态，提示已结束
         if (record.getStatus() == 3 || record.getStatus() == 4 || record.getCharged() == 2) {
             return CommonResultDTO.error(Constants.ERROR_NO_CODE, "订单已失效或已退款，请重新取号");
         }
-
+        if (record.getStatus() ==1) {
+            return CommonResultDTO.error(Constants.ERROR_NO_CODE,"后台正在取码中，请稍后...");
+        }
         Project project = projectService.getProject(record.getProjectId(), record.getLineId());
 
-        // ================== Special API 核心修改逻辑开始 ==================
+        // ================== 特殊API ==================
         if (Boolean.TRUE.equals(project.getSpecialApiStatus())) {
-            // A. 获取配置时间参数
-            // 默认等待30秒
+            //获取配置时间参数
+            //默认等待30秒
             long delaySeconds = project.getSpecialApiDelay() != null ? project.getSpecialApiDelay() : 30;
-            // 默认超时150秒
+            //默认超时150秒
             long timeoutSeconds = project.getSpecialApiGetCodeOutTime() != null ? project.getSpecialApiGetCodeOutTime() : 150;
-            // 总允许等待时间 = 等待延迟 + 接收超时
+            //总允许等待时间 = 等待延迟 + 接收超时
             long maxWaitSeconds = delaySeconds + timeoutSeconds;
-            // B. 计算已过去的时间 (当前时间 - 取号时间)
+            //计算已过去的时间 (当前时间 - 取号时间)
             Duration duration = Duration.between(record.getGetNumberTime(), LocalDateTime.now());
             long elapsedSeconds = duration.getSeconds();
-
-            // C. 检查是否超时
+            //检查是否超时
             if (elapsedSeconds > maxWaitSeconds) {
                 if (record.getCharged() == 1) {
                     log.info("用户[{}]手动查询发现记录[{}]超时 (已耗时{}s > 允许{}s)，触发退款",
@@ -343,16 +440,14 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                         "系统正在自动获取中(请勿频繁刷新)，剩余等待时间: " + remaining + "秒");
             }
         }
-        // ================== Special API 核心修改逻辑结束 ==================
+        // ================== 特殊API ==================END
 
-
-        // 5. 普通API的处理逻辑（保持原有逻辑，允许尝试调用一次）
+        //允许尝试调用一次
         Map<String, String> context = new HashMap<>();
         context.put("phone", record.getPhoneNumber());
         if (StringUtils.hasText(record.getApiPhoneId())) {
             context.put("id", record.getApiPhoneId());
         }
-
         Optional<String> codeOpt = smsApiService.fetchVerificationCodeOnce(project, context);
         if (codeOpt.isPresent()) {
             String code = codeOpt.get();
@@ -365,14 +460,13 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                 }
             }
         }
-
-        // 普通API的超时退款检查 (兼容原有逻辑)
+        // 普通API的超时退款检查
         long minutesElapsed = Duration.between(record.getGetNumberTime(), LocalDateTime.now()).toMinutes();
-        if (record.getCharged() == 1 && minutesElapsed >= 15) {
+        //如果记录的扣费状态为已扣费并且当前超时15分钟并且记录中没有code就执行退款
+        if (record.getCharged() == 1 && minutesElapsed >= 15 && !StringUtils.hasText(record.getCode())) {
             self.updateRecordAfterRetrieval(record, false, null);
             return CommonResultDTO.error(Constants.ERROR_NO_CODE, "获取超时，已自动退款");
         }
-
         return CommonResultDTO.error(Constants.ERROR_NO_CODE, "尚未获取到验证码，请稍后重试");
     }
 
@@ -442,15 +536,10 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
 
                 BigDecimal balanceAfterRefund = ledgerService.createLedgerAndUpdateBalance(refundDto);
                 latestRecord.setBalanceAfter(balanceAfterRefund);
-
                 this.updateById(latestRecord);
                 userService.updateUserStats(latestRecord.getUserId());
             }
         }
-    }
-
-    public void updateRecordAfterRetrieval_(NumberRecord record, boolean isSuccess, String result) {
-        self.updateRecordAfterRetrieval(record, isSuccess, result);
     }
 
 
@@ -931,5 +1020,69 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         finalPage.setRecords(dtoList);
 
         return finalPage;
+    }
+    @Transactional(rollbackFor = Exception.class)
+    @Override
+    public int batchRefundByQuery(BatchRefundQueryDTO queryDTO) {
+        if (queryDTO.getStartTime() == null || queryDTO.getEndTime() == null) {
+            throw new BusinessException("必须指定退款的时间范围");
+        }
+        if (queryDTO.getCharged() == null || queryDTO.getStatus() == null ){
+            throw new BusinessException(0,"请求参数中的状态码不正确");
+        }
+
+        // 1. 查询符合条件的记录
+        // 条件：时间范围内 + 状态为0(待取码) + 扣费状态为1(已扣费)
+        LambdaQueryWrapper<NumberRecord> wrapper = new LambdaQueryWrapper<>();
+        wrapper.ge(NumberRecord::getGetNumberTime, queryDTO.getStartTime())
+                .le(NumberRecord::getGetNumberTime, queryDTO.getEndTime())
+                .eq(NumberRecord::getStatus, queryDTO.getStatus()) // 0: 待取码 (根据你的代码逻辑)
+                .eq(NumberRecord::getCharged, queryDTO.getCharged()); // 1: 已扣费
+
+        if (StringUtils.hasText(queryDTO.getProjectId())) {
+            wrapper.eq(NumberRecord::getProjectId, queryDTO.getProjectId());
+        }
+
+        List<NumberRecord> records = this.list(wrapper);
+        if (CollectionUtils.isEmpty(records)) {
+            return 0;
+        }
+
+        int successCount = 0;
+        List<NumberRecord> recordsToUpdate = new ArrayList<>();
+
+        // 2. 遍历每一条记录进行退款
+        for (NumberRecord record : records) {
+            try {
+                // A. 执行资金退还 (使用统一的 createLedgerAndUpdateBalance)
+                LedgerCreationDTO refundLedger = LedgerCreationDTO.builder()
+                        .userId(record.getUserId())
+                        .amount(record.getPrice()) // 退还该记录实际扣除的金额
+                        .ledgerType(1) // 1: 入账 (加钱)
+                        .fundType(FundType.ADMIN_OPERATION) // 假设你有 REFUND 枚举，如果没有，用 ADMIN_RECHARGE 或其他
+                        .remark("记录异常批量退款，ID: " + record.getId())
+                        .projectId(record.getProjectId())
+                        .lineId(record.getLineId())
+                        .phoneNumber(record.getPhoneNumber())
+                        .build();
+
+                userLedgerService.createLedgerAndUpdateBalance(refundLedger);
+                record.setStatus(4);
+                record.setCharged(2);
+                record.setRemark(record.getRemark() + " [管理员批量退款]");
+                recordsToUpdate.add(record);
+                successCount++;
+            } catch (Exception e) {
+                log.error("记录 {} 退款失败: {}", record.getId(), e.getMessage());
+                throw new BusinessException("退款中断，记录ID " + record.getId() + " 处理失败：" + e.getMessage());
+            }
+        }
+
+        // 3. 批量更新记录状态
+        if (!recordsToUpdate.isEmpty()) {
+            this.updateBatchById(recordsToUpdate);
+        }
+
+        return successCount;
     }
 }

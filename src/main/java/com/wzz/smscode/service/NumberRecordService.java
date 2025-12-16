@@ -9,13 +9,24 @@ import com.wzz.smscode.entity.NumberRecord;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
 
 public interface NumberRecordService extends IService<NumberRecord> {
 
+    @Async("taskExecutor")
     @Transactional
+    void recoverInterruptedTask(NumberRecord record);
+
+//    @Transactional
     CommonResultDTO<String> getNumber(String userName, String password, String projectId, Integer lineId);
+
+    @Transactional(rollbackFor = Exception.class)
+    CommonResultDTO<String> createOrderTransaction(Long userId, String projectId, Integer lineId,
+                                                   BigDecimal price, BigDecimal costPrice,
+                                                   Map<String, String> successfulIdentifier, String projectName);
 
     @Async("taskExecutor")
     void retrieveCode(Long numberId, String identifier);
@@ -51,4 +62,7 @@ public interface NumberRecordService extends IService<NumberRecord> {
     IPage<NumberDTO> listSubordinateRecordsForAgent(Long agentId, SubordinateNumberRecordQueryDTO queryDTO);
 
     IPage<UserLineStatsDTO> getUserLineStats(UserLineStatsRequestDTO requestDTO, Long agentId);
+
+    @Transactional(rollbackFor = Exception.class)
+    int batchRefundByQuery(BatchRefundQueryDTO queryDTO);
 }
