@@ -1085,4 +1085,52 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
 
         return successCount;
     }
+
+    /**
+     * 物理删除号码记录（按天数删除）
+     *
+     * @param operatorId   当前操作人ID
+     * @param targetUserId 目标用户ID
+     * @param days         保留天数
+     * @param isAdmin      是否为管理员操作
+     */
+    @Transactional(rollbackFor = Exception.class)
+    @Override
+    public void deleteNumberRecordByDays(Long operatorId, Long targetUserId, Integer days, boolean isAdmin) {
+        // 1. 参数校验
+        if (days == null || days < 0) {
+            throw new BusinessException("天数参数非法");
+        }
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime deleteBeforeTime;
+        // 2. 权限与天数限制
+        if (!isAdmin) {
+            // 普通用户校验
+            if (targetUserId == null || !operatorId.equals(targetUserId)) {
+                throw new BusinessException("权限不足：只能清理自己的记录");
+            }
+        }
+        deleteBeforeTime = now.minusDays(days);
+        // 3. 构造删除条件
+        LambdaQueryWrapper<NumberRecord> wrapper = new LambdaQueryWrapper<>();
+        if (targetUserId != null) {
+            wrapper.eq(NumberRecord::getUserId, targetUserId);
+        }
+        // 核心条件：取号时间 <= 临界点
+        wrapper.le(NumberRecord::getCreateTime, deleteBeforeTime);
+        wrapper.notIn(NumberRecord::getStatus, 0, 1);
+        // 4. 执行清理
+        long count = this.count(wrapper);
+        if (count == 0) {
+            return;
+        }
+        int rows = baseMapper.delete(wrapper);
+        // 5. 记录日志
+        log.info("【号码记录清理】操作人: {}, 目标用户: {}, 保留天数: {}, 清理条数: {}, 临界时间: {}",
+                isAdmin ? "管理员(" + operatorId + ")" : "用户(" + operatorId + ")",
+                targetUserId == null ? "全系统" : targetUserId,
+                days,
+                rows,
+                deleteBeforeTime);
+    }
 }

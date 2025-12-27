@@ -32,5 +32,8 @@ public interface UserLedgerService extends IService<UserLedger> {
 
     BigDecimal getTotalProfit();
 
+    @Transactional(rollbackFor = Exception.class)
+    void deleteLedgerByDays(Long operatorId, Long targetUserId, Integer days, boolean isAdmin);
+
     IPage<LedgerDTO> listAgentOwnLedger(Long userId, String userName, String remark, Date startTime, Date endTime, Integer fundType, Integer ledgerType, Page<UserLedger> page);
 }

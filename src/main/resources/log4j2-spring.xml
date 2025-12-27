@@ -1,55 +1,62 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- status="warn" 表示Log4j2本身的日志级别 -->
-<Configuration status="warn">
+<!--
+    monitorInterval="30": 30秒热加载配置文件
+-->
+<Configuration status="warn" monitorInterval="30">
+
+    <Properties>
+        <Property name="LOG_PATH">logs</Property>
+        <!--
+             注意：在异步日志中，尽量减少 %L (行号), %C (类名), %M (方法名) 的使用。
+             因为获取堆栈信息是非常耗时的操作，会显著抵消异步带来的性能提升。
+        -->
+        <Property name="LOG_PATTERN">%d{yyyy-MM-dd HH:mm:ss.SSS} [%t] %-5level %logger{36} - %msg%n</Property>
+    </Properties>
+
     <Appenders>
-        <!-- 1. 控制台输出 -->
+        <!-- 控制台输出 -->
         <Console name="Console" target="SYSTEM_OUT">
-            <!--
-                优化的彩色日志输出格式：
-                - %d{yyyy-MM-dd HH:mm:ss.SSS}: 日期和时间
-                - %highlight{...}: 颜色高亮块，根据日志级别应用不同颜色
-                - %-5level: 日志级别，左对齐并占用5个字符
-                - [%t]: 线程名
-                - %logger{36}: Logger 名称，最长36个字符
-                - %msg%n: 日志消息和换行符
-                - disableAnsi="false": 确保ANSI颜色代码不会被禁用 (在大多数现代终端中是默认行为)
-            -->
-            <PatternLayout pattern="%style{%d{yyyy-MM-dd HH:mm:ss.SSS}}{blue} %highlight{[%-5level]}{FATAL=red blink, ERROR=red, WARN=yellow bold, INFO=green, DEBUG=cyan, TRACE=white} [%t] %logger{36} - %msg%n" disableAnsi="false"/>
+            <PatternLayout disableAnsi="false"
+                           pattern="%style{%d{yyyy-MM-dd HH:mm:ss.SSS}}{blue} %highlight{[%-5level]}{FATAL=red blink, ERROR=red, WARN=yellow bold, INFO=green, DEBUG=cyan, TRACE=white} [%t] %logger{36} - %msg%n"/>
         </Console>
 
-        <!-- 2. 滚动文件输出：按文件大小分割 -->
+        <!-- 滚动文件输出 -->
         <RollingFile name="RollingFile"
-                     fileName="logs/app.log"
-                     filePattern="logs/app-%i.log.gz">
-            <PatternLayout>
-                <Pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%t] %-5level %logger{36} - %msg%n</Pattern>
-            </PatternLayout>
+                     fileName="${LOG_PATH}/app.log"
+                     filePattern="${LOG_PATH}/$${date:yyyy-MM}/app-%d{yyyy-MM-dd}-%i.log.gz">
+            <PatternLayout pattern="${LOG_PATTERN}" />
             <Policies>
-                <!--
-                    OnStartupTriggeringPolicy: 每次启动时都会创建一个新的日志文件。
-                    SizeBasedTriggeringPolicy: 定义了触发滚动的条件，这里是当文件大小达到 100 MB 时。
-                -->
                 <OnStartupTriggeringPolicy />
                 <SizeBasedTriggeringPolicy size="100 MB" />
+                <TimeBasedTriggeringPolicy interval="1" modulate="true" />
             </Policies>
-            <!--
-                DefaultRolloverStrategy: 定义了滚动的策略。
-                max="200" 表示最多保留 200 个滚动日志文件。当超过这个数量时，最旧的文件将被删除。
-            -->
-            <DefaultRolloverStrategy max="200" />
+            <DefaultRolloverStrategy max="100">
+                <Delete basePath="${LOG_PATH}" maxDepth="2">
+                    <IfFileName glob="*/app-*.log.gz" />
+                    <IfLastModified age="30d" />
+                </Delete>
+            </DefaultRolloverStrategy>
         </RollingFile>
     </Appenders>
 
     <Loggers>
         <!--
-            root logger: 所有日志记录器的根节点。
-            level="info" 表示默认记录 info 及以上级别的日志。
-            将 Console 和 RollingFile 两个 Appender 关联到 root logger，
-            这样日志会同时输出到控制台和文件。
+            使用 AsyncRoot 替换 Root
+            includeLocation="false":
+                - 这是关键性能开关！
+                - 如果设为 true，Log4j2 会获取类名、方法名和行号，这会导致性能下降 10-100 倍。
+                - 在生产环境高并发下，强烈建议设为 false。
         -->
-        <Root level="info">
+        <AsyncRoot level="info" includeLocation="false">
             <AppenderRef ref="Console"/>
             <AppenderRef ref="RollingFile"/>
-        </Root>
+        </AsyncRoot>
+
+        <!--
+            如果你针对特定的包（如自己的业务代码）需要特殊处理，可以这样写：
+            <AsyncLogger name="com.yourcompany.service" level="debug" additivity="false">
+                <AppenderRef ref="RollingFile"/>
+            </AsyncLogger>
+        -->
     </Loggers>
 </Configuration>

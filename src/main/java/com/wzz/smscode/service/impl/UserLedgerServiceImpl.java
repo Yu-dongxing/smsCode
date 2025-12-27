@@ -317,6 +317,59 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
         return BigDecimal.ZERO;
     }
 
+
+    /**
+     * 物理删除账本记录（按天数删除）
+     *
+     * @param operatorId   当前操作人ID
+     * @param targetUserId 目标用户ID（管理员可为 null，表示清理全表符合天数的数据）
+     * @param days         保留的天数（例如输入 7，表示删除 7 天前的记录）
+     * @param isAdmin      是否为管理员操作
+     */
+    @Transactional(rollbackFor = Exception.class)
+    @Override
+    public void deleteLedgerByDays(Long operatorId, Long targetUserId, Integer days, boolean isAdmin) {
+        // 1. 参数校验
+        if (days == null || days < 0) {
+            throw new BusinessException("天数参数非法");
+        }
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime deleteBeforeTime;
+        // 2. 权限与天数限制逻辑
+        if (!isAdmin) {
+            // 普通用户校验：只能删自己的
+            if (targetUserId == null || !operatorId.equals(targetUserId)) {
+                throw new BusinessException("权限不足：只能清理自己的账本");
+            }
+            deleteBeforeTime = now.minusDays(days);
+        } else {
+            // 管理员校验：如果 targetUserId 为空，代表清理全系统 N 天前的记录
+            deleteBeforeTime = now.minusDays(days);
+        }
+        // 3. 构造删除条件
+        LambdaQueryWrapper<UserLedger> wrapper = new LambdaQueryWrapper<>();
+        // 如果 targetUserId 不为空，则指定用户；如果为空（且是管理员），则作用于全表
+        if (targetUserId != null) {
+            wrapper.eq(UserLedger::getUserId, targetUserId);
+        }
+        // 核心条件：时间 <= 计算出的临界点
+        wrapper.le(UserLedger::getCreateTime, deleteBeforeTime);
+        // 4. 执行清理
+        long count = this.count(wrapper);
+        if (count == 0) {
+            log.info("未找到符合清理条件的账本记录 (天数: {}, 临界时间: {})", days, deleteBeforeTime);
+            return;
+        }
+        int rows = baseMapper.delete(wrapper);
+        // 5. 记录审计日志
+        log.warn("【账本物理清理】操作人: {}, 目标用户: {}, 保留天数: {}, 清理条数: {}, 临界时间点: {}",
+                isAdmin ? "管理员(" + operatorId + ")" : "用户(" + operatorId + ")",
+                targetUserId == null ? "全系统" : targetUserId,
+                days,
+                rows,
+                deleteBeforeTime);
+    }
+
     @Override
     public IPage<LedgerDTO> listAgentOwnLedger(Long userId, String userName, String remark, Date startTime, Date endTime, Integer fundType, Integer ledgerType, Page<UserLedger> page) {
         // 1. 构建查询条件
@@ -361,5 +414,7 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
         Page<UserLedger> ledgerPage = this.page(page, wrapper);
         return ledgerPage.convert(this::convertToDTO);
     }
+
+
 
 }

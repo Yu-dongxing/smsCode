@@ -1191,4 +1191,59 @@ public class AdminController {
         }
     }
 
+    /**
+     * 管理员：物理清理账本记录
+     *
+     * @param days         保留天数（如传30，则删除30天前的记录）
+     * @param targetUserId 目标用户ID（可选。如果不传，则清理全系统所有人的记录）
+     */
+    @SaCheckLogin // 确保已登录管理员
+    @PostMapping("/ledger/clear-physical")
+    public Result<?> clearLedgerPhysical(
+            @RequestParam @NotNull Integer days,
+            @RequestParam(required = false) Long targetUserId) {
+        // 1. 基本校验
+        if (days < 0) {
+            return Result.error("天数不能为负数");
+        }
+        try {
+            // 2. 获取当前登录的管理员ID（你的系统里管理员ID为 "0"）
+            Long adminId = Long.valueOf(StpUtil.getLoginId().toString());
+            userLedgerService.deleteLedgerByDays(adminId, targetUserId, days, true);
+            String scope = (targetUserId == null) ? "全系统" : "用户ID:" + targetUserId;
+            log.warn("【系统维护】管理员 {} 执行了账本物理清理，范围: {}, 保留天数: {}", adminId, scope, days);
+            return Result.success("清理成功", "已清理 " + scope + " " + days + " 天前的记录");
+        } catch (Exception e) {
+            log.error("管理员清理账本失败", e);
+            return Result.error("清理失败：" + e.getMessage());
+        }
+    }
+
+    /**
+     * 管理员：物理清理号码记录
+     *
+     * @param days         保留天数
+     * @param targetUserId 目标用户ID（可选）
+     */
+    @SaCheckLogin
+    @PostMapping("/number/clear-physical")
+    public Result<?> clearNumberRecordPhysical(
+            @RequestParam @NotNull Integer days,
+            @RequestParam(required = false) Long targetUserId) {
+        if (days < 0) {
+            return Result.error("天数不能为负数");
+        }
+        try {
+            Long adminId = Long.valueOf(StpUtil.getLoginId().toString());
+            numberRecordService.deleteNumberRecordByDays(adminId, targetUserId, days, true);
+            String scope = (targetUserId == null) ? "全系统" : "用户ID:" + targetUserId;
+            log.warn("【系统维护】管理员 {} 执行了号码记录物理清理，范围: {}, 保留天数: {}", adminId, scope, days);
+
+            return Result.success("清理成功", "已清理 " + scope + " " + days + " 天前的非进行中记录");
+        } catch (Exception e) {
+            log.error("管理员清理号码记录失败", e);
+            return Result.error("清理失败：" + e.getMessage());
+        }
+    }
+
 }

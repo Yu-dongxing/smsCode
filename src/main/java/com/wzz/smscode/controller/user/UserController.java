@@ -339,4 +339,93 @@ public class UserController {
             return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR,"检测失败");
         }
     }
+
+    /**
+     * 清理历史账本记录
+     *
+     * @param userName 用户名
+     * @param password 密码
+     * @param days     保留天数（例如输入1，表示删除1天前的记录。普通用户强制最小为1）
+     */
+    @RequestMapping(value = "/ledger/clear", method = {RequestMethod.GET, RequestMethod.POST})
+    public CommonResultDTO<String> clearLedger(
+            @RequestParam String userName,
+            @RequestParam String password) {
+
+        // 1. 身份验证
+        User user = userService.authenticateUserByUserName(userName, password);
+        if (user == null) {
+            return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED, "用户名密码错误！");
+        }
+
+        // 2. 权限与状态校验
+        if (user.getStatus() == 1) {
+            return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED, "该用户已被禁用");
+        }
+        SystemConfig systemConfig = systemConfigService.getConfig();
+
+        Integer days = Integer.valueOf(systemConfig.getUserDeleteDataDay());
+
+
+        if (days == null || days <=0) {
+            return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, "天数参数错误");
+        }
+
+        try {
+            userLedgerService.deleteLedgerByDays(user.getId(), user.getId(), days, false);
+
+            log.info("用户 {} 执行了账本清理操作，保留天数: {}", userName, days);
+            return CommonResultDTO.success("历史记录清理成功", "已清理 " + days + " 天前的记录");
+        } catch (BusinessException e) {
+            return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, e.getMessage());
+        } catch (Exception e) {
+            log.error("清理账本异常: ", e);
+            return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, "系统繁忙，请稍后再试");
+        }
+    }
+
+    /**
+     * 清理历史号码获取记录
+     *
+     * @param userName 用户名
+     * @param password 密码
+     * @param days     保留天数（最小为1）
+     */
+    @RequestMapping(value = "/number/clear", method = {RequestMethod.GET, RequestMethod.POST})
+    public CommonResultDTO<String> clearNumberRecords(
+            @RequestParam String userName,
+            @RequestParam String password) {
+
+        SystemConfig systemConfig = systemConfigService.getConfig();
+
+        Integer days = Integer.valueOf(systemConfig.getUserDeleteDataDay());
+
+        // 1. 验证天数参数
+        if (days == null || days <= 0) {
+            return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, "天数参数错误");
+        }
+
+        // 2. 身份验证
+        User user = userService.authenticateUserByUserName(userName, password);
+        if (user == null) {
+            return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED, "用户名密码错误！");
+        }
+
+        if (user.getStatus() == 1) {
+            return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED, "该用户已被禁用");
+        }
+
+        try {
+            // 3. 执行删除逻辑
+            numberRecordService.deleteNumberRecordByDays(user.getId(), user.getId(), days, false);
+
+            log.info("用户 {} 清理了 {} 天前的号码记录", userName, days);
+            return CommonResultDTO.success("号码记录清理成功", "已清理 " + days + " 天前的非进行中记录");
+        } catch (BusinessException e) {
+            return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, e.getMessage());
+        } catch (Exception e) {
+            log.error("清理号码记录异常: ", e);
+            return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, "系统繁忙");
+        }
+    }
 }

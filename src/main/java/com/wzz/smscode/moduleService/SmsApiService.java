@@ -9,10 +9,7 @@ import com.wzz.smscode.service.ProjectService;
 import com.wzz.smscode.service.SystemConfigService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpMethod;
-import org.springframework.http.ResponseEntity;
+import org.springframework.http.*;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -31,6 +28,15 @@ import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import com.jayway.jsonpath.JsonPath;
+
+
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
+import javax.crypto.Cipher;
+import javax.crypto.spec.SecretKeySpec;
+import java.security.Security;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.annotation.JsonInclude;
 
 @Service
 @RequiredArgsConstructor
@@ -71,6 +77,11 @@ public class SmsApiService {
      */
     public Map<String, String> getPhoneNumber(Project project, String... dynamicParams) {
         log.info("开始为项目 [{} - {}] 获取手机号", project.getProjectName(), project.getLineId());
+
+        if (Boolean.TRUE.equals(project.getAesSpecialApiStatus())) {
+            log.info("执行 AES 加密特殊接口获取手机号...");
+            return getPhoneNumberAesSpecial(project);
+        }
 
         if (Boolean.TRUE.equals(project.getSpecialApiStatus())) {
             log.info("开始为特殊api项目 [{} - {}] 执行获取手机号的特殊接口", project.getProjectName(), project.getLineId());
@@ -113,6 +124,9 @@ public class SmsApiService {
         if (Boolean.TRUE.equals(project.getSpecialApiStatus())) {
             return getApiBalanceSpecial(project);
         }
+        if (Boolean.TRUE.equals(project.getAesSpecialApiStatus())) {
+            return getApiBalanceAesSpecial(project);
+        }
         try {
             context =moduleUtil.getApiToken(project, dynamicParams);
         }catch (Exception e) {
@@ -140,7 +154,12 @@ public class SmsApiService {
 
     public String getVerificationCode(Project project, Map<String, String> identifierParams , Supplier<Boolean> stopCondition) {
 
+        if (Boolean.TRUE.equals(project.getAesSpecialApiStatus())) {
+            log.info("检测到开启 AES 特殊 API，进入 AES 轮询流程...");
+            return pollForAesVerificationCode(project, identifierParams, stopCondition);
+        }
         if (Boolean.TRUE.equals(project.getSpecialApiStatus())) {
+            log.info("检测到开启  特殊 API，进入流程...");
             return getVerificationCodeSpecial(project, identifierParams, false);
         }
         log.info("开始获取验证码，参数: {}", identifierParams);
@@ -205,6 +224,11 @@ public class SmsApiService {
      */
     public Optional<String> fetchVerificationCodeOnce(Project project, Map<String, String> identifierParams) {
          log.info("执行单次验证码获取, 参数: {}", identifierParams);
+
+        if (Boolean.TRUE.equals(project.getAesSpecialApiStatus())) {
+            String code = getVerificationCodeAesSpecial(project, identifierParams);
+            return Optional.ofNullable(code);
+        }
 
         Map<String, String> context = new HashMap<>(identifierParams);
         if (!context.containsKey("token") && StringUtils.hasText(project.getAuthTokenValue())) {
@@ -533,4 +557,250 @@ public class SmsApiService {
             return "Error";
         }
     }
+
+    //------------------------加解密特殊API----------------------------------
+
+
+    // 静态初始化 BouncyCastle 驱动
+    static {
+        if (Security.getProvider("BC") == null) {
+            Security.addProvider(new BouncyCastleProvider());
+        }
+    }
+
+    // 专用的 ObjectMapper 配置
+    private static final ObjectMapper aesMapper = new ObjectMapper()
+            .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
+            .setSerializationInclusion(JsonInclude.Include.NON_NULL);
+
+    // -------------------- 新增：AES 特殊 API (示例 m_1688_a7) 封装 --------------------
+
+    /**
+     * 通用 AES 加密请求封装
+     */
+    private Map<String, Object> callAesSpecialApi(String url, Map<String, Object> params, String key) {
+        try {
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.TEXT_PLAIN);
+            headers.add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36");
+
+            String encryptedPayload = null;
+            if (params != null && !params.isEmpty()) {
+                String json = aesMapper.writeValueAsString(params);
+                encryptedPayload = aesEncrypt(json, key);
+            }
+
+            HttpEntity<String> request = new HttpEntity<>(encryptedPayload, headers);
+            log.info("发起 AES 特殊 API 请求: URL={}, Params={}.加密后的参数：{}", url, params,encryptedPayload);
+
+            // 使用 service 中已有的 specialRestTemplate
+            String encryptedResponse = specialRestTemplate.postForObject(url, request, String.class);
+
+            if (!StringUtils.hasText(encryptedResponse)) {
+                return null;
+            }
+
+            String decryptedResponse = aesDecrypt(encryptedResponse, key);
+            log.info("AES 特殊 API 响应解密: {}", decryptedResponse);
+
+            return aesMapper.readValue(decryptedResponse, Map.class);
+        } catch (Exception e) {
+            log.error("调用 AES 特殊 API 失败: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * AES 加密
+     */
+    private String aesEncrypt(String content, String key) throws Exception {
+        byte[] raw = key.getBytes(StandardCharsets.UTF_8);
+        SecretKeySpec skeySpec = new SecretKeySpec(raw, "AES");
+        // 使用 BC 提供的 PKCS7Padding
+        Cipher cipher = Cipher.getInstance("AES/ECB/PKCS7Padding", "BC");
+        cipher.init(Cipher.ENCRYPT_MODE, skeySpec);
+        byte[] data = cipher.doFinal(content.getBytes(StandardCharsets.UTF_8));
+        return Base64.getEncoder().encodeToString(data);
+    }
+
+    /**
+     * AES 解密
+     */
+    private String aesDecrypt(String content, String key) throws Exception {
+        byte[] raw = key.getBytes(StandardCharsets.UTF_8);
+        SecretKeySpec skeySpec = new SecretKeySpec(raw, "AES");
+        Cipher cipher = Cipher.getInstance("AES/ECB/PKCS7Padding", "BC");
+        cipher.init(Cipher.DECRYPT_MODE, skeySpec);
+        byte[] encrypted1 = Base64.getDecoder().decode(content);
+        byte[] original = cipher.doFinal(encrypted1);
+        return new String(original, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * 实现 1: AES 特殊接口获取手机号
+     */
+    public Map<String, String> getPhoneNumberAesSpecial(Project project) {
+        String apiGateway = project.getAesSpecialApiGateway() == null ? "http://apim1a7x.bigbus666.top:2086/s/m" : project.getAesSpecialApiGateway();
+        String outNumber = project.getAesSpecialApiOutNumber();
+        String key = project.getAesSpecialApiKey();
+
+        String url = String.format("%s/n/%s", apiGateway, outNumber);
+
+        Map<String, Object> params = new HashMap<>();
+        params.put("projectName", project.getAesSpecialApiProjectName());
+
+        Map<String, Object> result = callAesSpecialApi(url, params, key);
+
+        if (result != null && result.containsKey("data")) {
+            Map<String, Object> data = (Map<String, Object>) result.get("data");
+            Map<String, String> context = new HashMap<>();
+            context.put("phone", String.valueOf(data.get("mobile")));
+            context.put("id", String.valueOf(data.get("extId")));
+            return context;
+        }
+
+        throw new BusinessException("AES特殊接口获取手机号失败");
+    }
+
+    /**
+     * 实现: AES 特殊接口获取验证码 (单次动作)
+     */
+    public String getVerificationCodeAesSpecial(Project project, Map<String, String> context) {
+        String gateway = project.getAesSpecialApiGateway() == null ? "http://apim1a7x.bigbus666.top:2086/s/m" : project.getAesSpecialApiGateway();
+        String outNumber = project.getAesSpecialApiOutNumber();
+        String key = project.getAesSpecialApiKey();
+        String extId = context.get("id"); // 对应 getPhoneNumberAesSpecial 中存入的 Id
+
+        if (!StringUtils.hasText(gateway) || !StringUtils.hasText(extId)) {
+            log.error("AES 取码参数缺失: gateway={}, extId={}", gateway, extId);
+            return null;
+        }
+
+        // 规范化 URL 拼接
+        String baseUrl = gateway.endsWith("/") ? gateway.substring(0, gateway.length() - 1) : gateway;
+        String url = String.format("%s/r/%s", baseUrl, outNumber);
+
+        Map<String, Object> params = new HashMap<>();
+        params.put("extId", extId);
+
+        try {
+            Map<String, Object> result = callAesSpecialApi(url, params, key);
+
+            if (result != null && result.containsKey("data")) {
+                Object dataObj = result.get("data");
+                if (dataObj instanceof Map) {
+                    Map data = (Map) dataObj;
+
+                    // 兼容性提取：依次尝试取 smsContent, message, code
+                    String smsContent = String.valueOf(data.getOrDefault("smsContent", ""));
+                    String msgField = String.valueOf(data.getOrDefault("message", "")); // 新增对 message 字段的提取
+                    String code = String.valueOf(data.getOrDefault("code", ""));
+
+                    // 按照优先级返回第一个不为空的内容
+                    if (StringUtils.hasText(smsContent) && !"null".equals(smsContent)) {
+                        return smsContent;
+                    }
+                    if (StringUtils.hasText(msgField) && !"null".equals(msgField)) {
+                        return msgField;
+                    }
+                    if (StringUtils.hasText(code) && !"null".equals(code)) {
+                        return code;
+                    }
+                }
+            }
+            return null;
+        } catch (Exception e) {
+            log.error("AES单次请求异常: {}", e.getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * 实现 3: AES 特殊接口释放号码 (对应 demo 中的 freeMobile)
+     */
+    public void releasePhoneNumberAesSpecial(Project project, String extId) {
+        String apiGateway = project.getAesSpecialApiGateway() == null ? "http://apim1a7x.bigbus666.top:2086/s/m" : project.getAesSpecialApiGateway();
+        String outNumber = project.getSelectNumberApiRequestValue();
+        String key = project.getSpecialApiToken();
+
+        String url = String.format("%s/f/%s", apiGateway, outNumber);
+        Map<String, Object> params = new HashMap<>();
+        params.put("id", extId);
+        params.put("status", "1");
+        params.put("reason", "ok");
+
+        callAesSpecialApi(url, params, key); // 释放通常不关心结果
+    }
+
+    /**
+     * 实现 4: AES 特殊接口查询余额
+     */
+    public String getApiBalanceAesSpecial(Project project) {
+        String apiGateway = project.getAesSpecialApiGateway() == null ? "http://apim1a7x.bigbus666.top:2086/s/m" : project.getAesSpecialApiGateway();
+        String outNumber = project.getSelectNumberApiRequestValue();
+        String key = project.getSpecialApiToken();
+
+        String url = String.format("%s/q/%s", apiGateway, outNumber);
+        Map<String, Object> result = callAesSpecialApi(url, new HashMap<>(), key);
+
+        if (result != null && result.containsKey("data")) {
+            return String.valueOf(result.get("data"));
+        }
+        return "0";
+    }
+
+    /**
+     * AES 专用轮询逻辑
+     */
+    private String pollForAesVerificationCode(Project project, Map<String, String> context, Supplier<Boolean> stopCondition) {
+        long startTime = System.currentTimeMillis();
+        long timeout = 10 * 60 * 1000L; // 10分钟超时
+        int attempts = 0;
+
+        log.info("开始 AES 轮询，手机号: {}, 关联ID: {}", context.get("phone"), context.get("id"));
+
+        while (System.currentTimeMillis() - startTime < timeout) {
+            // 检查外部停止条件（比如用户在前端关闭了任务）
+            if (stopCondition != null && stopCondition.get()) {
+                log.info("检测到任务终止信号，停止 AES 轮询。");
+                throw new BusinessException("任务已关闭或手动停止");
+            }
+
+            attempts++;
+            try {
+                // 调用单次 AES 获取接口
+                String rawCodeOrSms = getVerificationCodeAesSpecial(project, context);
+
+                if (StringUtils.hasText(rawCodeOrSms)) {
+                    // 使用正则提取 4-8 位数字
+                    Matcher matcher = Pattern.compile("\\d{4,8}").matcher(rawCodeOrSms);
+                    if (matcher.find()) {
+                        String code = matcher.group();
+                        log.info("AES 轮询成功！第 {} 次尝试获取到验证码: {}, 耗时: {}ms",
+                                attempts, code, System.currentTimeMillis() - startTime);
+                        return code;
+                    }
+                }
+
+                log.info("AES 第 {} 次尝试未获码，已耗时 {}ms，准备下次重试...",
+                        attempts, System.currentTimeMillis() - startTime);
+
+                // AES 接口建议不要请求太频繁，间隔 3-5 秒
+                Thread.sleep(3000);
+
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new BusinessException("获取验证码被中断");
+            } catch (Exception e) {
+                log.warn("AES 轮询单次请求异常: {}", e.getMessage());
+                try { Thread.sleep(3000); } catch (InterruptedException ignored) {}
+            }
+        }
+
+        throw new BusinessException("AES 获取验证码超时（10分钟未获取到）");
+    }
+
+
+
+
 }

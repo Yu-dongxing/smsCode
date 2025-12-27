@@ -1,6 +1,9 @@
 package com.wzz.smscode.moduleService;
 
+import com.jayway.jsonpath.Configuration;
 import com.jayway.jsonpath.JsonPath;
+import com.jayway.jsonpath.Option;
+import com.jayway.jsonpath.ParseContext;
 import com.wzz.smscode.dto.ApiConfig.ApiConfig;
 import com.wzz.smscode.dto.ApiConfig.ExtractRule;
 import com.wzz.smscode.dto.RequestDTO.KeyValue;
@@ -34,6 +37,11 @@ import java.util.regex.Pattern;
 @Slf4j
 public class ModuleUtil {
     private static final Pattern VARIABLE_PATTERN = Pattern.compile("\\{\\{(.+?)}}");
+
+
+    private static final Configuration JSON_PATH_CONFIG = Configuration.defaultConfiguration()
+            .addOptions(Option.SUPPRESS_EXCEPTIONS);
+    private static final ParseContext JSON_PARSER = JsonPath.using(JSON_PATH_CONFIG);
 
     // 【修改点】：去掉 static 和 = null，Spring 会通过构造函数自动注入 WebClient
     private final WebClient webClient;
@@ -242,31 +250,43 @@ public class ModuleUtil {
             if (config.getExtractRules() != null && StringUtils.hasText(responseBody)) {
                 for (ExtractRule rule : config.getExtractRules()) {
                     try {
-                        String extractedValue = null;
-                        if ("BODY".equalsIgnoreCase(rule.getSource())) {
-                            Object val = JsonPath.parse(responseBody).read(rule.getJsonPath());
-                            extractedValue = String.valueOf(val);
-                        }
-
-                        if (extractedValue != null) {
-                            context.put(rule.getTargetVariable(), extractedValue);
-                            log.info("变量提取成功: {} = {}", rule.getTargetVariable(), extractedValue);
+                        Object val = JSON_PARSER.parse(responseBody).read(rule.getJsonPath());
+                        if (val != null) {
+                            context.put(rule.getTargetVariable(), String.valueOf(val));
+                            log.info("变量提取成功: {} = {}", rule.getTargetVariable(), val);
+                        } else {
+                            // 在抑制异常模式下，找不到会走这里
+                            String errorMsg = extractErrorMessage(responseBody);
+                            log.info("变量提取失败 (路径不存在) [Key: {}]: {}", rule.getTargetVariable(), errorMsg);
+                            throw new BusinessException(errorMsg);
                         }
                     } catch (Exception e) {
-                        log.warn("变量提取失败 [Key: {}, Path: {}]: {}", rule.getTargetVariable(), rule.getJsonPath(), e.getMessage());
-                        if(debug) {
-                            throw new BusinessException(0,"未获取到数据，返回响应："+responseBody);
-                        }else {
-                            throw new BusinessException(0,"未获取到数据");
-                        }
+                        // 只有发生解析错误（JSON格式非法）等才会走这里
+                        String errorMsg = extractErrorMessage(responseBody);
+                        log.info("变量提取失败 (解析异常) [Key: {}]: {}", rule.getTargetVariable(), errorMsg);
+                        throw new BusinessException(errorMsg);
                     }
                 }
             }
-        }catch (Exception e){
-            log.info("通用 API 执行方法出现错误：{}",e.getMessage());
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("调用接口时发生系统错误: URL={}, Error={}",config.getUrl(), e.getMessage());
+            throw new BusinessException("接口调用异常: " + e.getMessage());
         }
+    }
 
-
+    private String extractErrorMessage(String responseBody) {
+        try {
+            // 常见错误字段名：msg, message, respMsg
+            com.jayway.jsonpath.DocumentContext ctx = JsonPath.parse(responseBody);
+            String[] possibleFields = {"$.msg", "$.message", "$.respMsg", "$.result"};
+            for (String field : possibleFields) {
+                String val = ctx.read(field, String.class);
+                if (StringUtils.hasText(val)) return val;
+            }
+        } catch (Exception ignored) {}
+        return "接口返回数据格式异常";
     }
 
     /**

@@ -271,5 +271,42 @@ public class Project extends BaseEntity {
     @TableField("special_api_token")
     private String specialApiToken;
 
+    //****************加解密api字段
+
+    /**
+     * 是否启用-AESAPI的接口配置
+     */
+    @ColumnComment("是否启用-AESAPI的接口配置")
+    @TableField("aes_special_api_status")
+    @DefaultValue("0")
+    private Boolean aesSpecialApiStatus;
+
+    /**
+     * 请求域名
+     */
+    @ColumnComment("请求域名")
+    @TableField("aes_special_api_gateway")
+    private String aesSpecialApiGateway;
+
+    /**
+     * 客户外部数字
+     */
+    @ColumnComment("客户外部数字")
+    @TableField("aes_special_api_out_number")
+    private String aesSpecialApiOutNumber;
+
+    /**
+     * 请求key
+     */
+    @ColumnComment("请求key")
+    @TableField("aes_special_api_key")
+    private String aesSpecialApiKey;
+
+    /**
+     * api项目名称
+     */
+    @ColumnComment("api项目名称")
+    @TableField("aes_special_api_project_name")
+    private String aesSpecialApiProjectName;
 
 }

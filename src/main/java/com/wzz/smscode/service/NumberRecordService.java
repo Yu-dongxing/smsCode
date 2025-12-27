@@ -65,4 +65,7 @@ public interface NumberRecordService extends IService<NumberRecord> {
 
     @Transactional(rollbackFor = Exception.class)
     int batchRefundByQuery(BatchRefundQueryDTO queryDTO);
+
+    @Transactional(rollbackFor = Exception.class)
+    void deleteNumberRecordByDays(Long operatorId, Long targetUserId, Integer days, boolean isAdmin);
 }

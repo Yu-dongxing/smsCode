@@ -122,4 +122,12 @@ public class SystemConfig implements Serializable {
     @TableField("system_notice")
     @DefaultValue("'系统通知'")
     private String systemNotice;
+
+    /**
+     * 用户能够删除几天前的数据(账单和号码记录通用)
+     */
+    @ColumnComment("用户能够删除几天前的数据")
+    @TableField("user_delete_data_day")
+    @DefaultValue("3")
+    private String userDeleteDataDay;
 }

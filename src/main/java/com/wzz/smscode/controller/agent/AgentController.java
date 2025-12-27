@@ -764,4 +764,48 @@ public class AgentController {
 
     }
 
+    /**
+     * 代理：清理自己的历史账本记录
+     */
+    @SaCheckLogin
+    @PostMapping("/ledger/clear")
+    public Result<?> clearMyLedger() {
+        SystemConfig systemConfig = systemConfigService.getConfig();
+        Integer days = Integer.valueOf(systemConfig.getUserDeleteDataDay());
+        try {
+            // 2. 获取当前登录代理的ID
+            long agentId = StpUtil.getLoginIdAsLong();
+            userLedgerService.deleteLedgerByDays(agentId, agentId, days, false);
+            log.info("代理 {} 清理了自己 {} 天前的账本记录", agentId, days);
+            return Result.success("个人账本记录清理成功");
+        } catch (BusinessException e) {
+            return Result.error(e.getMessage());
+        } catch (Exception e) {
+            log.error("代理清理账本异常: ", e);
+            return Result.error("系统繁忙，请稍后再试");
+        }
+    }
+
+    /**
+     * 代理：清理自己的历史号码记录
+     *
+     */
+    @SaCheckLogin
+    @PostMapping("/number/clear")
+    public Result<?> clearMyNumberRecords() {
+        SystemConfig systemConfig = systemConfigService.getConfig();
+        Integer days = Integer.valueOf(systemConfig.getUserDeleteDataDay());
+        try {
+            long agentId = StpUtil.getLoginIdAsLong();
+            numberRecordService.deleteNumberRecordByDays(agentId, agentId, days, false);
+            log.info("代理 {} 清理了自己 {} 天前的号码记录", agentId, days);
+            return Result.success("个人号码记录清理成功");
+        } catch (BusinessException e) {
+            return Result.error(e.getMessage());
+        } catch (Exception e) {
+            log.error("代理清理号码记录异常: ", e);
+            return Result.error("系统繁忙");
+        }
+    }
+
 }
