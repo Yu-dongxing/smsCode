@@ -10,12 +10,18 @@ spring:
     username: root
     password: 123456789
     hikari:
-      maximum-pool-size: 100     # 峰值并发连接
-      minimum-idle: 5            # 平时保持
-      connection-timeout: 2000   # 2 秒就能发现拿不到连接，而不是 30 s
-      idle-timeout: 600000
+      minimum-idle: 50
+      maximum-pool-size: 150
+      auto-commit: true
+      idle-timeout: 30000
+      pool-name: MyHikariCP
       max-lifetime: 1800000
-      connection-test-query: SELECT 1
+      connection-timeout: 30000
+      data-source-properties:
+        cachePrepStmts: true
+        prepStmtCacheSize: 500
+        prepStmtCacheSqlLimit: 2048
+        useServerPrepStmts: true
   threads:
     virtual:
       enabled: true

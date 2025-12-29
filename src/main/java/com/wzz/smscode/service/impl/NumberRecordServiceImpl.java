@@ -463,7 +463,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         // 普通API的超时退款检查
         long minutesElapsed = Duration.between(record.getGetNumberTime(), LocalDateTime.now()).toMinutes();
         //如果记录的扣费状态为已扣费并且当前超时15分钟并且记录中没有code就执行退款
-        if (record.getCharged() == 1 && minutesElapsed >= 15 && !StringUtils.hasText(record.getCode())) {
+        if (record.getCharged() == 1 && minutesElapsed >= 5 && !StringUtils.hasText(record.getCode())) {
             self.updateRecordAfterRetrieval(record, false, null);
             return CommonResultDTO.error(Constants.ERROR_NO_CODE, "获取超时，已自动退款");
         }

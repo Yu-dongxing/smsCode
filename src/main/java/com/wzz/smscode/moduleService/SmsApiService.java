@@ -177,7 +177,7 @@ public class SmsApiService {
 
         // 2. 轮询逻辑 (10分钟)
         long startTime = System.currentTimeMillis();
-        long timeout = 10 * 60 * 1000L;
+        long timeout = 5 * 60 * 1000L;
         int attempts = 0;
 
         // 只要当前时间减去开始时间小于超时时间，就继续轮询
@@ -211,7 +211,7 @@ public class SmsApiService {
 
         long totalTime = System.currentTimeMillis() - startTime;
         log.error("获取验证码超时，总耗时: {}ms, 总尝试次数: {}", totalTime, attempts);
-        throw new BusinessException("获取验证码超时(10分钟未获取到)");
+        throw new BusinessException("获取验证码超时(5分钟未获取到)");
     }
 
     /**
