@@ -195,11 +195,9 @@ public class SmsApiService {
                         log.info("成功获取验证码: {}, 耗时: {}ms", code, System.currentTimeMillis() - startTime);
                         return code;
                     }
-
                 }
                 log.info("未获取到验证码，第 {} 次尝试，已耗时 {}ms...", attempts, System.currentTimeMillis() - startTime);
                 Thread.sleep(1000); // 3秒轮询一次
-
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new BusinessException("获取验证码被中断");
@@ -208,10 +206,57 @@ public class SmsApiService {
                 try { Thread.sleep(3000); } catch (InterruptedException ignored) {}
             }
         }
-
         long totalTime = System.currentTimeMillis() - startTime;
         log.error("获取验证码超时，总耗时: {}ms, 总尝试次数: {}", totalTime, attempts);
         throw new BusinessException("获取验证码超时(5分钟未获取到)");
+    }
+
+
+    /**
+     * 第三步：释放手机号
+     * @param project 项目配置
+     * @param identifierParams 包含 phone 和 id 的上下文参数
+     */
+    public void releasePhoneNumber(Project project, Map<String, String> identifierParams,boolean isSuccess) {
+        String phone = identifierParams.get("phone");
+        String id = identifierParams.get("id");
+        log.info("开始释放项目 [{}] 的手机号: {}, 关联ID: {}", project.getProjectName(), phone, id);
+        if (Boolean.TRUE.equals(project.getAesSpecialApiStatus())) {
+            log.info("执行 AES 加密特殊接口释放手机号...");
+            releasePhoneNumberAesSpecial(project, id,isSuccess);
+            return;
+        }
+        if (project.getDeletePhoneConfig() == null || project.getDeletePhoneConfig().getUrl() == null) {
+            log.warn("项目 [{}] 未配置释放手机号接口，跳过执行。", project.getProjectName());
+            return;
+        }
+        try {
+            Map<String, String> context = new HashMap<>(identifierParams);
+
+            // --- 核心改动：从项目配置中读取自定义的值 ---
+            String statusValue = isSuccess
+                    ? (StringUtils.hasText(project.getReleaseSuccessStatus()) ? project.getReleaseSuccessStatus() : "1")
+                    : (StringUtils.hasText(project.getReleaseFailStatus()) ? project.getReleaseFailStatus() : "0");
+
+            String msgValue = isSuccess
+                    ? (StringUtils.hasText(project.getReleaseSuccessMsg()) ? project.getReleaseSuccessMsg() : "success")
+                    : (StringUtils.hasText(project.getReleaseFailMsg()) ? project.getReleaseFailMsg() : "fail");
+
+            // 将自定义的值放入 context，用于替换 ApiRequestEditor 里的 {{releaseStatus}} 和 {{releaseMsg}}
+            context.put("releaseStatus", statusValue);
+            context.put("releaseMsg", msgValue);
+
+            // 注入 Token
+            Map<String, String> tokenContext = moduleUtil.getApiToken(project);
+            context.putAll(tokenContext);
+
+            // 执行请求
+            moduleUtil.executeApi(project.getDeletePhoneConfig(), context);
+            log.info("释放接口调用完成，状态值: {}, 消息内容: {}", statusValue, msgValue);
+
+        } catch (Exception e) {
+            log.error("释放手机号接口执行异常: {}", e.getMessage());
+        }
     }
 
     /**
@@ -716,20 +761,63 @@ public class SmsApiService {
     }
 
     /**
-     * 实现 3: AES 特殊接口释放号码 (对应 demo 中的 freeMobile)
+     * 实现 3: AES 特殊接口释放号码 (对应文档 2.4 释放号码)
+     * URL: api_gateway + "/f/{customerOutNumber}"
      */
-    public void releasePhoneNumberAesSpecial(Project project, String extId) {
-        String apiGateway = project.getAesSpecialApiGateway() == null ? "http://apim1a7x.bigbus666.top:2086/s/m" : project.getAesSpecialApiGateway();
-        String outNumber = project.getSelectNumberApiRequestValue();
-        String key = project.getSpecialApiToken();
+    public void releasePhoneNumberAesSpecial(Project project, String extId ,boolean isSuccess) {
+        // 1. 获取配置信息
+        String apiGateway = project.getAesSpecialApiGateway() == null
+                ? "http://apim1a7x.bigbus666.top:2086/s/m"
+                : project.getAesSpecialApiGateway();
 
-        String url = String.format("%s/f/%s", apiGateway, outNumber);
+        // 对应文档中的 customerOutNumber
+        String outNumber = project.getAesSpecialApiOutNumber();
+        // AES 专用密钥
+        String key = project.getAesSpecialApiKey();
+
+        if (!StringUtils.hasText(outNumber) || !StringUtils.hasText(key)) {
+            log.error("AES释放号码失败：缺少 customerOutNumber 或 Key 配置");
+            return;
+        }
+
+        // 2. 规范化 URL 拼接
+        String baseUrl = apiGateway.endsWith("/") ? apiGateway.substring(0, apiGateway.length() - 1) : apiGateway;
+        String url = String.format("%s/f/%s", baseUrl, outNumber);
+
+        // 3. 准备加密前的请求参数 (严格对应文档)
         Map<String, Object> params = new HashMap<>();
-        params.put("id", extId);
-        params.put("status", "1");
-        params.put("reason", "ok");
+        params.put("extId", extId);
 
-        callAesSpecialApi(url, params, key); // 释放通常不关心结果
+        // 同样使用项目中的自定义配置
+        String statusValue = isSuccess
+                ? (StringUtils.hasText(project.getReleaseSuccessStatus()) ? project.getReleaseSuccessStatus() : "1")
+                : (StringUtils.hasText(project.getReleaseFailStatus()) ? project.getReleaseFailStatus() : "0");
+
+        String msgValue = isSuccess
+                ? (StringUtils.hasText(project.getReleaseSuccessMsg()) ? project.getReleaseSuccessMsg() : "ok")
+                : (StringUtils.hasText(project.getReleaseFailMsg()) ? project.getReleaseFailMsg() : "fail");
+
+        params.put("status", statusValue);
+        params.put("reason", msgValue);
+
+        log.info("准备调用 AES 释放接口: url={}, extId={}", url, extId);
+
+        try {
+            Map<String, Object> result = callAesSpecialApi(url, params, key);
+            if (result != null && result.containsKey("code")) {
+                Object codeObj = result.get("code");
+                // 文档规定 code 为 0 表示接口操作成功
+                if ("0".equals(String.valueOf(codeObj)) || Integer.valueOf(0).equals(codeObj)) {
+                    log.info("AES 特殊接口释放号码成功: extId={}", extId);
+                } else {
+                    log.warn("AES 特殊接口释放号码返回异常码: code={}, 响应={}", codeObj, result);
+                }
+            } else {
+                log.warn("AES 特殊接口释放号码响应为空或格式非法");
+            }
+        } catch (Exception e) {
+            log.error("执行 AES 释放号码接口时发生异常: {}", e.getMessage());
+        }
     }
 
     /**
@@ -770,7 +858,6 @@ public class SmsApiService {
             try {
                 // 调用单次 AES 获取接口
                 String rawCodeOrSms = getVerificationCodeAesSpecial(project, context);
-
                 if (StringUtils.hasText(rawCodeOrSms)) {
                     // 使用正则提取 4-8 位数字
                     Matcher matcher = Pattern.compile("\\d{4,8}").matcher(rawCodeOrSms);
@@ -799,8 +886,4 @@ public class SmsApiService {
 
         throw new BusinessException("AES 获取验证码超时（10分钟未获取到）");
     }
-
-
-
-
 }

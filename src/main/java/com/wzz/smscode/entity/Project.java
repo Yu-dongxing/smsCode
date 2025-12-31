@@ -217,6 +217,45 @@ public class Project extends BaseEntity {
     private ApiConfig getBalanceConfig;
 
     /**
+     * 释放手机号配置
+     */
+    @TableField(value = "delete_phone_config", typeHandler = JacksonTypeHandler.class)
+    @ColumnType("JSON")
+    private ApiConfig deletePhoneConfig;
+
+    //***********************释放手机号请求说明
+    /**
+     * 成功状态值
+     */
+    @TableField("release_success_status")
+    @DefaultValue("1")
+    private String releaseSuccessStatus;
+
+    /**
+     * 失败状态值
+     */
+    @TableField("release_fail_status")
+    @DefaultValue("0")
+    private String releaseFailStatus;
+
+    /**
+     * 成功描述文字
+     */
+    @TableField("release_success_msg")
+    @DefaultValue("'ok'")
+    private String releaseSuccessMsg;
+
+    /**
+     * 失败描述文字
+     */
+    @TableField("release_fail_msg")
+    @DefaultValue("'error'")
+    private String releaseFailMsg;
+
+    //***********************释放手机号请求说明
+
+
+    /**
      * 动态获取的Token值 (由系统自动填充和更新)
      */
     @ColumnComment("动态获取的Token值 (由系统自动填充和更新)")

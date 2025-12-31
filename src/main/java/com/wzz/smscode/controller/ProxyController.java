@@ -81,23 +81,17 @@ public class ProxyController {
                         requestBody = convertToMultiValueMap(config.getFormBody());
                         break;
                     case "FORM_DATA":
-                        // 纯文本的 Form Data 一般也可用 Form UrlEncoded 处理，或者用 Multipart
-                        // 这里为了简单兼容文本字段，使用 Multipart
                         headers.setContentType(MediaType.MULTIPART_FORM_DATA);
                         requestBody = convertToMultiValueMap(config.getFormBody());
                         break;
                     case "NONE":
                     default:
-                        // GET 请求或无 Body
                         break;
                 }
-
                 // 5. 组装 HttpEntity
                 HttpEntity<Object> entity = new HttpEntity<>(requestBody, headers);
-
                 // 6. 发起请求
                 HttpMethod method = HttpMethod.valueOf(config.getMethod().toUpperCase());
-
                 // 使用 String.class 接收响应，方便前端展示
                 ResponseEntity<String> response = restTemplate.exchange(
                         targetUrl,

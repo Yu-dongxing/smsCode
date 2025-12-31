@@ -430,6 +430,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                     log.info("用户[{}]手动查询发现记录[{}]超时 (已耗时{}s > 允许{}s)，触发退款",
                             userName, record.getId(), elapsedSeconds, maxWaitSeconds);
                     self.updateRecordAfterRetrieval(record, false, null);
+
                     return CommonResultDTO.error(Constants.ERROR_NO_CODE, "获取验证码超时，已自动退款");
                 } else {
                     return CommonResultDTO.error(Constants.ERROR_NO_CODE, "订单已超时失效");
@@ -472,21 +473,22 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
 
     /**
      * 核心逻辑：更新记录状态，并处理 代理返利 或 用户退款
-     * 该方法需要是线程安全的或利用数据库锁，这里通过事务+状态检查实现
+     * 增加逻辑：处理完成后，异步或在事务提交后触发第三方接口释放手机号
      */
     @Transactional(rollbackFor = Exception.class)
     @Override
     public void updateRecordAfterRetrieval(NumberRecord record, boolean isSuccess, String result) {
         NumberRecord latestRecord = baseMapper.selectByIdForUpdate(record.getId());
 
-        // 如果已经是成功状态，直接返回
-        if (latestRecord.getStatus() == 2) {
+        // 如果已经是成功状态且已有码，不再重复处理
+        if (latestRecord.getStatus() == 2 && StringUtils.hasText(latestRecord.getCode())) {
             return;
         }
 
         if (isSuccess && StringUtils.hasText(result)) {
+            // --- 1. 成功逻辑 ---
             if (latestRecord.getCharged() == 2) {
-                log.info("订单 {} 已退款但手动获码成功，执行再扣款", latestRecord.getId());
+                // 已退款但又拿到了码，执行再扣款
                 User user = userService.getById(latestRecord.getUserId());
                 if (user.getBalance().compareTo(latestRecord.getPrice()) < 0) {
                     throw new BusinessException("获取成功，但账户余额不足以支付，无法查看验证码");
@@ -494,7 +496,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                 LedgerCreationDTO reDeductDto = LedgerCreationDTO.builder()
                         .userId(latestRecord.getUserId())
                         .amount(latestRecord.getPrice())
-                        .ledgerType(0) // 出账
+                        .ledgerType(0)
                         .fundType(FundType.BUSINESS_DEDUCTION)
                         .remark("超时后获码成功，重新扣费")
                         .phoneNumber(latestRecord.getPhoneNumber())
@@ -508,7 +510,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             latestRecord.setCodeReceivedTime(LocalDateTime.now());
             latestRecord.setStatus(2);
             latestRecord.setCode(result);
-            latestRecord.setErrorInfo(null); // 清除可能的错误信息
+            latestRecord.setErrorInfo(null);
             this.updateById(latestRecord);
             userService.updateUserStats(latestRecord.getUserId());
             try {
@@ -517,6 +519,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                 log.error("代理返款失败，记录ID: {}", latestRecord.getId(), e);
             }
         } else {
+            // --- 2. 失败/超时逻辑 ---
             if (latestRecord.getCharged() == 1) {
                 log.info("号码 {} 获取失败/超时，执行退款", latestRecord.getPhoneNumber());
                 latestRecord.setStatus(3);
@@ -540,6 +543,31 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                 userService.updateUserStats(latestRecord.getUserId());
             }
         }
+
+        // --- 3. 释放手机号逻辑 (关键新增) ---
+        final String pId = latestRecord.getProjectId();
+        final Integer lId = latestRecord.getLineId();
+        final String phone = latestRecord.getPhoneNumber();
+        final String apiId = latestRecord.getApiPhoneId();
+        final boolean isFinalSuccess = (latestRecord.getStatus() == 2);
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                try {
+                    Project project = projectService.getProject(pId, lId);
+                    if (project != null) {
+                        Map<String, String> releaseContext = new HashMap<>();
+                        releaseContext.put("phone", phone);
+                        releaseContext.put("id", apiId);
+                        smsApiService.releasePhoneNumber(project, releaseContext, isFinalSuccess);
+                        log.info("订单处理结束，已按[{}]状态触发释放手机号: {}",
+                                isFinalSuccess ? "成功" : "失败/超时", phone);
+                    }
+                } catch (Exception e) {
+                    log.warn("事务提交后释放手机号异常(不影响主业务), phone: {}, err: {}", phone, e.getMessage());
+                }
+            }
+        });
     }
 
 
@@ -1132,5 +1160,37 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                 days,
                 rows,
                 deleteBeforeTime);
+    }
+
+    @Override
+    public CommonResultDTO<String> releasePhoneNumber(String userName, String password, String phoneNumber, String projectId, String lineId, boolean isSuccess) {
+        User user = userService.authenticateUserByUserName(userName, password);
+        if (user == null) return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED, "用户验证失败");
+        NumberRecord record = this.getOne(new LambdaQueryWrapper<NumberRecord>()
+                .eq(NumberRecord::getUserId, user.getId())
+                .eq(NumberRecord::getPhoneNumber, phoneNumber)
+                .eq(NumberRecord::getProjectId, projectId)
+                .in(NumberRecord::getStatus, 0, 1)
+                .last("LIMIT 1"));
+
+        if (record == null) {
+            return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, "未找到进行中的订单或已处理");
+        }
+        // 1. 获取项目配置
+        Project project = projectService.getProject(projectId, Integer.valueOf(lineId));
+        if (project == null) {
+            return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR,"没有该项目");
+        }
+        // 2. 构造释放参数上下文
+        Map<String, String> context = new HashMap<>();
+        context.put("phone", phoneNumber);
+        context.put("id", record.getApiPhoneId());
+        context.put("token",project.getAuthTokenValue());
+        try {
+            smsApiService.releasePhoneNumber(project, context,isSuccess);
+        } catch (Exception e) {
+            log.error("调用第三方释放接口异常: {}", e.getMessage());
+        }
+        return CommonResultDTO.success("释放成功", phoneNumber);
     }
 }

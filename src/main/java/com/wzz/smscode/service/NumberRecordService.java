@@ -68,4 +68,6 @@ public interface NumberRecordService extends IService<NumberRecord> {
 
     @Transactional(rollbackFor = Exception.class)
     void deleteNumberRecordByDays(Long operatorId, Long targetUserId, Integer days, boolean isAdmin);
+
+    CommonResultDTO<String> releasePhoneNumber(String userName, String password, String phoneNumber, String projectId, String lineId,boolean isSuccess);
 }

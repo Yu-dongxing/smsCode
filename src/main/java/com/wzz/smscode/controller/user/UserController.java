@@ -25,6 +25,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.RestTemplate;
 
 import java.math.BigDecimal;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
@@ -90,6 +91,41 @@ public class UserController {
     }
 
     /**
+     * 释放手机号
+     * 逻辑：调用第三方释放接口
+     */
+    @RequestMapping(value = "/releaseNumber", method = {RequestMethod.GET, RequestMethod.POST})
+    public CommonResultDTO<String> releaseNumber(
+            @RequestParam String userName,
+            @RequestParam String password,
+            @RequestParam String phoneNumber,
+            @RequestParam String projectId,
+            @RequestParam String lineId,
+            @RequestParam String isSuccess) {
+
+        // 1. 参数校验
+        if (!Arrays.asList("0", "1").contains(isSuccess)) {
+            return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, "isSuccess 只能传 0 或 1");
+        }
+
+        // 2. 转换布尔
+        boolean needRelease = "1".equals(isSuccess);
+
+        try {
+            // 3. 调用服务
+            return numberRecordService.releasePhoneNumber(userName, password, phoneNumber,
+                    projectId, lineId, needRelease);
+        } catch (BusinessException e) {
+            // 4. 业务异常
+            return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, e.getMessage());
+        } catch (Exception e) {
+            // 5.  Unexpected 异常记录日志
+            log.error("releaseNumber unexpected error", e);
+            return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, "系统繁忙，请稍后重试");
+        }
+    }
+
+    /**
      * 更新密码
      */
     @PostMapping("/update/passward")
@@ -103,7 +139,6 @@ public class UserController {
         }catch (BusinessException e){
             return Result.error(e.getMessage());
         }
-
     }
 
     /**
