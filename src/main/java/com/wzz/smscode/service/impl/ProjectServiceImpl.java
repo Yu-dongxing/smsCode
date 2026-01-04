@@ -255,19 +255,15 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
         }
         log.info("项目 '{}' 已成功保存，ID为: {}", project.getProjectName(), project.getId());
 
-        // 2. 【修改】获取系统中所有的价格模板 (PriceTemplate)
         List<PriceTemplate> allTemplates = priceTemplateService.list();
         if (CollectionUtils.isEmpty(allTemplates)) {
             log.warn("项目 '{}' 创建成功，但系统中没有找到任何价格模板，无需同步。", project.getProjectName());
             return true;
         }
-
-        // 3. 准备批量插入的模板项
         List<PriceTemplateItem> itemsToInsert = new ArrayList<>();
 
-        // 确定初始价格逻辑：优先使用最低限价，其次使用成本价
-        BigDecimal initialPrice = project.getPriceMin() != null && project.getPriceMin().compareTo(BigDecimal.ZERO) > 0
-                ? project.getPriceMin()
+        BigDecimal initialPrice = project.getPriceMax() != null && project.getPriceMax().compareTo(BigDecimal.ZERO) > 0
+                ? project.getPriceMax()
                 : project.getCostPrice();
 
         for (PriceTemplate template : allTemplates) {
