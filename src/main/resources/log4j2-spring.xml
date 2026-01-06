@@ -27,10 +27,10 @@
             <PatternLayout pattern="${LOG_PATTERN}" />
             <Policies>
                 <OnStartupTriggeringPolicy />
-                <SizeBasedTriggeringPolicy size="100 MB" />
+                <SizeBasedTriggeringPolicy size="200 MB" />
                 <TimeBasedTriggeringPolicy interval="1" modulate="true" />
             </Policies>
-            <DefaultRolloverStrategy max="100">
+            <DefaultRolloverStrategy max="5000">
                 <Delete basePath="${LOG_PATH}" maxDepth="2">
                     <IfFileName glob="*/app-*.log.gz" />
                     <IfLastModified age="30d" />
