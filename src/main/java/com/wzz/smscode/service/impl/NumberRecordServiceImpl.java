@@ -46,13 +46,16 @@ import java.util.stream.Collectors;
 public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, NumberRecord> implements NumberRecordService {
     @Autowired private UserService userService;
     @Autowired private ProjectService projectService;
-    @Autowired private UserLedgerService ledgerService;
+    @Autowired @Lazy private UserLedgerService ledgerService;
     @Autowired @Lazy private NumberRecordService self;
     @Autowired private SystemConfigService systemConfigService;
-    @Autowired private UserLedgerService userLedgerService; // 引入账本服务
+    //@Autowired private UserLedgerService userLedgerService; // 引入账本服务
     @Autowired @Lazy private PriceTemplateService priceTemplateService;
     @Autowired private SmsApiService smsApiService;
     @Autowired private UserProjectLineService userProjectLineService;
+
+    // 修改点 3: 建议此处也加上 @Lazy 避免初始化顺序问题
+    @Autowired @Lazy private NumberRecordCacheManager cacheManager;
 
 
     private static final Pattern PHONE_NUMBER_PATTERN = Pattern.compile("^1[3-9]\\d{9}$");
@@ -339,8 +342,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         self.updateRecordAfterRetrieval(record, isSuccess, result);
     }
 
-    @Autowired
-    private NumberRecordCacheManager cacheManager;
+
     /**
      * 手动获取验证码接口
      * 修改说明：
@@ -765,35 +767,45 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
     }
 
     private void applyFilters(QueryWrapper<NumberRecord> wrapper, StatisticsQueryDTO queryDTO) {
-        if (StringUtils.hasText(queryDTO.getProjectName())) {
-            List<String> projectIds = projectService.list(
-                    new LambdaQueryWrapper<Project>().like(Project::getProjectName, queryDTO.getProjectName())
-            ).stream().map(Project::getProjectId).collect(Collectors.toList());
-            if (projectIds.isEmpty()) { wrapper.eq("1", 0); return; }
-            wrapper.in("project_id", projectIds);
-        }
-        if (StringUtils.hasText(queryDTO.getProjectId())) wrapper.eq("project_id", queryDTO.getProjectId());
-        if (queryDTO.getLineId() != null) wrapper.eq("line_id", queryDTO.getLineId());
-        LocalDateTime startTime = parseAndAdjustDateTime(queryDTO.getStartTime(), false);
-        if (startTime != null) wrapper.ge("get_number_time", startTime);
-        LocalDateTime endTime = parseAndAdjustDateTime(queryDTO.getEndTime(), true);
-        if (endTime != null) wrapper.le("get_number_time", endTime);
+        // 适配到通用统计过滤器
+        applyCommonStatsFilters(
+                wrapper,
+                queryDTO.getProjectId(),
+                queryDTO.getLineId(),
+                queryDTO.getProjectName(),
+                null, // 报表统计在 SQL 中处理状态，不在此全局过滤
+                null, // 报表统计在 SQL 中处理扣费，不在此全局过滤
+                queryDTO.getStartTime(),
+                queryDTO.getEndTime()
+        );
     }
 
     private LocalDateTime parseAndAdjustDateTime(String dateTimeStr, boolean isEndDate) {
         if (!StringUtils.hasText(dateTimeStr)) return null;
         try {
-            if (dateTimeStr.contains("T") && dateTimeStr.endsWith("Z")) {
+            // 1. 处理带时区的 ISO 格式 (例如: 2025-03-01T00:00:00Z)
+            if (dateTimeStr.endsWith("Z")) {
                 return ZonedDateTime.parse(dateTimeStr).toLocalDateTime();
-            } else if (dateTimeStr.contains(" ")) {
-                String standardizedStr = dateTimeStr.length() == 16 ? dateTimeStr + ":00" : dateTimeStr;
-                return LocalDateTime.parse(standardizedStr.replace(" ", "T"));
-            } else {
-                LocalDate date = LocalDate.parse(dateTimeStr);
-                return isEndDate ? date.atTime(23, 59, 59) : date.atStartOfDay();
             }
+
+            // 2. 统一将空格替换为 T，方便后续处理
+            String processedStr = dateTimeStr.replace(" ", "T");
+
+            // 3. 如果包含 T，说明它是 LocalDateTime 格式 (例如: 2025-03-01T00:00 或 2025-03-01T23:59:59)
+            if (processedStr.contains("T")) {
+                // LocalDateTime.parse 要求必须有秒。如果是 yyyy-MM-ddTHH:mm (长度16)，补全秒
+                if (processedStr.length() == 16) {
+                    processedStr += ":00";
+                }
+                return LocalDateTime.parse(processedStr);
+            }
+
+            // 4. 如果不包含 T，说明它是纯日期格式 (例如: 2025-03-01)
+            LocalDate date = LocalDate.parse(processedStr);
+            return isEndDate ? date.atTime(23, 59, 59) : date.atStartOfDay();
+
         } catch (DateTimeParseException e) {
-            log.warn("无法解析的日期时间格式: '{}'", dateTimeStr, e);
+            log.warn("无法解析的日期时间格式: '{}', 异常信息: {}", dateTimeStr, e.getMessage());
             return null;
         }
     }
@@ -934,37 +946,88 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         return this.page(new Page<>(queryDTO.getCurrent(), queryDTO.getSize()), wrapper).convert(this::convertToDTO);
     }
 
+    /**
+     * 核心：统一的统计过滤逻辑
+     * 确保所有统计报表在相同筛选条件下，时间边界、项目解析逻辑完全一致
+     */
+    private void applyCommonStatsFilters(QueryWrapper<NumberRecord> wrapper,
+                                         String projectId,
+                                         Integer lineId,
+                                         String projectName,
+                                         Integer status,
+                                         Integer charged,
+                                         Object startTimeRaw,
+                                         Object endTimeRaw) {
+
+        // 1. 项目ID 过滤
+        if (StringUtils.hasText(projectId)) {
+            wrapper.eq("project_id", projectId);
+        }
+
+        // 2. 线路ID 过滤
+        if (lineId != null) {
+            wrapper.eq("line_id", lineId);
+        }
+
+        // 3. 项目名称模糊查询转换为 ID 列表 (关键：确保报表和用户统计查的是同一批项目)
+        if (StringUtils.hasText(projectName)) {
+            List<String> projectIds = projectService.list(
+                    new LambdaQueryWrapper<Project>().like(Project::getProjectName, projectName)
+            ).stream().map(Project::getProjectId).collect(Collectors.toList());
+
+            if (projectIds.isEmpty()) {
+                wrapper.eq("1", 0); // 无匹配项目时，确保查不出任何数据
+                return;
+            }
+            wrapper.in("project_id", projectIds);
+        }
+
+        // 4. 状态与扣费过滤
+        if (status != null) wrapper.eq("status", status);
+        if (charged != null) wrapper.eq("charged", charged);
+
+        // 5. 统一时间处理 (解决边界 23:59:59 问题)
+        String startStr = startTimeRaw != null ? String.valueOf(startTimeRaw) : null;
+        String endStr = endTimeRaw != null ? String.valueOf(endTimeRaw) : null;
+
+        LocalDateTime startTime = parseAndAdjustDateTime(startStr, false);
+        if (startTime != null) {
+            wrapper.ge("get_number_time", startTime);
+        }
+
+        LocalDateTime endTime = parseAndAdjustDateTime(endStr, true);
+        if (endTime != null) {
+            wrapper.le("get_number_time", endTime);
+        }
+    }
+
     @Override
     public IPage<UserLineStatsDTO> getUserLineStats(UserLineStatsRequestDTO requestDTO, Long agentId) {
         // -----------------------------------------------------------------
-        // 步骤 1: 处理用户关联过滤 (如果需要按用户名或代理商筛选)
+        // 步骤 1: 处理用户关联过滤 (userName 和 agentId)
         // -----------------------------------------------------------------
         List<Long> filterUserIds = null;
         boolean needUserFilter = StringUtils.hasText(requestDTO.getUserName()) || agentId != null;
 
         if (needUserFilter) {
-            // 使用 Lambda 查询用户表
             List<User> users = userService.lambdaQuery()
-                    .select(User::getId) // 只查ID，优化性能
+                    .select(User::getId)
                     .like(StringUtils.hasText(requestDTO.getUserName()), User::getUserName, requestDTO.getUserName())
                     .eq(agentId != null, User::getParentId, agentId)
                     .list();
 
             if (CollectionUtils.isEmpty(users)) {
-                // 如果筛选条件下没有找到用户，直接返回空分页
                 return new Page<>(requestDTO.getPage(), requestDTO.getSize());
             }
             filterUserIds = users.stream().map(User::getId).collect(Collectors.toList());
         }
 
         // -----------------------------------------------------------------
-        // 步骤 2: 构建分组统计查询 (混合 Lambda 和 String Select)
+        // 步骤 2: 构建分组统计查询
         // -----------------------------------------------------------------
-        // 注意：这里必须用 QueryWrapper 而不是 LambdaQueryWrapper，因为 .select() 需要写聚合函数
         QueryWrapper<NumberRecord> queryWrapper = new QueryWrapper<>();
 
-        // 2.1 定义 Select 聚合字段
-        // 使用数据库函数 SUM(CASE...) 来统计成功的验证码数
+        // 聚合函数：确保 totalCodes 统计 status=2 的逻辑与报表接口一致
         queryWrapper.select(
                 "user_id",
                 "project_id",
@@ -973,52 +1036,55 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                 "SUM(CASE WHEN status = 2 THEN 1 ELSE 0 END) as totalCodes"
         );
 
-        // 2.2 转换到 Lambda 模式添加 Where 条件 (保持类型安全)
-        queryWrapper.lambda()
-                .eq(StringUtils.hasText(requestDTO.getProjectId()), NumberRecord::getProjectId, requestDTO.getProjectId())
-                .ge(requestDTO.getStartTime() != null, NumberRecord::getGetNumberTime, requestDTO.getStartTime())
-                .le(requestDTO.getEndTime() != null, NumberRecord::getGetNumberTime, requestDTO.getEndTime())
-                // 如果步骤1计算出了 ID 列表，这里进行 IN 查询
-                .in(needUserFilter, NumberRecord::getUserId, filterUserIds);
+        // 【关键修改点】：调用通用过滤器
+        // 因为 UserLineStatsRequestDTO 没有 lineId 和 projectName 字段，所以传 null
+        // 这样能确保时间解析和 projectId 处理方式与“数据报表”接口完全对齐
+        applyCommonStatsFilters(
+                queryWrapper,
+                requestDTO.getProjectId(),
+                null, // DTO 中无 lineId
+                null, // DTO 中无 projectName
+                null,
+                null,
+                requestDTO.getStartTime(),
+                requestDTO.getEndTime()
+        );
 
-        // 2.3 添加分组
+        // 应用用户 ID 过滤条件
+        if (needUserFilter) {
+            queryWrapper.in("user_id", filterUserIds);
+        }
+
         queryWrapper.groupBy("user_id", "project_id", "line_id");
-
-        // 2.4 添加排序 (按取号量降序)
         queryWrapper.orderByDesc("totalNumbers");
 
         // -----------------------------------------------------------------
-        // 步骤 3: 执行查询并转换结果 (selectMapsPage)
+        // 步骤 3: 执行查询并转换
         // -----------------------------------------------------------------
         Page<Map<String, Object>> mapPage = new Page<>(requestDTO.getPage(), requestDTO.getSize());
-        // 使用 Mybatis-Plus 的 selectMapsPage，返回 Map 列表
         IPage<Map<String, Object>> resultPage = this.baseMapper.selectMapsPage(mapPage, queryWrapper);
 
-        // -----------------------------------------------------------------
-        // 步骤 4: Map 转 DTO 并 补全用户名
-        // -----------------------------------------------------------------
         List<UserLineStatsDTO> dtoList = new ArrayList<>();
-
-        // 收集所有结果中的 userId，用于批量查询用户名
         Set<Long> resultUserIds = new HashSet<>();
 
         for (Map<String, Object> map : resultPage.getRecords()) {
             UserLineStatsDTO dto = new UserLineStatsDTO();
-            // 注意：Map 的 Key 通常是 select 里的字段名
+            // 注意数据库字段映射名
             Long uId = Long.valueOf(map.get("user_id").toString());
             dto.setUserId(uId);
             dto.setProjectId((String) map.get("project_id"));
             dto.setLineId((Integer) map.get("line_id"));
-            // 处理 Long/BigDecimal 类型转换 (数据库返回的 Count/Sum 类型可能不同)
+
+            // 兼容不同数据库驱动返回的数值类型
             dto.setTotalNumbers(new BigDecimal(map.get("totalNumbers").toString()).longValue());
             dto.setTotalCodes(new BigDecimal(map.get("totalCodes").toString()).longValue());
 
-            // 计算成功率
             dto.calculateRate();
-
             dtoList.add(dto);
             resultUserIds.add(uId);
         }
+
+        // 补全用户名
         if (!resultUserIds.isEmpty()) {
             Map<Long, String> userMap = userService.listByIds(resultUserIds).stream()
                     .collect(Collectors.toMap(User::getId, User::getUserName));
@@ -1027,6 +1093,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                 dto.setUserName(userMap.getOrDefault(dto.getUserId(), "未知用户"));
             }
         }
+
         Page<UserLineStatsDTO> finalPage = new Page<>(requestDTO.getPage(), requestDTO.getSize());
         finalPage.setTotal(resultPage.getTotal());
         finalPage.setRecords(dtoList);
@@ -1078,7 +1145,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                         .phoneNumber(record.getPhoneNumber())
                         .build();
 
-                userLedgerService.createLedgerAndUpdateBalance(refundLedger);
+                ledgerService.createLedgerAndUpdateBalance(refundLedger);
                 record.setStatus(4);
                 record.setCharged(2);
                 record.setRemark(record.getRemark() + " [管理员批量退款]");

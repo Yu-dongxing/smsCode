@@ -1095,7 +1095,7 @@ public class AdminController {
             String token = smsApiService.manualLogin(projectId, lineId);
             return Result.success(token, "登录成功");
         } catch (Exception e) {
-            return Result.error("登录失败: " + e.getMessage());
+            return Result.success("登录失败: " + e.getMessage());
         }
     }
 

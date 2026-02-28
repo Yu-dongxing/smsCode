@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.core.toolkit.CollectionUtils;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.wzz.smscode.cacheManager.NumberRecordCacheManager;
 import com.wzz.smscode.dto.CreatDTO.LedgerCreationDTO;
 import com.wzz.smscode.dto.EntityDTO.LedgerDTO;
 import com.wzz.smscode.entity.User;
@@ -39,7 +40,9 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
     @Lazy
     private UserService userService; // 注入用户服务用于身份认证
 
-
+    @Autowired
+    @Lazy  // <--- 必须添加这个注解
+    private NumberRecordCacheManager numberRecordCacheManager;
 
     @Override
     public IPage<UserLedger> listUserLedgerByUSerId(Long userId, Page<UserLedger> page){
@@ -134,7 +137,6 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
         BeanUtils.copyProperties(ledger, dto);
         return dto;
     }
-
     /**
      * [核心优化] 统一的账本创建和余额更新方法（接受UserId，Amount）
      * <p>
@@ -191,6 +193,7 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
             log.error("更新用户 {} 余额失败!", user.getUserName());
             throw new RuntimeException("更新用户余额失败，事务已回滚");
         }
+        numberRecordCacheManager.evictUser(user.getUserName());
         log.info("账本-更新用户余额成功：创建并保存账本记录");
 
         // 5. 创建并保存账本记录
@@ -210,7 +213,9 @@ public class UserLedgerServiceImpl extends ServiceImpl<UserLedgerMapper, UserLed
         ledger.setProjectId(request.getProjectId());
         this.save(ledger);
         log.info("账本-更新用户余额成功：创建并保存账本记录，创建的账本数据：{}", ledger);
+
         return newBalance;
+
     }
 
     @Override

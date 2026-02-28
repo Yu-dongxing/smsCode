@@ -54,7 +54,7 @@ public class ProjectController {
         IPage<Project> projectIPage = projectService.page(page, queryWrapper);
 
         return projectIPage.getRecords().isEmpty()
-                ? Result.error("列表为空")
+                ? Result.success("列表为空")
                 : Result.success("查询成功", projectIPage);
     }
 

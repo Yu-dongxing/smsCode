@@ -361,6 +361,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             throw new BusinessException("删除用户操作失败");
         }
 
+
         log.info("代理 {} 批量删除了 {} 个下级用户，IDs: {}", agentId, validIds.size(), validIds);
     }
 
@@ -615,6 +616,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             TransactionAspectSupport.currentTransactionStatus().setRollbackOnly();
             return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, "系统内部错误，操作失败");
         }
+        cacheManager.evictUser(targetUser.getUserName());
 
         return CommonResultDTO.success("操作成功");
     }
@@ -1078,6 +1080,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         if (user == null) {
             throw new BusinessException(0,"查询不到要删除的用户");
         }
+        cacheManager.evictUser(user.getUserName());
 
         return userMapper.deleteById(user) >0;
     }
