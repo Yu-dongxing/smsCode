@@ -29,20 +29,10 @@ public class PhoneNumberFilterService {
 
     private final WebClient webClient; // 从WebClientConfig注入
 
-    /**
-     * 获取硬编码的服务器地址列表。
-     * @return 服务器地址列表
-     */
     private List<String> getServerList() {
-        // 此处保持与原逻辑一致的硬编码服务器列表
         return Arrays.asList(
-                "api.rqddjc.com:1030",
-                "27.25.156.161:1030",
-                "103.7.141.114:1030",
-                "api.ddrqjc.com:1031",
-                "103.7.141.111:1031",
-                "nb.rqjiance.com:1032",
-                "103.7.141.39:1032"
+                "api.rqddjc.com:8000",
+                "api.ddrqjc.com:8000"
         );
     }
 
@@ -104,27 +94,30 @@ public class PhoneNumberFilterService {
      * @param cnty        国家区号
      * @return 构建好的URI对象
      */
+    /**
+     * 构建号码筛选的请求URI。
+     */
     private URI buildRequestUri(String serverIp, String phone, String token, String cpid, String cnty) {
         String baseUrl = serverIp.startsWith("http") ? serverIp : "http://" + serverIp;
         UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl(baseUrl)
-                .path("/check")
+                .path("/charge/check") // 新API路径
                 .queryParam("phone", phone)
                 .queryParam("token", token)
                 .queryParam("cpid", cpid);
 
-        // 仅当国家区号不是默认的 "86" 时才添加 'cnty' 参数
-        if (StringUtils.hasText(cnty) && !"86".equals(cnty)) {
-            builder.queryParam("cnty", cnty);
-        }
+        // 新API要求cnty必填
+        String finalCnty = StringUtils.hasText(cnty) ? cnty : "86";
+        builder.queryParam("cnty", finalCnty);
 
         return builder.build().toUri();
     }
 
     /**
-     * 从API响应JSON中解析出'state'字段的值。
+     * 从新版API响应JSON中解析出'state'字段的值。
+     * 因为新版可能返回多个账号状态，此处做拼接返回。
      *
      * @param responseBody API返回的JSON字符串。
-     * @return 返回包含解码后'state'值的 Mono<String>。如果解析失败或字段不存在，则返回 Mono.empty()。
+     * @return 返回包含解码后'state'值的 Mono<String>。
      */
     private Mono<String> parseStateFromResponse(String responseBody) {
         if (!StringUtils.hasText(responseBody)) {
@@ -133,27 +126,47 @@ public class PhoneNumberFilterService {
         }
 
         try {
-            Map<String, Object> responseJson = JsonPath.parse(responseBody).read("$");
-
-            // 检查 'code' 字段是否为 0
-            Object codeObj = responseJson.get("code");
-            if (!(codeObj instanceof Number) || ((Number) codeObj).intValue() != 0) {
-                log.warn("API返回的code不为0 (value: {}), 响应无效。响应: {}", codeObj, responseBody);
-                return Mono.empty(); // 响应码非0，视为无效响应
-            }
-
-            // 提取 'state' 字段
-            Object stateObj = responseJson.get("state");
-            if (!(stateObj instanceof String)) {
-                log.warn("API响应中缺少有效的 'state' 字符串, 无法解析。响应: {}", responseBody);
+            // 1. 检查 'code' 字段是否为 200 (新版成功状态码为 200)
+            Object codeObj = JsonPath.parse(responseBody).read("$.code");
+            if (!(codeObj instanceof Number) || ((Number) codeObj).intValue() != 200) {
+                log.warn("API返回的code不为200, 响应无效。响应: {}", responseBody);
                 return Mono.empty();
             }
 
-            // 解码并返回 state
-            String encodedState = (String) stateObj;
-            String state = URLDecoder.decode(encodedState, StandardCharsets.UTF_8.name());
-            log.info("成功从响应中解析并解码 'state' 值: '{}'", state);
-            return Mono.just(state);
+            // 2. 读取账号数量，如果是 0，则说明是新号
+            Integer accountCount = null;
+            try {
+                accountCount = JsonPath.parse(responseBody).read("$.userinfo.account");
+            } catch (Exception ignored) {}
+
+            if (accountCount != null && accountCount == 0) {
+                log.info("检测到账号数量为0，返回状态: '新号'");
+                return Mono.just("新号");
+            }
+
+            // 3. 读取所有的账号状态数组
+            List<String> states = null;
+            try {
+                states = JsonPath.parse(responseBody).read("$.userinfo.data[*].state");
+            } catch (Exception ignored) {}
+
+            if (states != null && !states.isEmpty()) {
+                // 如果有多个状态，将它们解码后用逗号拼接在一起
+                List<String> decodedStates = new java.util.ArrayList<>();
+                for (String state : states) {
+                    try {
+                        decodedStates.add(URLDecoder.decode(state, StandardCharsets.UTF_8.name()));
+                    } catch (Exception e) {
+                        decodedStates.add(state);
+                    }
+                }
+                String joinedStates = String.join(",", decodedStates);
+                log.info("成功从响应中解析并合并 'state' 值: '{}'", joinedStates);
+                return Mono.just(joinedStates);
+            }
+
+            log.warn("API响应中缺少有效的 'state' 结构, 无法解析。响应: {}", responseBody);
+            return Mono.empty();
 
         } catch (Exception e) {
             log.error("解析API响应JSON失败，响应体: '{}'。错误: {}", responseBody, e.getMessage());

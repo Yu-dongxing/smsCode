@@ -330,6 +330,7 @@ public class SmsApiService {
                 .concatMapDelayError(serverIp -> {
                     // 为当前服务器构建请求
                     URI requestUri = buildRequestUri(serverIp, phoneNumber, token, cpid, finalCountryCode);
+                    log.info("筛选请求：{}", requestUri);
                     log.info("正在尝试服务器 [{}] 筛选号码 [{}]...", serverIp, phoneNumber);
                     return webClient.get()
                             .uri(requestUri)
@@ -350,28 +351,28 @@ public class SmsApiService {
     }
 
     /**
-     * 根据文档构建请求URI
+     * 根据新文档构建请求URI
      */
     private URI buildRequestUri(String serverIp, String phone, String token, String cpid, String cnty) {
         String baseUrl = serverIp.startsWith("http") ? serverIp : "http://" + serverIp;
+        // 按照新文档：请求路径变更为 /charge/check
         UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl(baseUrl)
-                .path("/check")
+                .path("/charge/check")
                 .queryParam("phone", phone)
                 .queryParam("token", token)
                 .queryParam("cpid", cpid);
-        if (StringUtils.hasText(cnty) && !"86".equals(cnty)) {
-            builder.queryParam("cnty", cnty);
-        }
+
+        // 按照新文档，cnty为必填项，如果不传则默认提供 86
+        String finalCnty = StringUtils.hasText(cnty) ? cnty : "86";
+        builder.queryParam("cnty", finalCnty);
+
         return builder.build().toUri();
     }
 
 
     /**
-     * 解析API响应，判断号码是否可用。
-     *
-     * @param responseBody API返回的JSON字符串。
-     * @param cpid         项目ID，用于特殊逻辑判断（如快手）。
-     * @return 如果可用，返回 true，否则返回 false。
+     * 解析新版API响应，判断号码是否可用。
+     * 增加了对错误消息 (msg) 的 URL 解码处理。
      */
     private boolean parseAvailabilityResponse(String responseBody, String cpid) {
         if (!StringUtils.hasText(responseBody)) {
@@ -379,32 +380,91 @@ public class SmsApiService {
         }
         try {
             Map<String, Object> responseJson = JsonPath.parse(responseBody).read("$");
+
+            // 1. 检查 code 是否为 200
             Object codeObj = responseJson.get("code");
-            if (!(codeObj instanceof Number) || ((Number) codeObj).intValue() != 0) {
-                return false;
-            }
-            Object stateObj = responseJson.get("state");
-            if (!(stateObj instanceof String)) {
-                return false;
-            }
-            // 3. URL解码
-            String encodedState = (String) stateObj;
-            String state = URLDecoder.decode(encodedState, StandardCharsets.UTF_8.name());
-            log.info("解码后的state值为: '{}'", state);
-            // 定义不可用的关键词正则：包含 "封禁"、"老号"、"已绑"、"已注"、"异常" 任意一个即视为不可用
-            // .* 表示匹配前后任意字符
-            String unavailableRegex = ".*(封禁|老号|已绑|已注|异常).*";
-            // 定义明确的新号正则
-            String newAccountRegex = ".*(新号|未注).*";
-            if ("ks".equalsIgnoreCase(cpid)) {
-                if (state.matches(unavailableRegex)) {
-                    log.info("检测到不良状态关键词，判定不可用: {}", state);
-                    return false;
+
+            // --- 新增：提取并解码 msg 字段 ---
+            String rawMsg = (String) responseJson.get("msg");
+            String decodedMsg = "";
+            if (StringUtils.hasText(rawMsg)) {
+                try {
+                    // 对 msg 进行 URL 解码 (UTF-8)
+                    decodedMsg = URLDecoder.decode(rawMsg, StandardCharsets.UTF_8.name());
+                } catch (Exception e) {
+                    decodedMsg = rawMsg; // 解码失败则使用原值
                 }
+            }
+
+            if (!(codeObj instanceof Number) || ((Number) codeObj).intValue() != 200) {
+                // 在日志中输出解码后的中文错误信息
+                log.info("API返回状态码非200 (code: {}), 错误原因: [{}], 号码不可用。", codeObj, decodedMsg);
+                return false;
+            }
+
+            // 2. 检查是否有账号数量 (account)
+            Integer accountCount = null;
+            try {
+                accountCount = JsonPath.parse(responseBody).read("$.userinfo.account");
+            } catch (Exception ignored) {}
+
+            // 如果明确 account 为 0，说明没有任何账号绑定，视为新号，直接可用
+            if (accountCount != null && accountCount == 0) {
+                log.info("检测到账号数量为0，判定为新号，可用。");
                 return true;
             }
-            // 默认逻辑：必须明确包含 "新号" 或 "未注" 才是 true，其他情况（包括老号）均为 false
-            return state.matches(newAccountRegex);
+
+            // 3. 提取所有的账号状态 (data 数组中的 state)
+            List<String> states;
+            try {
+                states = JsonPath.parse(responseBody).read("$.userinfo.data[*].state");
+            } catch (Exception e) {
+                states = Collections.emptyList();
+            }
+
+            String unavailableRegex = ".*(封禁|老号|已绑|已注|异常).*";
+            String newAccountRegex = ".*(新号|未注).*";
+
+            // 4. 遍历所有绑定的账号状态进行判断
+            for (String state : states) {
+                if (!StringUtils.hasText(state)) continue;
+
+                // 同样对状态进行解码
+                String decodedState;
+                try {
+                    decodedState = URLDecoder.decode(state, StandardCharsets.UTF_8.name());
+                } catch (Exception e) {
+                    decodedState = state;
+                }
+
+                if ("ks".equalsIgnoreCase(cpid)) {
+                    if (decodedState.matches(".*(封禁|异常).*")) {
+                        log.info("快手项目检测到不良状态关键词，判定不可用: {}", decodedState);
+                        return false;
+                    }
+                } else {
+                    if (decodedState.matches(unavailableRegex)) {
+                        log.info("检测到不良状态关键词，判定不可用: {}", decodedState);
+                        return false;
+                    }
+                }
+            }
+
+            // 快手逻辑放行
+            if ("ks".equalsIgnoreCase(cpid)) {
+                return true;
+            }
+
+            // 默认逻辑：必须有账号明确标记为新号
+            for (String state : states) {
+                String dState;
+                try { dState = URLDecoder.decode(state, StandardCharsets.UTF_8); } catch (Exception e) { dState = state; }
+                if (dState.matches(newAccountRegex)) {
+                    return true;
+                }
+            }
+
+            return false;
 
         } catch (Exception e) {
             log.error("解析API响应JSON失败，响应体: '{}'。错误: {}", responseBody, e.getMessage());
@@ -417,15 +477,9 @@ public class SmsApiService {
      * @return 服务器地址列表
      */
     private List<String> getServerList() {
-        //后：根据系统配置中是否使用系统内置服务器列表-》否；在系统配置
         return Arrays.asList(
-                "api.rqddjc.com:1030",
-                "27.25.156.161:1030",
-                "103.7.141.114:1030",
-                "api.ddrqjc.com:1031",
-                "103.7.141.111:1031",
-                "nb.rqjiance.com:1032",
-                "103.7.141.39:1032"
+                "api.rqddjc.com:8000",
+                "api.ddrqjc.com:8000"
         );
     }
 
