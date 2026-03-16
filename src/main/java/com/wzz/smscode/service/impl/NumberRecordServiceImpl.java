@@ -142,6 +142,20 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         if (user.getBalance().compareTo(price) < 0) {
             return CommonResultDTO.error(Constants.ERROR_INSUFFICIENT_BALANCE, "余额不足");
         }
+
+        if ("105".equals(projectId) && Integer.valueOf(1).equals(lineId)) {
+            // 统计全库中该项目+该线路 处于 0(待取码) 或 1(取码中) 的记录数
+            long ongoingCount = this.count(new LambdaQueryWrapper<NumberRecord>()
+                    .eq(NumberRecord::getProjectId, "105")
+                    .eq(NumberRecord::getLineId, 1)
+                    .in(NumberRecord::getStatus, 0, 1)
+            );
+
+            if (ongoingCount >= 150) {
+                log.warn("项目105-线路1 并发量已达上限: {}", ongoingCount);
+                return CommonResultDTO.error(Constants.ERROR_NO_NUMBER, "当前项目105-线路1 取号任务过多（限制150个），请稍后再试");
+            }
+        }
 //        boolean hasOngoingRecord = this.hasOngoingRecord(user.getId());
 
 //        if (!BalanceUtil.canGetNumber(user, hasOngoingRecord)) {

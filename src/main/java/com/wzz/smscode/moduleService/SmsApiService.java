@@ -508,8 +508,8 @@ public class SmsApiService {
 
     // 使用 SimpleClientHttpRequestFactory (基于 JDK HttpURLConnection) 比 Netty 更抗造
     private final RestTemplate specialRestTemplate = new RestTemplate(new SimpleClientHttpRequestFactory() {{
-        setConnectTimeout(60000); // 连接超时 10秒
-        setReadTimeout(60000);    // 读取超时 60秒 (对应您之前设置的长时间等待)
+        setConnectTimeout(150*1000); // 连接超时 10秒
+        setReadTimeout(150*1000);    // 读取超时 60秒 (对应您之前设置的长时间等待)
     }});
 
 
@@ -522,7 +522,7 @@ public class SmsApiService {
     private Map<String, String> getPhoneNumberSpecial(Project project) {
         log.info("调用特殊API获取号码: {}", project.getProjectName());
         // 基础 URL
-        String requestUrl = "http://154.86.26.17:51777/GETPHONE";
+        String requestUrl = "http://154.86.19.28:13588/GETPHONE";
 
         try {
             // 1. 设置请求头：Connection: close 明确告知服务器不保持连接
@@ -573,8 +573,8 @@ public class SmsApiService {
             throw new BusinessException(0, "调用获取验证码接口中，手机号参数为空");
         }
 
-        String token = project.getSpecialApiToken() == null ? "815BA9C64F8B7C43" : project.getSpecialApiToken();
-        String baseUrl = "http://154.86.26.17:51777";
+        String token = project.getSpecialApiToken() == null ? "F037CA8EB52B92C7" : project.getSpecialApiToken();
+        String baseUrl = "http://154.86.19.28:13588";
         // 构造特殊 URL
         String fullUrl = String.format("%s/GETCODE&%s&%s", baseUrl, phone, token);
 
@@ -632,7 +632,7 @@ public class SmsApiService {
     // 特殊API查询余额
     public String getApiBalanceSpecial(Project project) {
         String token = project.getSpecialApiToken() == null ? "815BA9C64F8B7C43" : project.getSpecialApiToken();
-        String baseUrl = "http://154.86.26.17:51777";
+        String baseUrl = "http://154.86.19.28:13588";
         String url = String.format("%s/CX&%s", baseUrl, token);
 
         try {
