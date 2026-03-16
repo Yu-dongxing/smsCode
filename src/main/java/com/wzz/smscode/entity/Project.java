@@ -310,6 +310,13 @@ public class Project extends BaseEntity {
     @TableField("special_api_token")
     private String specialApiToken;
 
+    /**
+     * 特殊api请求host
+     */
+    @ColumnComment("特殊api请求host")
+    @TableField("special_api_host")
+    private String specialApiHost;
+
     //****************加解密api字段
 
     /**

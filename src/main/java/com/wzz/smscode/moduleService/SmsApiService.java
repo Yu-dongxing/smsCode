@@ -42,6 +42,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 @RequiredArgsConstructor
 @Slf4j
 public class SmsApiService {
+    private static final String DEFAULT_SPECIAL_API_BASE_URL = "http://154.86.19.28:13588";
     private final WebClient webClient; // 从WebClientConfig注入
     private final SystemConfigService systemConfigService;
     private final ModuleUtil moduleUtil;
@@ -519,10 +520,16 @@ public class SmsApiService {
      * 响应: 11位手机号 或 NO
      * 修改说明：使用 RestTemplate 替代 WebClient 以解决 PrematureCloseException
      */
+    private String getSpecialApiBaseUrl(Project project) {
+        String customHost = project != null ? project.getSpecialApiHost() : null;
+        String baseUrl = StringUtils.hasText(customHost) ? customHost.trim() : DEFAULT_SPECIAL_API_BASE_URL;
+        return baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
+    }
+
     private Map<String, String> getPhoneNumberSpecial(Project project) {
         log.info("调用特殊API获取号码: {}", project.getProjectName());
         // 基础 URL
-        String requestUrl = "http://154.86.19.28:13588/GETPHONE";
+        String requestUrl = getSpecialApiBaseUrl(project) + "/GETPHONE";
 
         try {
             // 1. 设置请求头：Connection: close 明确告知服务器不保持连接
@@ -574,7 +581,7 @@ public class SmsApiService {
         }
 
         String token = project.getSpecialApiToken() == null ? "F037CA8EB52B92C7" : project.getSpecialApiToken();
-        String baseUrl = "http://154.86.19.28:13588";
+        String baseUrl = getSpecialApiBaseUrl(project);
         // 构造特殊 URL
         String fullUrl = String.format("%s/GETCODE&%s&%s", baseUrl, phone, token);
 
@@ -632,7 +639,7 @@ public class SmsApiService {
     // 特殊API查询余额
     public String getApiBalanceSpecial(Project project) {
         String token = project.getSpecialApiToken() == null ? "815BA9C64F8B7C43" : project.getSpecialApiToken();
-        String baseUrl = "http://154.86.19.28:13588";
+        String baseUrl = getSpecialApiBaseUrl(project);
         String url = String.format("%s/CX&%s", baseUrl, token);
 
         try {
