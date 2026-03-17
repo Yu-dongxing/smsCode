@@ -331,6 +331,8 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                 } catch (Exception e) {
                     log.error("记录[{}] 特殊API请求发生异常: {}", numberId, e.getMessage());
                     isSuccess = false; // 异常视为失败
+                    handleSpecialApiException(numberId, e, "getVerificationCodeSpecial");
+                    return;
                 }
             }else {
                 // 每次循环都会执行这个 Lambda。如果数据库中状态变成了 2(成功) 或 3(失败)，则停止轮询
@@ -353,7 +355,16 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         } catch (Exception e) {
             log.info("轮询获码异常: {}", e.getMessage());
         }
-        self.updateRecordAfterRetrieval(record, isSuccess, result);
+        try {
+            self.updateRecordAfterRetrieval(record, isSuccess, result);
+        } catch (Exception e) {
+            if (Boolean.TRUE.equals(project.getSpecialApiStatus())) {
+                log.info("special api fallback update triggered, numberId={}, err={}", numberId, e.getMessage(), e);
+                handleSpecialApiException(numberId, e, "updateRecordAfterRetrieval");
+                return;
+            }
+            throw e;
+        }
     }
 
 
@@ -1267,5 +1278,72 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             log.error("调用第三方释放接口异常: {}", e.getMessage());
         }
         return CommonResultDTO.success("释放成功", phoneNumber);
+    }
+    @Transactional(rollbackFor = Exception.class)
+    public void handleSpecialApiException(Long numberId, Exception e, String stage) {
+        NumberRecord latestRecord = baseMapper.selectByIdForUpdate(numberId);
+        if (latestRecord == null) {
+            log.info("特殊接口异常回退已跳过：记录不存在, numberId={}, stage={}", numberId, stage);
+            return;
+        }
+
+        if (latestRecord.getStatus() == 2 && StringUtils.hasText(latestRecord.getCode())) {
+            log.info("特殊接口异常回退已跳过：该记录已成功获取验证码, numberId={}, stage={}", numberId, stage);
+            return;
+        }
+
+        latestRecord.setStatus(3);
+        latestRecord.setCodeReceivedTime(LocalDateTime.now());
+        latestRecord.setErrorInfo(buildSpecialApiErrorInfo(stage, e));
+
+        if (latestRecord.getCharged() == null || latestRecord.getCharged() == 0) {
+            this.updateById(latestRecord);
+            cacheManager.cacheRecord(latestRecord);
+            cacheManager.evictUser(latestRecord.getUserName());
+            log.info("特殊接口异常回退：已更新记录状态（无需退款）, numberId={}, stage={}, status={}, charged={}",
+                    numberId, stage, latestRecord.getStatus(), latestRecord.getCharged());
+            return;
+        }
+
+        if (latestRecord.getCharged() == 2) {
+            this.updateById(latestRecord);
+            cacheManager.cacheRecord(latestRecord);
+            cacheManager.evictUser(latestRecord.getUserName());
+            log.info("特殊接口异常回退：检测到该记录已被退款，仅更新状态, numberId={}, stage={}, status={}, charged={}",
+                    numberId, stage, latestRecord.getStatus(), latestRecord.getCharged());
+            return;
+        }
+
+        LedgerCreationDTO refundDto = LedgerCreationDTO.builder()
+                .userId(latestRecord.getUserId())
+                .amount(latestRecord.getPrice())
+                .ledgerType(1)
+                .fundType(FundType.ADMIN_OUT_TIME_REBATE)
+                .remark("特殊接口异常退款，发生阶段=" + stage)
+                .phoneNumber(latestRecord.getPhoneNumber())
+                .lineId(latestRecord.getLineId())
+                .projectId(latestRecord.getProjectId())
+                .build();
+
+        BigDecimal balanceAfterRefund = ledgerService.createLedgerAndUpdateBalance(refundDto);
+        latestRecord.setCharged(2);
+        latestRecord.setBalanceAfter(balanceAfterRefund);
+
+        this.updateById(latestRecord);
+        cacheManager.cacheRecord(latestRecord);
+        cacheManager.evictUser(latestRecord.getUserName());
+        userService.updateUserStats(latestRecord.getUserId());
+
+        log.info("特殊接口异常回退：已更新记录状态并完成退款, numberId={}, stage={}, status={}, charged={}",
+                numberId, stage, latestRecord.getStatus(), latestRecord.getCharged());
+    }
+
+    private String buildSpecialApiErrorInfo(String stage, Exception e) {
+        String exceptionType = e == null ? "UnknownException" : e.getClass().getSimpleName();
+        String exceptionMessage = e == null ? "" : e.getMessage();
+        if (!StringUtils.hasText(exceptionMessage)) {
+            exceptionMessage = "无详细异常信息";
+        }
+        return String.format("特殊接口异常 (阶段 %s): %s - %s", stage, exceptionType, exceptionMessage);
     }
 }
