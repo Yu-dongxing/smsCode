@@ -60,12 +60,19 @@ public class SystemConfigServiceImpl extends ServiceImpl<SystemConfigMapper, Sys
         log.info("准备更新系统配置: {}", config);
 
         // 1. 参数校验
-        if (config.getMin24hCodeRate() != null && (config.getMin24hCodeRate() < 0.0 || config.getMin24hCodeRate() > 1.0)) {
-            throw new IllegalArgumentException("24小时最低回码率必须在 0.0 到 1.0 之间");
+//        if (config.getMin24hCodeRate() != null && (config.getMin24hCodeRate() < 0.0 || config.getMin24hCodeRate() > 1.0)) {
+//            throw new IllegalArgumentException("24小时最低回码率必须在 0.0 到 1.0 之间");
+//        }
+        // 校验回码率范围
+        if (config.getMinWindowCodeRate() != null && (config.getMinWindowCodeRate() < 0.0 || config.getMinWindowCodeRate() > 1.0)) {
+            throw new IllegalArgumentException("时间窗口内最低回码率必须在 0.0 到 1.0 之间");
         }
-        if (config.getBalanceThreshold() != null && config.getBalanceThreshold().signum() < 0) {
-            throw new IllegalArgumentException("余额封控下限值不能为负数");
+        if (config.getBanCodeRateWindowMinutes() != null && config.getBanCodeRateWindowMinutes() <= 0) {
+            throw new IllegalArgumentException("风控时间窗口(分钟)必须大于 0");
         }
+//        if (config.getBalanceThreshold() != null && config.getBalanceThreshold().signum() < 0) {
+//            throw new IllegalArgumentException("余额封控下限值不能为负数");
+//        }
 
         // 2. 确保更新的是固定的那条配置记录
         config.setConfigId(CONFIG_ID);

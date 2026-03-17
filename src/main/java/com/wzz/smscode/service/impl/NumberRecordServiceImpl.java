@@ -31,6 +31,7 @@ import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -71,6 +72,30 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         return count > 0;
     }
 
+    private double calculateUserCodeRateWithinMinutes(Long userId, Integer windowMinutes) {
+        int effectiveWindowMinutes = (windowMinutes == null || windowMinutes <= 0) ? 1440 : windowMinutes;
+        LocalDateTime windowStart = LocalDateTime.now().minusMinutes(effectiveWindowMinutes);
+
+        long totalGetCount = this.count(new LambdaQueryWrapper<NumberRecord>()
+                .eq(NumberRecord::getUserId, userId)
+                .ge(NumberRecord::getGetNumberTime, windowStart));
+
+        if (totalGetCount == 0) {
+            return 1.0D;
+        }
+
+        long successCodeCount = this.count(new LambdaQueryWrapper<NumberRecord>()
+                .eq(NumberRecord::getUserId, userId)
+                .eq(NumberRecord::getStatus, 2)
+                .isNotNull(NumberRecord::getCode)
+                .ne(NumberRecord::getCode, "")
+                .ge(NumberRecord::getGetNumberTime, windowStart));
+
+        return BigDecimal.valueOf(successCodeCount)
+                .divide(BigDecimal.valueOf(totalGetCount), 4, RoundingMode.HALF_UP)
+                .doubleValue();
+    }
+
 
 
 
@@ -107,8 +132,9 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         if (user.getStatus() != 0) {
             return CommonResultDTO.error(-5, "用户已被禁用");
         }
-        if (config.getEnableBanMode() == 1 && user.getDailyCodeRate() < config.getMin24hCodeRate()) {
-            return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, "回码率过低封禁");
+        double windowCodeRate = calculateUserCodeRateWithinMinutes(user.getId(), config.getBanCodeRateWindowMinutes());
+        if (config.getEnableBanMode() == 1 && windowCodeRate < config.getMinWindowCodeRate()) {
+            return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, "回码率过低暂时封禁，请等待"+config.getBanCodeRateWindowMinutes()+"分钟");
         }
         String blacklist = user.getProjectBlacklist();
         String currentKey = projectId + "-" + lineId;

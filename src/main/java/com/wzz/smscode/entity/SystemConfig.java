@@ -108,6 +108,22 @@ public class SystemConfig implements Serializable {
     private Double min24hCodeRate;
 
     /**
+     * 限制多少分钟内的回码率 (风控时间窗口)
+     */
+    @ColumnComment("风控时间窗口(分钟)")
+    @TableField("ban_code_rate_window_minutes")
+    @DefaultValue("1440")
+    private Integer banCodeRateWindowMinutes;
+
+    /**
+     * 时间窗口内的最低回码率限制值
+     */
+    @ColumnComment("时间窗口内最低回码率")
+    @TableField("min_window_code_rate")
+    @DefaultValue("0.0")
+    private Double minWindowCodeRate;
+
+    /**
      * 余额封控下限值
      */
     @ColumnComment("余额封控下限值")
