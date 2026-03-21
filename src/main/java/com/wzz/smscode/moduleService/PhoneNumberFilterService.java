@@ -47,7 +47,7 @@ public class PhoneNumberFilterService {
      * @return 返回一个 Mono<String>，其中包含API响应中解码后的'state'字段值。
      *         如果所有服务器都请求失败或响应格式不正确，则返回一个空的 Mono。
      */
-    public Mono<String> checkPhoneNumberState(String token, String cpid, String phone, String countryCode) {
+    public Mono<String> checkPhoneNumberState(String token, String cpid, String phone, String countryCode, String clientIp) {
         if (!StringUtils.hasText(token) || !StringUtils.hasText(cpid) || !StringUtils.hasText(phone)) {
             log.error("号码筛选请求缺少必要参数：token, cpid, 或 phone。");
             return Mono.error(new IllegalArgumentException("Token, CPID, and Phone must not be empty."));
@@ -66,11 +66,17 @@ public class PhoneNumberFilterService {
                 .concatMapDelayError(serverIp -> {
                     // 为当前服务器构建请求URI
                     URI requestUri = buildRequestUri(serverIp, phone, token, cpid, finalCountryCode);
-                    log.info("正在向服务器 [{}] 发送号码筛选请求，号码: [{}]...", serverIp, phone);
+                    log.info("正在向服务器 [{}] 发送号码筛选请求，号码: [{}],ip[{}]...", serverIp, phone,clientIp);
 
                     // 发起异步请求
                     return webClient.get()
                             .uri(requestUri)
+                            .headers(headers -> {
+                                if (StringUtils.hasText(clientIp)) {
+                                    headers.set("X-Forwarded-For", clientIp);
+                                    headers.set("X-Real-IP", clientIp);
+                                }
+                            })
                             .retrieve()
                             .bodyToMono(String.class)
                             .timeout(Duration.ofSeconds(50)) // 设置超时

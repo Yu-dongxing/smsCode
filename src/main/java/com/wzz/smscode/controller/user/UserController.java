@@ -16,6 +16,8 @@ import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.moduleService.PhoneNumberFilterService;
 import com.wzz.smscode.service.*;
 import com.wzz.smscode.service.impl.UserServiceImpl;
+import com.wzz.smscode.util.IpUtil;
+import jakarta.servlet.http.HttpServletRequest;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -347,7 +349,8 @@ public class UserController {
      * 适用于需要获取号码原始状态（如 "新号", "封禁" 等）的场景。
      */
     @PostMapping("/checkPhoneNumberState")
-    public CommonResultDTO<String> checkPhoneNumberState(@RequestBody RequestUrlDTO requestUrlDTO) {
+    public CommonResultDTO<String> checkPhoneNumberState(@RequestBody RequestUrlDTO requestUrlDTO,
+                                                         HttpServletRequest request) {
         // 1. 身份验证
 //        User user = userService.authenticateUserByUserName(requestUrlDTO.getUserName(), requestUrlDTO.getPassword());
 //        if (user == null) {
@@ -362,7 +365,13 @@ public class UserController {
 //        }
 
         try {
-            String state = phoneNumberFilterService.checkPhoneNumberState(requestUrlDTO.getToken(), requestUrlDTO.getCpid(), requestUrlDTO.getPhone(), "86")
+            String clientIp = IpUtil.getClientIp(request);
+            String state = phoneNumberFilterService.checkPhoneNumberState(
+                            requestUrlDTO.getToken(),
+                            requestUrlDTO.getCpid(),
+                            requestUrlDTO.getPhone(),
+                            "86",
+                            clientIp)
                     .block(); // 阻塞等待异步操作完成
             if (state != null) {
                 return CommonResultDTO.success("查询成功", state);
@@ -380,7 +389,7 @@ public class UserController {
      *
      * @param userName 用户名
      * @param password 密码
-     * @param days     保留天数（例如输入1，表示删除1天前的记录。普通用户强制最小为1）
+//     * @param days     保留天数（例如输入1，表示删除1天前的记录。普通用户强制最小为1）
      */
     @RequestMapping(value = "/ledger/clear", method = {RequestMethod.GET, RequestMethod.POST})
     public CommonResultDTO<String> clearLedger(
@@ -424,7 +433,7 @@ public class UserController {
      *
      * @param userName 用户名
      * @param password 密码
-     * @param days     保留天数（最小为1）
+//     * @param days     保留天数（最小为1）
      */
     @RequestMapping(value = "/number/clear", method = {RequestMethod.GET, RequestMethod.POST})
     public CommonResultDTO<String> clearNumberRecords(
