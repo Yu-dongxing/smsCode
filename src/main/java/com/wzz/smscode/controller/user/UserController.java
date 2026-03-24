@@ -21,12 +21,14 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.RestTemplate;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
@@ -55,6 +57,9 @@ public class UserController {
 
     @Autowired
     private SystemConfigService systemConfigService;
+
+    @Autowired @Lazy
+    private PriceTemplateService priceTemplateService;
     /**
      * 获取手机号码
      *
@@ -162,11 +167,74 @@ public class UserController {
      * @return CommonResultDTO，成功时 data 为余额
      */
     @RequestMapping(value = "/getBalance", method = {RequestMethod.GET, RequestMethod.POST})
-    public CommonResultDTO<BigDecimal> getBalance(
+    public CommonResultDTO<?> getBalance(
             @RequestParam String userName,
             @RequestParam String password) {
         return userService.getBalance(userName, password);
+        //return CommonResultDTO.success("接口关闭 请更换/getNumBalance ");
     }
+
+    /**
+     * 查询账户项目数量
+     *
+     * @param userName   用户名称
+     * @param password 用户密码
+     * @return CommonResultDTO，成功时 data 为余额
+     */
+    @RequestMapping(value = "/getNumBalance", method = {RequestMethod.GET, RequestMethod.POST})
+    public CommonResultDTO<BigDecimal> getNumBalance(
+            @RequestParam String userName,
+            @RequestParam String password,
+            @RequestParam String projectId,
+            @RequestParam String lineId) {
+        Integer parsedLineId;
+        try {
+            parsedLineId = Integer.valueOf(lineId);
+        } catch (NumberFormatException e) {
+            return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, "lineId 必须是有效的数字");
+        }
+
+        // 登录
+        User u = userService.authenticateUserByUserName(userName, password, false);
+        if (u == null) {
+            User existingUser = userService.getByUserName(userName);
+            if (existingUser != null
+                    && password.equals(existingUser.getPassword())
+                    && existingUser.getStatus() != 0) {
+                return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED, "该用户已被禁用");
+            }
+            return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED, "用户ID或密码错误");
+        }
+
+        if (u.getStatus() != 0) {
+            return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED, "该用户已被禁用");
+        }
+
+        // 查询
+        BigDecimal balance = u.getBalance();
+        if (balance == null) {
+            return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, "用户余额异常");
+        }
+
+        Long templateId = u.getTemplateId();
+        if (templateId == null) {
+            return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, "项目未启用");
+        }
+
+        PriceTemplateItem priceItem = priceTemplateService.getPriceConfig(templateId, projectId, parsedLineId);
+        if (priceItem == null) {
+            return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, "线路未启用");
+        }
+
+        BigDecimal price = priceItem.getPrice();
+        if (price == null || price.compareTo(BigDecimal.ZERO) <= 0) {
+            return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, "获取异常");
+        }
+
+        BigDecimal count = balance.divide(price, 0, RoundingMode.DOWN);
+        return CommonResultDTO.success("获取成功", count);
+    }
+
 
     /**
      * 用户登录并获取详细信息
