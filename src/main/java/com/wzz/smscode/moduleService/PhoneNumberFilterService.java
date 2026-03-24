@@ -1,5 +1,6 @@
 package com.wzz.smscode.moduleService;
 
+import com.alibaba.fastjson2.JSONObject;
 import com.jayway.jsonpath.JsonPath;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -116,6 +117,14 @@ public class PhoneNumberFilterService {
         builder.queryParam("cnty", finalCnty);
 
         return builder.build().toUri();
+    }
+
+    public boolean test(String reData){
+        JSONObject jsonObject = JSONObject.parseObject(reData);
+        if (!jsonObject.getJSONObject("userinfo").getJSONArray("data").isEmpty()&&jsonObject.getJSONObject("userinfo").getJSONArray("data").getJSONObject(0).getString("state").equals("新号")){
+            return true;
+        }
+        return false;
     }
 
     /**

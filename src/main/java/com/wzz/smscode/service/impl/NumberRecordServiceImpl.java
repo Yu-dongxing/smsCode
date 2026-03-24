@@ -211,14 +211,22 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                 }
                 if (config.getEnableNumberFiltering() && projectT.getEnableFilter()) {
                     try {
+                        log.info("[NUMBER-FILTER-TRACE] 项目ID: {} | 线路ID: {} | 手机号: {} - 开始筛选流程",
+                                projectT.getId(), projectT.getSelectNumberApiRequestValue(), phone);
                         Boolean isAvailable = smsApiService.checkPhoneNumberAvailability(projectT, phone, null)
                                 .block(Duration.ofSeconds(60));
-                        if (!Boolean.TRUE.equals(isAvailable)) {
-                            log.warn("号码 [{}] 筛选不通过", phone);
+                        if (Boolean.TRUE.equals(isAvailable)) {
+                            log.info("[NUMBER-FILTER-TRACE] 项目ID: {} | 线路ID: {} | 手机号: {} - 筛选结果: [通过]",
+                                    projectT.getId(), projectT.getSelectNumberApiRequestValue(), phone);
+                        } else {
+                            log.warn("[NUMBER-FILTER-TRACE] 项目ID: {} | 线路ID: {} | 手机号: {} - 筛选结果: [未通过]",
+                                    projectT.getId(), projectT.getSelectNumberApiRequestValue(), phone);
                             if (attempt < MAX_ATTEMPTS) Thread.sleep(200);
                             continue;
                         }
                     } catch (Exception e) {
+                        log.error("[NUMBER-FILTER-TRACE] 项目ID: {} | 线路ID: {} | 手机号: {} - 筛选异常中断: {}",
+                                projectT.getId(), projectT.getSelectNumberApiRequestValue(), phone, e.getMessage());
                         log.error("筛选调用异常，视为筛选不通过", e);
                         continue;
                     }

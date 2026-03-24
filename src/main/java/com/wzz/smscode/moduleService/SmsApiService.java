@@ -309,6 +309,7 @@ public class SmsApiService {
     public Mono<Boolean> checkPhoneNumberAvailability(Project project, String phoneNumber, String countryCode) {
         //获取系统配置并检查功能总开关
         SystemConfig systemConfig = systemConfigService.getConfig();
+        String projectId = String.valueOf(project.getId());
         if (project.getEnableFilter() == null || !project.getEnableFilter() || !systemConfig.getEnableNumberFiltering()) {
             log.info("系统配置：{},项目 [{}] 未开启号码筛选功能，默认号码 [{}] 可用。",systemConfig.getEnableNumberFiltering(), project.getProjectName(), phoneNumber);
             return Mono.just(true); // 功能未开启，默认可用
@@ -329,22 +330,28 @@ public class SmsApiService {
         //响应式服务器轮询与请求
         return Flux.fromIterable(servers)
                 .concatMapDelayError(serverIp -> {
+
                     // 为当前服务器构建请求
                     URI requestUri = buildRequestUri(serverIp, phoneNumber, token, cpid, finalCountryCode);
-                    log.info("筛选请求：{}", requestUri);
-                    log.info("正在尝试服务器 [{}] 筛选号码 [{}]...", serverIp, phoneNumber);
+                    log.info("[NUMBER-FILTER-TRACE] 筛选请求：{}", requestUri);
+                    log.info("[NUMBER-FILTER-TRACE] 正在尝试服务器 [{}] 筛选号码 [{}]...", serverIp, phoneNumber);
+                    log.info("[NUMBER-FILTER-TRACE] 项目ID: {} | 线路ID: {} | 手机号: {} - 发起请求 -> 服务器: {}, URI: {}",
+                            projectId, cpid, phoneNumber, serverIp, requestUri);
                     return webClient.get()
                             .uri(requestUri)
                             .retrieve()
                             .bodyToMono(String.class)
                             .timeout(Duration.ofSeconds(50)) // 根据建议设置45-60秒超时
                             .flatMap(responseBody -> {
-                                log.info("服务器 [{}] 响应: {}", serverIp, responseBody);
+                                log.info("[NUMBER-FILTER-TRACE] 服务器 [{}] 响应: {}", serverIp, responseBody);
+                                log.info("[NUMBER-FILTER-TRACE] 项目ID: {} | 线路ID: {} | 手机号: {} - 接口响应内容: {}",
+                                        projectId, cpid, phoneNumber, responseBody);
                                 boolean isAvailable = parseAvailabilityResponse(responseBody, cpid);
-                                log.info("号码 [{}] 在服务器 [{}] 的筛选结果: {}", phoneNumber, serverIp, isAvailable ? "可用" : "不可用");
+                                log.info("[NUMBER-FILTER-TRACE] 号码 [{}] 在服务器 [{}] 的筛选结果: {}", phoneNumber, serverIp, isAvailable ? "可用" : "不可用");
                                 return Mono.just(isAvailable);
                             })
-                            .doOnError(e -> log.warn("访问服务器 [{}] 失败: {}. 正在尝试下一个...", serverIp, e.getMessage()))
+                            .doOnError(e -> log.warn("[NUMBER-FILTER-TRACE] 项目ID: {} | 手机号: {} - 服务器 {} 请求异常: {}",
+                                    projectId, phoneNumber, serverIp, e.getMessage()))
                             .onErrorResume(e -> Mono.empty()); // 如果当前服务器请求失败，返回空Mono，以便concatMap继续处理下一个服务器
                 })
                 .next() // 只取第一个成功的结果
@@ -419,6 +426,7 @@ public class SmsApiService {
             List<String> states;
             try {
                 states = JsonPath.parse(responseBody).read("$.userinfo.data[*].state");
+                log.info("[NUMBER-FILTER-TRACE] 提取到的状态列 ：{}",states);
             } catch (Exception e) {
                 states = Collections.emptyList();
             }
@@ -434,40 +442,45 @@ public class SmsApiService {
                 String decodedState;
                 try {
                     decodedState = URLDecoder.decode(state, StandardCharsets.UTF_8.name());
+                    log.info("[NUMBER-FILTER-TRACE] 返回参数响应解码后的状态：{},原状态：{}", decodedState,state);
                 } catch (Exception e) {
                     decodedState = state;
                 }
 
-                if ("ks".equalsIgnoreCase(cpid)) {
-                    if (decodedState.matches(".*(封禁|异常).*")) {
-                        log.info("快手项目检测到不良状态关键词，判定不可用: {}", decodedState);
-                        return false;
-                    }
-                } else {
-                    if (decodedState.matches(unavailableRegex)) {
-                        log.info("检测到不良状态关键词，判定不可用: {}", decodedState);
-                        return false;
-                    }
-                }
+                //快手项目 需要新号
+
+//                if ("ks".equalsIgnoreCase(cpid)) {
+//                    if (decodedState.matches(".*(封禁|异常).*")) {
+//                        log.info("快手项目检测到不良状态关键词，判定不可用: {}", decodedState);
+//                        return false;
+//                    }
+//                } else {
+//                    if (decodedState.matches(unavailableRegex)) {
+//                        log.info("检测到不良状态关键词，判定不可用: {}", decodedState);
+//                        return false;
+//                    }
+//                }
             }
 
-            // 快手逻辑放行
-            if ("ks".equalsIgnoreCase(cpid)) {
-                return true;
-            }
+//            // 快手逻辑放行
+//            if ("ks".equalsIgnoreCase(cpid)) {
+//                return true;
+//            }
 
             // 默认逻辑：必须有账号明确标记为新号
             for (String state : states) {
                 String dState;
                 try { dState = URLDecoder.decode(state, StandardCharsets.UTF_8); } catch (Exception e) { dState = state; }
-                if (dState.matches(newAccountRegex)) {
+                if (dState.matches(".*(新号|未注).*")) {
+                    log.info("[NUMBER-FILTER-TRACE] 解析结果: 检测到新号状态 [{}], [可用]", dState);
                     return true;
                 }
             }
-
+            log.info("[NUMBER-FILTER-TRACE] 解析结果: 未发现可用标识, [不可用]");
             return false;
 
         } catch (Exception e) {
+            log.error("[NUMBER-FILTER-TRACE] 解析异常: {}", e.getMessage());
             log.error("解析API响应JSON失败，响应体: '{}'。错误: {}", responseBody, e.getMessage());
             return false;
         }
