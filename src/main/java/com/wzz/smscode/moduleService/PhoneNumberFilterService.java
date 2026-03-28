@@ -28,7 +28,7 @@ public class PhoneNumberFilterService {
 
     public List<String> getServerList() {
         return List.of(
-                "h6.bubble123.top"
+                "api.bubble89.shop"
         );
     }
 
@@ -138,10 +138,9 @@ public class PhoneNumberFilterService {
         }
 
         try {
-            // 1. 检查 'code' 字段是否为 200 (新版成功状态码为 200)
             Object codeObj = JsonPath.parse(responseBody).read("$.code");
-            if (!(codeObj instanceof Number) || ((Number) codeObj).intValue() != 0) {
-                return Mono.error(new IllegalArgumentException("API返回的code不为0, 响应无效。响应: {}"+responseBody));
+            if (!isSuccessCode(codeObj)) {
+                return Mono.error(new IllegalArgumentException("API返回的code不是成功码(0/200), 响应无效。响应: " + responseBody));
             }
             Integer status = extractStatus(responseBody);
             if (status == null) {
@@ -163,8 +162,8 @@ public class PhoneNumberFilterService {
 
         try {
             Object codeObj = JsonPath.parse(responseBody).read("$.code");
-            if (!(codeObj instanceof Number) || ((Number) codeObj).intValue() != 0) {
-                return Mono.error(new IllegalArgumentException("API返回的code不为0, 响应无效。响应: " + responseBody));
+            if (!isSuccessCode(codeObj)) {
+                return Mono.error(new IllegalArgumentException("API返回的code不是成功码(0/200), 响应无效。响应: " + responseBody));
             }
 
             String rawState = extractStatusText(responseBody);
@@ -190,10 +189,9 @@ public class PhoneNumberFilterService {
         }
 
         try {
-            // 1. 检查 'code' 字段是否为 200 (新版成功状态码为 200)
             Object codeObj = JsonPath.parse(responseBody).read("$.code");
-            if (!(codeObj instanceof Number) || ((Number) codeObj).intValue() != 0) {
-                log.warn("API返回的code不为0, 响应无效。响应: "+responseBody);
+            if (!isSuccessCode(codeObj)) {
+                log.warn("API返回的code不是成功码(0/200), 响应无效。响应: {}", responseBody);
                 return -4;
             }
             Integer status = extractStatus(responseBody);
@@ -208,6 +206,14 @@ public class PhoneNumberFilterService {
             log.warn(("解析API响应JSON失败，响应体: "+ responseBody+"错误:"+ e.getMessage()));
             return -4;
         }
+    }
+
+    private boolean isSuccessCode(Object codeObj) {
+        if (!(codeObj instanceof Number number)) {
+            return false;
+        }
+        int code = number.intValue();
+        return code == 0 || code == 200;
     }
 
     private Integer extractFirstStatus(Object statusObj) {

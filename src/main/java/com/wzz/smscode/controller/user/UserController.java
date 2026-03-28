@@ -9,6 +9,7 @@ import com.wzz.smscode.dto.*;
 import com.wzz.smscode.dto.EntityDTO.UserDTO;
 import com.wzz.smscode.dto.LoginDTO.UserLoginDto;
 import com.wzz.smscode.dto.ResultDTO.UserResultDTO;
+import com.wzz.smscode.dto.number.GetNumberResponseDTO;
 import com.wzz.smscode.dto.number.NumberDTO;
 import com.wzz.smscode.dto.update.UserUpdatePasswardDTO;
 import com.wzz.smscode.entity.*;
@@ -68,7 +69,7 @@ public class UserController {
      * @return CommonResultDTO，成功时 data 为手机号字符串
      */
     @RequestMapping(value = "/getNumber", method = {RequestMethod.GET, RequestMethod.POST})
-    public CommonResultDTO<String> getNumber(
+    public GetNumberResponseDTO getNumber(
             @RequestParam String userName,
             @RequestParam String password,
             @RequestParam String projectId,
@@ -415,9 +416,9 @@ public class UserController {
      * 适用于需要获取号码原始状态（如 "新号", "封禁" 等）的场景。
      */
     @PostMapping("/checkPhoneNumberState")
-    public CommonResultDTO<String> checkPhoneNumberState(@RequestBody RequestUrlDTO requestUrlDTO) {
+    public CommonResultDTO<Integer> checkPhoneNumberState(@RequestBody RequestUrlDTO requestUrlDTO) {
         try {
-            String state = phoneNumberFilterService.checkPhoneNumberStateText(
+            Integer state = phoneNumberFilterService.checkPhoneNumberState(
                             requestUrlDTO.resolveCard(),
                             requestUrlDTO.resolveType(),
                             requestUrlDTO.getPhone(),
