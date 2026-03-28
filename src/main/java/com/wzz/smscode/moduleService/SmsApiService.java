@@ -1,6 +1,5 @@
 package com.wzz.smscode.moduleService;
 
-import com.wzz.smscode.common.CommonResultDTO;
 import com.wzz.smscode.dto.ApiConfig.ApiConfig;
 import com.wzz.smscode.entity.Project;
 import com.wzz.smscode.entity.SystemConfig;
@@ -9,6 +8,7 @@ import com.wzz.smscode.service.ProjectService;
 import com.wzz.smscode.service.SystemConfigService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.*;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
@@ -48,7 +48,8 @@ public class SmsApiService {
     private final ModuleUtil moduleUtil;
     // 变量替换正则：匹配 {{variable}}
     private static final Pattern VARIABLE_PATTERN = Pattern.compile("\\{\\{(.+?)}}");
-
+    @Autowired
+    private PhoneNumberFilterService phoneNumberFilterService;
     /**
      * 变量替换工具
      * 将字符串中的 {{key}} 替换为 context 中的 value
@@ -303,10 +304,9 @@ public class SmsApiService {
      *
      * @param project     项目配置。
      * @param phoneNumber 需要检查的手机号码。
-     * @param countryCode 国家区号，如果为null或空，则默认为 "86"。
      * @return 返回一个 Mono<Boolean>。如果号码可用，返回 true；否则返回 false。
      */
-    public Mono<Boolean> checkPhoneNumberAvailability(Project project, String phoneNumber, String countryCode) {
+    public Mono<Boolean> checkPhoneNumberAvailability(Project project, String phoneNumber) {
         //获取系统配置并检查功能总开关
         SystemConfig systemConfig = systemConfigService.getConfig();
         String projectId = String.valueOf(project.getId());
@@ -315,28 +315,27 @@ public class SmsApiService {
             return Mono.just(true); // 功能未开启，默认可用
         }
         // 从系统配置中获取服务器地址列表
-        List<String> servers = getServerList();
+        List<String> servers = phoneNumberFilterService.getServerList();
         if (servers.isEmpty()) {
             log.info("号码筛选功能已开启，但系统未配置任何有效的筛选服务器地址。号码 [{}] 将被视为不可用。", phoneNumber);
             return Mono.just(false);
         }
-        String token = systemConfig.getFilterApiKey();
-        String cpid = project.getSelectNumberApiRequestValue();
-        if (!StringUtils.hasText(token) || !StringUtils.hasText(cpid)) {
-            log.info("项目 [{}] 配置错误：缺少必要的API Token或CPID。", project.getProjectName());
+        String card = systemConfig.getFilterApiKey();
+        String type = project.getSelectNumberApiRequestValue();
+        if (!StringUtils.hasText(card) || !StringUtils.hasText(type)) {
+            log.info("项目 [{}] 配置错误：缺少必要的API card或type。", project.getProjectName());
             return Mono.error(new BusinessException("项目配置不完整，无法进行号码筛选"));
         }
-        final String finalCountryCode = StringUtils.hasText(countryCode) ? countryCode : "86";
         //响应式服务器轮询与请求
         return Flux.fromIterable(servers)
                 .concatMapDelayError(serverIp -> {
 
                     // 为当前服务器构建请求
-                    URI requestUri = buildRequestUri(serverIp, phoneNumber, token, cpid, finalCountryCode);
+                    URI requestUri = phoneNumberFilterService.buildRequestUri(serverIp, phoneNumber, card, type, "86");
                     log.info("[NUMBER-FILTER-TRACE] 筛选请求：{}", requestUri);
                     log.info("[NUMBER-FILTER-TRACE] 正在尝试服务器 [{}] 筛选号码 [{}]...", serverIp, phoneNumber);
                     log.info("[NUMBER-FILTER-TRACE] 项目ID: {} | 线路ID: {} | 手机号: {} - 发起请求 -> 服务器: {}, URI: {}",
-                            projectId, cpid, phoneNumber, serverIp, requestUri);
+                            projectId, type, phoneNumber, serverIp, requestUri);
                     return webClient.get()
                             .uri(requestUri)
                             .retrieve()
@@ -345,8 +344,8 @@ public class SmsApiService {
                             .flatMap(responseBody -> {
                                 log.info("[NUMBER-FILTER-TRACE] 服务器 [{}] 响应: {}", serverIp, responseBody);
                                 log.info("[NUMBER-FILTER-TRACE] 项目ID: {} | 线路ID: {} | 手机号: {} - 接口响应内容: {}",
-                                        projectId, cpid, phoneNumber, responseBody);
-                                boolean isAvailable = parseAvailabilityResponse(responseBody, cpid);
+                                        projectId, type, phoneNumber, responseBody);
+                                boolean isAvailable = phoneNumberFilterService.parseStateFromResponseInt(responseBody)==0;
                                 log.info("[NUMBER-FILTER-TRACE] 号码 [{}] 在服务器 [{}] 的筛选结果: {}", phoneNumber, serverIp, isAvailable ? "可用" : "不可用");
                                 return Mono.just(isAvailable);
                             })
@@ -358,31 +357,12 @@ public class SmsApiService {
                 .defaultIfEmpty(false); // 如果所有服务器都尝试失败，则默认返回 false (不可用)
     }
 
-    /**
-     * 根据新文档构建请求URI
-     */
-    private URI buildRequestUri(String serverIp, String phone, String token, String cpid, String cnty) {
-        String baseUrl = serverIp.startsWith("http") ? serverIp : "http://" + serverIp;
-        // 按照新文档：请求路径变更为 /charge/check
-        UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl(baseUrl)
-                .path("/charge/check")
-                .queryParam("phone", phone)
-                .queryParam("token", token)
-                .queryParam("cpid", cpid);
-
-        // 按照新文档，cnty为必填项，如果不传则默认提供 86
-        String finalCnty = StringUtils.hasText(cnty) ? cnty : "86";
-        builder.queryParam("cnty", finalCnty);
-
-        return builder.build().toUri();
-    }
-
 
     /**
      * 解析新版API响应，判断号码是否可用。
      * 增加了对错误消息 (msg) 的 URL 解码处理。
      */
-    private boolean parseAvailabilityResponse(String responseBody, String cpid) {
+    private boolean parseAvailabilityResponse(String responseBody) {
         if (!StringUtils.hasText(responseBody)) {
             return false;
         }
@@ -485,18 +465,6 @@ public class SmsApiService {
             return false;
         }
     }
-
-    /**
-     * 从系统配置中获取服务器列表
-     * @return 服务器地址列表
-     */
-    private List<String> getServerList() {
-        return Arrays.asList(
-                "api.rqddjc.com:8000",
-                "api.ddrqjc.com:8000"
-        );
-    }
-
 
     private final ProjectService projectService;
     /**

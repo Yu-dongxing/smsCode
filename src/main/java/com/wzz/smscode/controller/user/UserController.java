@@ -16,8 +16,6 @@ import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.moduleService.PhoneNumberFilterService;
 import com.wzz.smscode.service.*;
 import com.wzz.smscode.service.impl.UserServiceImpl;
-import com.wzz.smscode.util.IpUtil;
-import jakarta.servlet.http.HttpServletRequest;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -417,36 +415,20 @@ public class UserController {
      * 适用于需要获取号码原始状态（如 "新号", "封禁" 等）的场景。
      */
     @PostMapping("/checkPhoneNumberState")
-    public CommonResultDTO<String> checkPhoneNumberState(@RequestBody RequestUrlDTO requestUrlDTO,
-                                                         HttpServletRequest request) {
-        // 1. 身份验证
-//        User user = userService.authenticateUserByUserName(requestUrlDTO.getUserName(), requestUrlDTO.getPassword());
-//        if (user == null) {
-//            return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED, "用户ID或密码错误");
-//        }
-
-        // 2. 获取系统配置中的全局API Token
-//        SystemConfig systemConfig = systemConfigService.getConfig();
-//        String token = systemConfig.getFilterApiKey();
-//        if (!StringUtils.hasText(token)) {
-//            return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR,"系统配置错误：未找到号码筛选服务的API Token");
-//        }
-
+    public CommonResultDTO<String> checkPhoneNumberState(@RequestBody RequestUrlDTO requestUrlDTO) {
         try {
-            String clientIp = IpUtil.getClientIp(request);
-            String state = phoneNumberFilterService.checkPhoneNumberState(
-                            requestUrlDTO.getToken(),
-                            requestUrlDTO.getCpid(),
+            String state = phoneNumberFilterService.checkPhoneNumberStateText(
+                            requestUrlDTO.resolveCard(),
+                            requestUrlDTO.resolveType(),
                             requestUrlDTO.getPhone(),
-                            "86",
-                            clientIp)
+                            requestUrlDTO.resolveCountryCode())
                     .block(); // 阻塞等待异步操作完成
             if (state != null) {
                 return CommonResultDTO.success("查询成功", state);
             } else {
                 return CommonResultDTO.error(Constants.ERROR_NO_CODE,"检测失败");
             }
-        } catch (BusinessException e) {
+        } catch (Exception e) {
             log.info(e.getMessage());
             return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR,"检测失败");
         }

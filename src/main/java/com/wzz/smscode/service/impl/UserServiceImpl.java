@@ -1166,6 +1166,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         String projectId = successfulRecord.getProjectId();
         Integer lineId = successfulRecord.getLineId();
         User currentUser = this.getById(successfulRecord.getUserId());
+        User consumerUser = currentUser;
+        String projectName = successfulRecord.getProjectName();
+        int consumerLevel = 1;
 
         if (currentUser == null) {
             log.error("返款流程失败：找不到ID为 {} 的初始用户。", successfulRecord.getUserId());
@@ -1209,7 +1212,15 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
                         .amount(rebateAmount)
                         .ledgerType(1) // 1-入账
                         .fundType(FundType.ADMIN_REBATE) // 使用我们新定义的返款类型
-                        .remark(String.format("下级用户 %s 业务成功，返款", currentUser.getUserName()))
+                        .remark(String.format(
+                                "业务完成 返利: 下级用户%s 消费用户 %s 消费层级:%d 项目:%s 项目ID:%s 线路ID:%s",
+                                currentUser.getUserName(),
+                                consumerUser.getUserName(),
+                                consumerLevel,
+                                projectName == null ? "" : projectName,
+                                projectId,
+                                lineId
+                        ))
                         .phoneNumber(successfulRecord.getPhoneNumber())
                         .code(successfulRecord.getCode())
                         .projectId(projectId)
@@ -1231,6 +1242,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             // 7. 更新变量，为下一轮循环做准备
             currentUser = parentUser;
             lastLevelPrice = parentPrice;
+            consumerLevel++;
         }
 
         log.info("记录ID {} 的返款流程处理完毕。", successfulRecord.getId());

@@ -16,6 +16,7 @@ import com.wzz.smscode.entity.*;
 import com.wzz.smscode.enums.FundType;
 import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.mapper.NumberRecordMapper;
+import com.wzz.smscode.moduleService.PhoneNumberFilterService;
 import com.wzz.smscode.moduleService.SmsApiService;
 import com.wzz.smscode.service.*;
 import lombok.extern.slf4j.Slf4j;
@@ -213,7 +214,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                     try {
                         log.info("[NUMBER-FILTER-TRACE] 项目ID: {} | 线路ID: {} | 手机号: {} - 开始筛选流程",
                                 projectT.getId(), projectT.getSelectNumberApiRequestValue(), phone);
-                        Boolean isAvailable = smsApiService.checkPhoneNumberAvailability(projectT, phone, null)
+                        Boolean isAvailable = smsApiService.checkPhoneNumberAvailability(projectT, phone)
                                 .block(Duration.ofSeconds(60));
                         if (Boolean.TRUE.equals(isAvailable)) {
                             log.info("[NUMBER-FILTER-TRACE] 项目ID: {} | 线路ID: {} | 手机号: {} - 筛选结果: [通过]",
