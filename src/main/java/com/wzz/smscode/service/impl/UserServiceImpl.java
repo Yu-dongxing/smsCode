@@ -510,13 +510,16 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
 
 
     @Override
-    public IPage<User> listSubUsers(String userName, Long operatorId, IPage<User> page) {
+    public IPage<User> listSubUsers(String userName, Long templateId, Long operatorId, IPage<User> page) {
         // 1. 基础查询条件
         LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(User::getParentId, operatorId); // 限制只能查自己的下级
 
         if (userName != null && !userName.trim().isEmpty()) {
             wrapper.like(User::getUserName, userName);
+        }
+        if (templateId != null) {
+            wrapper.eq(User::getTemplateId, templateId);
         }
 
         wrapper.orderByDesc(User::getCreateTime);

@@ -44,7 +44,7 @@ public interface UserService extends IService<User> {
 
 
 
-    IPage<User> listSubUsers(String userName, Long operatorId, IPage<User> page);
+    IPage<User> listSubUsers(String userName, Long templateId, Long operatorId, IPage<User> page);
 
     @Transactional
     CommonResultDTO<?> chargeUser(Long targetUserId, BigDecimal amount, Long operatorId, boolean isRecharge);
