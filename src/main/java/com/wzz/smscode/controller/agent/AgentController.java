@@ -495,6 +495,29 @@ public class AgentController {
         }
     }
 
+    /**
+     * 解禁/禁用用户账户
+     * @param userId 目标用户ID
+     * @return
+     */
+    @SaCheckLogin
+    @PostMapping("/user/status")
+    public Result<?> updateUserStatus(@RequestParam Long userId,
+                                      @RequestParam Integer status) {
+        try {
+            long agentId = StpUtil.getLoginIdAsLong();
+            checkAgentPermission(agentId);
+            boolean success = userService.updateUserStatusByAgent(agentId, userId, status);
+            String action = Objects.equals(status, 0) ? "解禁" : "禁用";
+            return success ? Result.success(action + "成功") : Result.error(action + "失败");
+        } catch (BusinessException e) {
+            return Result.error(e.getMessage());
+        } catch (Exception e) {
+            log.error("更新用户状态失败: userId={}, status={}", userId, status, e);
+            return Result.error(Constants.ERROR_SYSTEM_ERROR, "更新用户状态失败");
+        }
+    }
+
 
     /**
      * [代理] 创建自己的价格模板

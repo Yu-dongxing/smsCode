@@ -13,6 +13,10 @@ public class UserLineStatsRequestDTO {
     // 筛选条件
     private String userName; // 用户名模糊查询
     private String projectId; // 项目ID
+    /**
+     * 线路id
+     */
+    private String lineId;
 
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "GMT+8")
     private LocalDateTime startTime; // 开始时间

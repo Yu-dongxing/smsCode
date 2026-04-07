@@ -1086,12 +1086,105 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     }
 
 
-    /**
-     * 根据号码记录表重新计算并更新用户的统计数据。
-     * 这个方法是幂等的，可以安全地重复调用。
-     *
-     * @param userId 需要更新统计数据的用户ID
-     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean updateUserStatusById(Long userId, Integer status) {
+        // 1. 基础参数校验
+        if (userId == null) {
+            throw new BusinessException("用户ID不能为空");
+        }
+        if (status == null || (status != 0 && status != 1)) {
+            throw new BusinessException("用户状态只支持 0(正常) 或 1(禁用)");
+        }
+
+        // 2. 获取必要的信息（用于清理缓存，以及判断是否存在）
+        // 注意：这里只需查出 userName 和 status，不需要 select *
+        User user = this.lambdaQuery()
+                .select(User::getUserName, User::getStatus)
+                .eq(User::getId, userId)
+                .one();
+
+        if (user == null) {
+            throw new BusinessException("用户不存在");
+        }
+
+        // 3. 幂等检查：如果状态已经一致，直接返回成功
+        if (Objects.equals(user.getStatus(), status)) {
+            return true;
+        }
+
+        // 4. 执行原子更新
+        // SQL: UPDATE user SET status = ? WHERE id = ? AND status != ?
+        boolean success = this.lambdaUpdate()
+                .set(User::getStatus, status)
+                .eq(User::getId, userId)
+                .ne(User::getStatus, status) // 只有状态不同时才更新，防止并发下的重复执行
+                .update();
+
+        // 5. 更新成功后清理缓存
+        if (success) {
+            cacheManager.evictUser(user.getUserName());
+        }
+
+        return success;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean updateUserStatusByAgent(Long agentId, Long userId, Integer status) {
+        if (agentId == null) {
+            throw new BusinessException("代理ID不能为空");
+        }
+
+        User agent = this.getById(agentId);
+        if (agent == null || agent.getIsAgent() == null || agent.getIsAgent() != 1) {
+            throw new BusinessException("当前登录用户不是代理或不存在");
+        }
+
+        if (!isSubordinateRecursive(agentId, userId)) {
+            throw new BusinessException("只能操作当前代理名下的下级用户");
+        }
+
+        return updateUserStatusById(userId, status);
+    }
+
+    private boolean isSubordinateRecursive(Long agentId, Long targetUserId) {
+        if (agentId == null || targetUserId == null) {
+            return false;
+        }
+        if (Objects.equals(agentId, targetUserId)) {
+            return false;
+        }
+
+        Set<Long> visited = new HashSet<>();
+        List<Long> currentParentIds = Collections.singletonList(agentId);
+
+        while (!CollectionUtils.isEmpty(currentParentIds)) {
+            List<User> children = this.list(new LambdaQueryWrapper<User>()
+                    .in(User::getParentId, currentParentIds)
+                    .select(User::getId, User::getParentId));
+
+            if (CollectionUtils.isEmpty(children)) {
+                return false;
+            }
+
+            List<Long> nextParentIds = new ArrayList<>();
+            for (User child : children) {
+                Long childId = child.getId();
+                if (childId == null || !visited.add(childId)) {
+                    continue;
+                }
+                if (Objects.equals(childId, targetUserId)) {
+                    return true;
+                }
+                nextParentIds.add(childId);
+            }
+            currentParentIds = nextParentIds;
+        }
+
+        return false;
+    }
+
     @Override
     public void updateUserStats(Long userId) {
 

@@ -305,8 +305,29 @@ public class AdminController {
     }
 
     /**
-     * 删除/禁用用户账户
-     * @param targetUserId 目标用户ID
+     * 解禁/禁用用户账户
+     * @param userId 目标用户ID
+     * @return
+     */
+    @PostMapping("/user/status")
+    public Result<?> updateUserStatus(@RequestParam Long userId,
+                                      @RequestParam Integer status) {
+        try {
+            boolean success = userService.updateUserStatusById(userId, status);
+            String action = Objects.equals(status, 0) ? "解禁" : "禁用";
+            return success ? Result.success(action + "成功") : Result.error(action + "失败");
+        } catch (BusinessException e) {
+            return Result.error(e.getMessage());
+        } catch (Exception e) {
+            log.error("更新用户状态失败: userId={}, status={}", userId, status, e);
+            return Result.error(Constants.ERROR_SYSTEM_ERROR, "更新用户状态失败");
+        }
+    }
+
+
+    /**
+     * 删除用户
+     * @param targetUserId
      * @return
      */
     @PostMapping("/deleteUser")
@@ -314,7 +335,6 @@ public class AdminController {
             //- @RequestParam Long adminId,
             //- @RequestParam String password,
             @RequestParam Long targetUserId) {
-        // 采用软删除，将用户状态设置为-1（禁用）
         UserDTO userDTO = new UserDTO();
         userDTO.setUserId(targetUserId);
         userDTO.setStatus(-1); // -1 代表禁用

@@ -994,6 +994,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         }
         wrapper.eq(StringUtils.hasText(queryDTO.getProjectId()), NumberRecord::getProjectId, queryDTO.getProjectId());
         wrapper.eq(queryDTO.getLineId() != null, NumberRecord::getLineId, queryDTO.getLineId());
+        wrapper.eq(queryDTO.getPrice() != null, NumberRecord::getPrice, queryDTO.getPrice());
         wrapper.like(StringUtils.hasText(queryDTO.getPhoneNumber()), NumberRecord::getPhoneNumber, queryDTO.getPhoneNumber());
         wrapper.eq(queryDTO.getStatus() != null, NumberRecord::getStatus, queryDTO.getStatus());
         wrapper.eq(queryDTO.getCharged() != null, NumberRecord::getCharged, queryDTO.getCharged());
@@ -1085,6 +1086,15 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         // 步骤 2: 构建分组统计查询
         // -----------------------------------------------------------------
         QueryWrapper<NumberRecord> queryWrapper = new QueryWrapper<>();
+        Integer lineId = null;
+        if (StringUtils.hasText(requestDTO.getLineId())) {
+            try {
+                lineId = Integer.valueOf(requestDTO.getLineId());
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException("线路id必须是有效的数字");
+            }
+
+        }
 
         // 聚合函数：确保 totalCodes 统计 status=2 的逻辑与报表接口一致
         queryWrapper.select(
@@ -1095,13 +1105,11 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                 "SUM(CASE WHEN status = 2 THEN 1 ELSE 0 END) as totalCodes"
         );
 
-        // 【关键修改点】：调用通用过滤器
-        // 因为 UserLineStatsRequestDTO 没有 lineId 和 projectName 字段，所以传 null
-        // 这样能确保时间解析和 projectId 处理方式与“数据报表”接口完全对齐
+        // 调用通用过滤器，保持与“数据报表”接口一致的项目、线路、时间筛选逻辑
         applyCommonStatsFilters(
                 queryWrapper,
                 requestDTO.getProjectId(),
-                null, // DTO 中无 lineId
+                lineId,
                 null, // DTO 中无 projectName
                 null,
                 null,
@@ -1147,6 +1155,11 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         if (!resultUserIds.isEmpty()) {
             Map<Long, String> userMap = userService.listByIds(resultUserIds).stream()
                     .collect(Collectors.toMap(User::getId, User::getUserName));
+            Map<Long, Integer> statusMap = userService.listByIds(resultUserIds).stream()
+                    .collect(Collectors.toMap(User::getId, User::getStatus));
+            for (UserLineStatsDTO dto : dtoList) {
+                dto.setStatus(statusMap.get(dto.getUserId()));
+            }
 
             for (UserLineStatsDTO dto : dtoList) {
                 dto.setUserName(userMap.getOrDefault(dto.getUserId(), "未知用户"));

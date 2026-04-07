@@ -92,6 +92,10 @@ public interface UserService extends IService<User> {
 
     boolean delectByuserId(Long userId);
 
+    boolean updateUserStatusById(Long userId, Integer status);
+
+    boolean updateUserStatusByAgent(Long agentId, Long userId, Integer status);
+
     void updateUserStats(Long userId);
 
     /**

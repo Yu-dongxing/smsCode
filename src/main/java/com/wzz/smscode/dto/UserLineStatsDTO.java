@@ -7,6 +7,7 @@ import java.math.BigDecimal;
 public class UserLineStatsDTO {
     private Long userId;
     private String userName;
+    private Integer status;
     private String projectId;
     private Integer lineId;
 

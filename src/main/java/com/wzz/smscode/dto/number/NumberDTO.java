@@ -1,8 +1,11 @@
 package com.wzz.smscode.dto.number;
 
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.fasterxml.jackson.annotation.JsonFormat;
+import com.wzz.smscode.annotation.ColumnComment;
 import lombok.Data;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 /**
@@ -45,6 +48,10 @@ public class NumberDTO {
      * 用户名
      */
     private String userName;
+    /**
+     * 此次取号扣费金额
+     */
+    private BigDecimal price;
     /**
      * 项目名称
      */
