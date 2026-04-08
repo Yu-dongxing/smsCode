@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.wzz.smscode.common.CommonResultDTO;
 import com.wzz.smscode.dto.*;
+import com.wzz.smscode.dto.number.GetNumberResponseDTO;
 import com.wzz.smscode.dto.number.NumberDTO;
 import com.wzz.smscode.entity.NumberRecord;
 import org.springframework.scheduling.annotation.Async;
@@ -21,12 +22,12 @@ public interface NumberRecordService extends IService<NumberRecord> {
     void recoverInterruptedTask(NumberRecord record);
 
 //    @Transactional
-    CommonResultDTO<String> getNumber(String userName, String password, String projectId, Integer lineId);
+    GetNumberResponseDTO getNumber(String userName, String password, String projectId, Integer lineId);
 
     @Transactional(rollbackFor = Exception.class)
-    CommonResultDTO<String> createOrderTransaction(Long userId, String projectId, Integer lineId,
-                                                   BigDecimal price, BigDecimal costPrice,
-                                                   Map<String, String> successfulIdentifier, String projectName);
+    GetNumberResponseDTO createOrderTransaction(Long userId, String projectId, Integer lineId,
+                                                BigDecimal price, BigDecimal costPrice,
+                                                Map<String, String> successfulIdentifier, String projectName);
 
     @Async("taskExecutor")
     void retrieveCode(Long numberId, String identifier);

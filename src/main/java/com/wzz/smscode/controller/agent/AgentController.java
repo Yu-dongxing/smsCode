@@ -87,6 +87,7 @@ public class AgentController {
     public Result<?> listUsers(
             @RequestParam(defaultValue = "1") long page,
             @RequestParam(required = false) String userName,
+            @RequestParam(required = false) Long templateId,
             @RequestParam(defaultValue = "10") long size) {
 
         // 通过 Sa-Token 获取当前登录的代理ID
@@ -96,7 +97,7 @@ public class AgentController {
         checkAgentPermission(agentId);
 
         IPage<User> pageRequest = new Page<>(page, size);
-        IPage<User> subUsersPage = userService.listSubUsers(userName,agentId, pageRequest);
+        IPage<User> subUsersPage = userService.listSubUsers(userName, templateId, agentId, pageRequest);
 
         return Result.success(subUsersPage);
     }

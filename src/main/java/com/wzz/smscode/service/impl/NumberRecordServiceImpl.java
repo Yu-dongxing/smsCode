@@ -11,11 +11,13 @@ import com.wzz.smscode.common.CommonResultDTO;
 import com.wzz.smscode.common.Constants;
 import com.wzz.smscode.dto.*;
 import com.wzz.smscode.dto.CreatDTO.LedgerCreationDTO;
+import com.wzz.smscode.dto.number.GetNumberResponseDTO;
 import com.wzz.smscode.dto.number.NumberDTO;
 import com.wzz.smscode.entity.*;
 import com.wzz.smscode.enums.FundType;
 import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.mapper.NumberRecordMapper;
+import com.wzz.smscode.moduleService.PhoneNumberFilterService;
 import com.wzz.smscode.moduleService.SmsApiService;
 import com.wzz.smscode.service.*;
 import lombok.extern.slf4j.Slf4j;
@@ -123,18 +125,18 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
 
 //    @Transactional
     @Override
-    public CommonResultDTO<String> getNumber(String userName, String password, String projectId, Integer lineId) {
+    public GetNumberResponseDTO getNumber(String userName, String password, String projectId, Integer lineId) {
         // 1. 身份验证与余额检查
         User user = userService.authenticateUserByUserName(userName, password);
-        if (user == null) return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED, "用户验证失败");
+        if (user == null) return GetNumberResponseDTO.error(Constants.ERROR_AUTH_FAILED, "用户验证失败");
 
         SystemConfig config = systemConfigService.getConfig();
         if (user.getStatus() != 0) {
-            return CommonResultDTO.error(-5, "用户已被禁用");
+            return GetNumberResponseDTO.error(-5, "用户已被禁用");
         }
         double windowCodeRate = calculateUserCodeRateWithinMinutes(user.getId(), config.getBanCodeRateWindowMinutes());
         if (config.getEnableBanMode() == 1 && windowCodeRate < config.getMinWindowCodeRate()) {
-            return CommonResultDTO.error(Constants.ERROR_SYSTEM_ERROR, "回码率过低暂时封禁，请等待"+config.getBanCodeRateWindowMinutes()+"分钟");
+            return GetNumberResponseDTO.error(Constants.ERROR_SYSTEM_ERROR, "回码率过低暂时封禁，请等待"+config.getBanCodeRateWindowMinutes()+"分钟");
         }
         String blacklist = user.getProjectBlacklist();
         String currentKey = projectId + "-" + lineId;
@@ -142,31 +144,31 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             String[] blocked = blacklist.split(",");
             for (String s : blocked) {
                 if (s.trim().equals(currentKey)) {
-                    return CommonResultDTO.error(-5, "您已被禁止使用该项目线路");
+                    return GetNumberResponseDTO.error(-5, "您已被禁止使用该项目线路");
                 }
             }
         }
 
         //从模板获取价格
         Long templateId = user.getTemplateId();
-        if (templateId == null) return CommonResultDTO.error(-5, "用户未配置价格模板");
+        if (templateId == null) return GetNumberResponseDTO.error(-5, "用户未配置价格模板");
 
         PriceTemplateItem priceItem = priceTemplateService.getPriceConfig(templateId, projectId, lineId);
         if (priceItem == null) {
-            return CommonResultDTO.error(-5, "当前价格模板未配置该项目线路");
+            return GetNumberResponseDTO.error(-5, "当前价格模板未配置该项目线路");
         }
 
         BigDecimal price = priceItem.getPrice(); // 用户售价
         BigDecimal costPrice = priceItem.getCostPrice(); // 成本价
 
         Project projectT = projectService.getProject(projectId, lineId);
-        if (projectT == null) return CommonResultDTO.error(-5, "总项目表中不存在这个项目和线路！");
+        if (projectT == null) return GetNumberResponseDTO.error(-5, "总项目表中不存在这个项目和线路！");
         if (!projectT.isStatus()) {
-            return CommonResultDTO.error(Constants.ERROR_NO_NUMBER, "该项目没开启！");
+            return GetNumberResponseDTO.error(Constants.ERROR_NO_NUMBER, "该项目没开启！");
         }
 
         if (user.getBalance().compareTo(price) < 0) {
-            return CommonResultDTO.error(Constants.ERROR_INSUFFICIENT_BALANCE, "余额不足");
+            return GetNumberResponseDTO.error(Constants.ERROR_INSUFFICIENT_BALANCE, "余额不足");
         }
 
         if ("105".equals(projectId) && Integer.valueOf(1).equals(lineId)) {
@@ -179,7 +181,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
 
             if (ongoingCount >= 150) {
                 log.warn("项目105-线路1 并发量已达上限: {}", ongoingCount);
-                return CommonResultDTO.error(Constants.ERROR_NO_NUMBER, "当前项目105-线路1 取号任务过多（限制150个），请稍后再试");
+                return GetNumberResponseDTO.error(Constants.ERROR_NO_NUMBER, "当前项目105-线路1 取号任务过多（限制150个），请稍后再试");
             }
         }
 //        boolean hasOngoingRecord = this.hasOngoingRecord(user.getId());
@@ -213,7 +215,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                     try {
                         log.info("[NUMBER-FILTER-TRACE] 项目ID: {} | 线路ID: {} | 手机号: {} - 开始筛选流程",
                                 projectT.getId(), projectT.getSelectNumberApiRequestValue(), phone);
-                        Boolean isAvailable = smsApiService.checkPhoneNumberAvailability(projectT, phone, null)
+                        Boolean isAvailable = smsApiService.checkPhoneNumberAvailability(projectT, phone)
                                 .block(Duration.ofSeconds(60));
                         if (Boolean.TRUE.equals(isAvailable)) {
                             log.info("[NUMBER-FILTER-TRACE] 项目ID: {} | 线路ID: {} | 手机号: {} - 筛选结果: [通过]",
@@ -237,17 +239,17 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
 
             } catch (BusinessException e) {
                 log.error("调用接口获取号码失败 (尝试 {}/{})，终止流程: {}", attempt, MAX_ATTEMPTS, e.getMessage());
-                return CommonResultDTO.error(Constants.ERROR_NO_CODE, "获取号码失败，请稍后再试！");
+                return GetNumberResponseDTO.error(Constants.ERROR_NO_CODE, "获取号码失败，请稍后再试！");
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                return CommonResultDTO.error(Constants.ERROR_NO_CODE, "系统线程中断");
+                return GetNumberResponseDTO.error(Constants.ERROR_NO_CODE, "系统线程中断");
             } catch (Exception e) {
                 log.error("未知异常", e);
-                return CommonResultDTO.error(Constants.ERROR_NO_CODE, "系统未知错误");
+                return GetNumberResponseDTO.error(Constants.ERROR_NO_CODE, "系统未知错误");
             }
         }
         if (!numberFoundAndVerified || successfulIdentifier == null) {
-            return CommonResultDTO.error(Constants.ERROR_NO_CODE, "获取可用号码失败，请稍后重试");
+            return GetNumberResponseDTO.error(Constants.ERROR_NO_CODE, "获取可用号码失败，请稍后重试");
         }
         try {
             return self.createOrderTransaction(
@@ -261,7 +263,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             );
         } catch (BusinessException e) {
             log.info("<getNumber> (<createOrderTransaction> {}/{})<出现异常错误>: {}", projectId, lineId, e.getMessage());
-            return CommonResultDTO.error(Constants.ERROR_INSUFFICIENT_BALANCE, "创建取号任务失败，请稍后再试");
+            return GetNumberResponseDTO.error(Constants.ERROR_INSUFFICIENT_BALANCE, "创建取号任务失败，请稍后再试");
         }
     }
 
@@ -272,9 +274,9 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
      */
     @Transactional(rollbackFor = Exception.class)
     @Override
-    public CommonResultDTO<String> createOrderTransaction(Long userId, String projectId, Integer lineId,
-                                                          BigDecimal price, BigDecimal costPrice,
-                                                          Map<String, String> successfulIdentifier, String projectName) {
+    public GetNumberResponseDTO createOrderTransaction(Long userId, String projectId, Integer lineId,
+                                                       BigDecimal price, BigDecimal costPrice,
+                                                       Map<String, String> successfulIdentifier, String projectName) {
         // 1. 扣费逻辑 (UserLedgerService 内部也会有事务，会加入到当前事务中)
         User user = userService.getById(userId);
         // 双重检查余额(可选)
@@ -324,7 +326,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
 
         // 4. 更新用户统计等其他操作
         userService.updateUserStats(userId);
-        return CommonResultDTO.success("取号成功，请稍后查询验证码", successfulIdentifier.get("phone"));
+        return GetNumberResponseDTO.success("取号成功，请稍后查询验证码", successfulIdentifier.get("phone"), projectName);
     }
 
     /**

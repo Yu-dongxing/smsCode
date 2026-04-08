@@ -100,9 +100,11 @@ public class AdminController {
      * 修改点：
      * 1. parentId 参数改为 parentName，通过上级用户名查询下级。
      * 2. 返回结果中填充 parentName 字段。
+     * 3. 支持按价格模板ID精确筛选。
      *
      * @param parentName 可选参数，指定上级用户的用户名
      * @param userName   可选参数，模糊搜索当前用户的用户名
+     * @param templateId 可选参数，按价格模板ID精确搜索
      * @param page       页码，默认为1
      * @param size       每页显示的记录数，默认为10
      * @return 返回用户列表，包含上级用户名信息
@@ -111,6 +113,7 @@ public class AdminController {
     public Result<?> listUsers(
             @RequestParam(required = false) String parentName,
             @RequestParam(required = false) String userName,
+            @RequestParam(required = false) Long templateId,
             @RequestParam(defaultValue = "1") long page,
             @RequestParam(defaultValue = "10") long size) {
 
@@ -135,16 +138,21 @@ public class AdminController {
             queryWrapper.like(User::getUserName, userName);
         }
 
+        // 3. 按价格模板ID精确查询
+        if (templateId != null) {
+            queryWrapper.eq(User::getTemplateId, templateId);
+        }
+
         // 按创建时间倒序
         queryWrapper.orderByDesc(User::getCreateTime);
 
-        // 3. 执行分页查询
+        // 4. 执行分页查询
         IPage<User> pageRequest = new Page<>(page, size);
         IPage<User> userPage = userService.page(pageRequest, queryWrapper);
 
         List<User> records = userPage.getRecords();
 
-        // 4. 数据填充 (上级用户名 & 模板名称)
+        // 5. 数据填充 (上级用户名 & 模板名称)
         if (!CollectionUtils.isEmpty(records)) {
             // --- 提取 ID 集合 ---
             Set<Long> parentIds = new HashSet<>();
