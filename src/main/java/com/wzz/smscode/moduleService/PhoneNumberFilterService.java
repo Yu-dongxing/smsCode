@@ -28,7 +28,7 @@ public class PhoneNumberFilterService {
 
     public List<String> getServerList() {
         return List.of(
-                "api.bubble89.shop"
+                "https://h6-haha.bubble89.shop"
         );
     }
 

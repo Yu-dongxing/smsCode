@@ -55,7 +55,6 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
     //@Autowired private UserLedgerService userLedgerService; // 引入账本服务
     @Autowired @Lazy private PriceTemplateService priceTemplateService;
     @Autowired private SmsApiService smsApiService;
-    @Autowired private UserProjectLineService userProjectLineService;
 
     // 修改点 3: 建议此处也加上 @Lazy 避免初始化顺序问题
     @Autowired @Lazy private NumberRecordCacheManager cacheManager;
@@ -767,7 +766,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         Map<String, String> projectNames = projectService.list().stream()
                 .collect(Collectors.toMap(Project::getProjectId, Project::getProjectName, (p1, p2) -> p1));
 
-        List<ProjectStatisticsDTO> dtoList = processAggregatedData(aggregatedDataPage.getRecords(), null, projectNames);
+        List<ProjectStatisticsDTO> dtoList = processAggregatedData(aggregatedDataPage.getRecords(), projectNames);
 
         IPage<ProjectStatisticsDTO> resultPage = new Page<>(aggregatedDataPage.getCurrent(), aggregatedDataPage.getSize(), aggregatedDataPage.getTotal());
         resultPage.setRecords(dtoList);
@@ -785,16 +784,6 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
 
         if (subUserIds.isEmpty()) return new Page<>(queryDTO.getCurrent(), queryDTO.getSize());
 
-        // 获取代理商成本配置
-        // key 建议统一转为 String 避免类型问题
-        Map<String, BigDecimal> agentCostMap = userProjectLineService.list(
-                new LambdaQueryWrapper<UserProjectLine>().eq(UserProjectLine::getUserId, agentId)
-        ).stream().collect(Collectors.toMap(
-                line -> line.getProjectId() + "-" + line.getLineId(),
-                UserProjectLine::getAgentPrice,
-                (v1, v2) -> v1 // 处理重复配置，取第一个
-        ));
-
         QueryWrapper<NumberRecord> wrapper = new QueryWrapper<>();
         wrapper.in("user_id", subUserIds);
         applyFilters(wrapper, queryDTO);
@@ -807,7 +796,8 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                 "line_id AS lineId",
                 "COUNT(id) AS totalRequests",
                 "SUM(CASE WHEN status = 2 THEN 1 ELSE 0 END) AS successCount",
-                "COALESCE(SUM(CASE WHEN charged = 1 THEN price ELSE 0 END), 0) AS totalRevenue"
+                "COALESCE(SUM(CASE WHEN charged = 1 THEN price ELSE 0 END), 0) AS totalRevenue",
+                "COALESCE(SUM(CASE WHEN charged = 1 THEN cost_price ELSE 0 END), 0) AS totalCost"
         );
 
         Page<Map<String, Object>> page = new Page<>(queryDTO.getCurrent(), queryDTO.getSize());
@@ -820,7 +810,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         Map<String, String> projectNames = projectService.list().stream()
                 .collect(Collectors.toMap(Project::getProjectId, Project::getProjectName, (p1, p2) -> p1));
 
-        List<ProjectStatisticsDTO> dtoList = processAggregatedData(aggregatedDataPage.getRecords(), agentCostMap, projectNames);
+        List<ProjectStatisticsDTO> dtoList = processAggregatedData(aggregatedDataPage.getRecords(), projectNames);
 
         IPage<ProjectStatisticsDTO> resultPage = new Page<>(aggregatedDataPage.getCurrent(), aggregatedDataPage.getSize(), aggregatedDataPage.getTotal());
         resultPage.setRecords(dtoList);
@@ -875,7 +865,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
      * 处理聚合数据并转换为 DTO
      * 修复：从 Map 取值时使用别名，增加空值安全处理
      */
-    private List<ProjectStatisticsDTO> processAggregatedData(List<Map<String, Object>> aggregatedData, Map<String, BigDecimal> agentCostMap, Map<String, String> projectNames) {
+    private List<ProjectStatisticsDTO> processAggregatedData(List<Map<String, Object>> aggregatedData, Map<String, String> projectNames) {
         // 使用 LinkedHashMap 保持数据库排序（通常按 Group By 顺序）
         Map<String, ProjectStatisticsDTO> projectReportMap = new LinkedHashMap<>();
 
@@ -916,17 +906,8 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                 return dto;
             });
 
-            // 4. 计算成本
-            BigDecimal lineTotalCost;
-            if (agentCostMap != null) {
-                // 代理商模式：查配置表
-                String priceKey = projectId + "-" + lineId;
-                BigDecimal agentPricePerSuccess = agentCostMap.getOrDefault(priceKey, BigDecimal.ZERO);
-                lineTotalCost = agentPricePerSuccess.multiply(new BigDecimal(successCount));
-            } else {
-                // 管理员模式：取 SQL 结果
-                lineTotalCost = getBigDecimalFromMap(lineData, "totalCost");
-            }
+            // 4. 计算成本：统一使用取号记录中的成本快照
+            BigDecimal lineTotalCost = getBigDecimalFromMap(lineData, "totalCost");
 
             // 5. 构建 LineDTO
             LineStatisticsDTO lineDTO = new LineStatisticsDTO();
