@@ -1,8 +1,6 @@
 package com.wzz.smscode.dto.number;
 
-import com.baomidou.mybatisplus.annotation.TableField;
 import com.fasterxml.jackson.annotation.JsonFormat;
-import com.wzz.smscode.annotation.ColumnComment;
 import lombok.Data;
 
 import java.math.BigDecimal;
@@ -48,6 +46,10 @@ public class NumberDTO {
      * 用户名
      */
     private String userName;
+    /**
+     * 扣费状态(0=未扣费, 1=已扣费, 2=已退款)
+     */
+    private Integer charged;
     /**
      * 此次取号扣费金额
      */

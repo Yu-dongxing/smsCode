@@ -180,6 +180,7 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
         }
         LambdaQueryWrapper<Project> projectQuery = new LambdaQueryWrapper<>();
         projectQuery.in(Project::getId, projectTableIds)
+                .eq(Project::isStatus, true)
                 .select(Project::getId, Project::getLineName);
 
         Map<Long, String> activeProjectMap = this.list(projectQuery).stream()
