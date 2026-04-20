@@ -968,6 +968,22 @@ public class AdminController {
     }
 
 
+    /**
+     * 管理端-代理当日报表统计
+     * 默认统计当天，也支持按时间段、代理、项目、线路筛选。
+     */
+    @PostMapping("/stats/agent-daily")
+    public Result<?> getAgentDailyStats(@RequestBody AgentDailyStatsRequestDTO requestDTO) {
+        try {
+            IPage<AgentDailyStatsDTO> stats = numberRecordService.getAgentDailyStats(requestDTO);
+            return Result.success("查询成功", stats);
+        } catch (BusinessException e) {
+            return Result.error(e.getMessage());
+        } catch (Exception e) {
+            log.error("获取代理当日报表统计失败", e);
+            return Result.error(Constants.ERROR_SYSTEM_ERROR, "获取代理当日报表统计失败");
+        }
+    }
 
 
     /**

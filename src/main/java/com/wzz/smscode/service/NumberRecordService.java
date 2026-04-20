@@ -60,6 +60,8 @@ public interface NumberRecordService extends IService<NumberRecord> {
      */
     IPage<ProjectStatisticsDTO> getStatisticsReport(Long operatorId, StatisticsQueryDTO queryDTO);
 
+    IPage<AgentDailyStatsDTO> getAgentDailyStats(AgentDailyStatsRequestDTO requestDTO);
+
     IPage<NumberDTO> listSubordinateRecordsForAgent(Long agentId, SubordinateNumberRecordQueryDTO queryDTO);
 
     IPage<UserLineStatsDTO> getUserLineStats(UserLineStatsRequestDTO requestDTO, Long agentId);

@@ -735,6 +735,56 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         }
     }
     /**
+     * 管理端代理当日报表统计，默认当天，按代理直接下级用户的取号记录聚合。
+     */
+    @Override
+    public IPage<AgentDailyStatsDTO> getAgentDailyStats(AgentDailyStatsRequestDTO requestDTO) {
+        if (requestDTO == null) {
+            requestDTO = new AgentDailyStatsRequestDTO();
+        }
+
+        long pageNo = requestDTO.getPage() == null || requestDTO.getPage() < 1 ? 1L : requestDTO.getPage();
+        long pageSize = requestDTO.getSize() == null || requestDTO.getSize() < 1 ? 10L : requestDTO.getSize();
+        LocalDate today = LocalDate.now();
+        LocalDateTime startTime = requestDTO.getStartTime() == null ? today.atStartOfDay() : requestDTO.getStartTime();
+        LocalDateTime endTime = requestDTO.getEndTime() == null ? today.atTime(23, 59, 59) : requestDTO.getEndTime();
+
+        if (endTime.isBefore(startTime)) {
+            throw new BusinessException("结束时间不能早于开始时间");
+        }
+
+        Page<Map<String, Object>> mapPage = new Page<>(pageNo, pageSize);
+        IPage<Map<String, Object>> resultPage = this.baseMapper.selectAgentDailyStatsPage(
+                mapPage,
+                requestDTO.getAgentId(),
+                StringUtils.hasText(requestDTO.getAgentName()) ? requestDTO.getAgentName().trim() : null,
+                StringUtils.hasText(requestDTO.getProjectId()) ? requestDTO.getProjectId().trim() : null,
+                requestDTO.getLineId(),
+                startTime,
+                endTime
+        );
+
+        List<AgentDailyStatsDTO> records = resultPage.getRecords().stream().map(map -> {
+            AgentDailyStatsDTO dto = new AgentDailyStatsDTO();
+            dto.setAgentId(getLongFromMap(map, "agentId"));
+            Object agentName = map.get("agentName");
+            dto.setAgentName(agentName == null ? "" : agentName.toString());
+            dto.setSubUserCount(getLongFromMap(map, "subUserCount"));
+            dto.setTotalNumbers(getLongFromMap(map, "totalNumbers"));
+            dto.setSuccessCount(getLongFromMap(map, "successCount"));
+            dto.setTotalRevenue(getBigDecimalFromMap(map, "totalRevenue"));
+            dto.setTotalCost(getBigDecimalFromMap(map, "totalCost"));
+            dto.setTotalProfit(dto.getTotalRevenue().subtract(dto.getTotalCost()));
+            dto.calculateRate();
+            return dto;
+        }).collect(Collectors.toList());
+
+        Page<AgentDailyStatsDTO> finalPage = new Page<>(resultPage.getCurrent(), resultPage.getSize(), resultPage.getTotal());
+        finalPage.setRecords(records);
+        return finalPage;
+    }
+
+    /**
      * 生成管理员统计报表
      * 修复：使用 AS 别名确保 Map Key 统一，避免驼峰配置导致取不到值
      */
