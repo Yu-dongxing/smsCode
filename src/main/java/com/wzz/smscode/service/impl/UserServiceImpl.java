@@ -26,6 +26,7 @@ import com.wzz.smscode.dto.update.UserUpdateDtoByUser;
 import com.wzz.smscode.dto.update.UserUpdatePasswardDTO;
 import com.wzz.smscode.entity.*;
 import com.wzz.smscode.enums.FundType;
+import com.wzz.smscode.enums.OperationType;
 import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.mapper.NumberRecordMapper;
 import com.wzz.smscode.mapper.UserMapper;
@@ -64,12 +65,20 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     @Autowired private UserProjectLineService userProjectLineService;
     @Autowired @Lazy private PriceTemplateService priceTemplateService;
     @Autowired private UserLedgerService userLedgerService;
+    @Autowired private OperationLogService operationLogService;
 
     @Autowired
     private NumberRecordCacheManager cacheManager; // 注入缓存管理器
 
 
 
+
+    private User buildAdminOperator() {
+        User admin = new User();
+        admin.setId(0L);
+        admin.setUserName("admin");
+        return admin;
+    }
 
     @Override
     public User authenticate(Long userId, String password) {
@@ -361,6 +370,18 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             throw new BusinessException("删除用户操作失败");
         }
 
+        User operator = this.getById(agentId);
+        for (User deletedUser : validSubUsers) {
+            operationLogService.recordSuccess(
+                    OperationType.DELETE_USER,
+                    operator,
+                    deletedUser,
+                    null,
+                    deletedUser.getBalance(),
+                    null,
+                    "代理删除用户"
+            );
+        }
 
         log.info("代理 {} 批量删除了 {} 个下级用户，IDs: {}", agentId, validIds.size(), validIds);
     }
@@ -403,8 +424,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         boolean isAdmin = (operatorId == 0L);
         User operator;
         if (isAdmin) {
-            operator = new User();
-            operator.setId(0L);
+            operator = buildAdminOperator();
         } else {
             operator = this.getById(operatorId);
             if (operator == null) throw new BusinessException("操作员不存在");
@@ -463,6 +483,15 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         if (!this.save(user)) {
             throw new RuntimeException("创建用户失败");
         }
+        operationLogService.recordSuccess(
+                OperationType.CREATE_USER,
+                operator,
+                user,
+                null,
+                null,
+                user.getBalance(),
+                "创建用户"
+        );
 
         // 4. [核心改造] 处理价格配置
 //        processAndSaveUserPrices(user, dto.getProjectPrices(), operator);
@@ -480,7 +509,16 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
                         .fundType(FundType.AGENT_RECHARGE)
                         .remark("新用户初始充值")
                         .build();
-                ledgerService.createLedgerAndUpdateBalance(userRechargeDto);
+                BigDecimal balanceAfter = ledgerService.createLedgerAndUpdateBalance(userRechargeDto);
+                operationLogService.recordSuccess(
+                        OperationType.RECHARGE_USER,
+                        operator,
+                        user,
+                        initialBalance,
+                        BigDecimal.ZERO,
+                        balanceAfter,
+                        "新用户初始充值"
+                );
 
                 // 5.2 如果操作员不是管理员，则从操作员账户扣款
                 if (!isAdmin) {
@@ -578,7 +616,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         if (targetUser == null) return CommonResultDTO.error(-5, "目标用户不存在");
 
         boolean isAdmin = (operatorId == 0L);
-        User operator;
+        User operator = buildAdminOperator();
         if (!isAdmin) {
             operator = this.getById(operatorId);
             if (operator == null) return CommonResultDTO.error(-5, "操作员不存在");
@@ -588,6 +626,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         }
 
         try {
+            BigDecimal targetBalanceBefore = targetUser.getBalance();
 
             // 1. 操作目标用户
             LedgerCreationDTO targetLedger = LedgerCreationDTO.builder()
@@ -597,7 +636,18 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
                     .fundType(isRecharge ? FundType.AGENT_RECHARGE : FundType.AGENT_DEDUCTION)
                     .remark((isRecharge ? "上级充值: " : "上级扣款: ") + operatorId)
                     .build();
-            ledgerService.createLedgerAndUpdateBalance(targetLedger);
+            BigDecimal targetBalanceAfter = ledgerService.createLedgerAndUpdateBalance(targetLedger);
+            if (isRecharge) {
+                operationLogService.recordSuccess(
+                        OperationType.RECHARGE_USER,
+                        operator,
+                        targetUser,
+                        amount,
+                        targetBalanceBefore,
+                        targetBalanceAfter,
+                        "用户充值"
+                );
+            }
 
             // 2. 如果操作员不是管理员，则反向操作操作员自己的账户
             if (!isAdmin) {
@@ -830,6 +880,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         if (!agentId.equals(targetUser.getParentId())) {
             throw new SecurityException("无权操作非下级用户");
         }
+        BigDecimal targetBalanceBefore = targetUser.getBalance();
 
         // 步骤 3: 代理账户出账
         // 构建代理扣款的请求DTO
@@ -855,7 +906,16 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
                 .build();
 
         // 调用核心服务
-        userLedgerService.createLedgerAndUpdateBalance(userRechargeRequest);
+        BigDecimal targetBalanceAfter = userLedgerService.createLedgerAndUpdateBalance(userRechargeRequest);
+        operationLogService.recordSuccess(
+                OperationType.RECHARGE_USER,
+                agent,
+                targetUser,
+                amount,
+                targetBalanceBefore,
+                targetBalanceAfter,
+                "代理充值用户"
+        );
     }
 
     /**
@@ -1085,7 +1145,19 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         }
         cacheManager.evictUser(user.getUserName());
 
-        return userMapper.deleteById(user) >0;
+        boolean success = userMapper.deleteById(user) > 0;
+        if (success) {
+            operationLogService.recordSuccess(
+                    OperationType.DELETE_USER,
+                    buildAdminOperator(),
+                    user,
+                    null,
+                    user.getBalance(),
+                    null,
+                    "管理删除用户"
+            );
+        }
+        return success;
     }
 
 
@@ -1375,6 +1447,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         }
 
         int successCount = 0;
+        User operatorForLog = isAdmin ? buildAdminOperator() : operator;
 
         // 2. 循环处理每一个用户
         for (Long targetUserId : dto.getUserIds()) {
@@ -1382,6 +1455,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             if (targetUserId.equals(operatorId)) {
                 continue;
             }
+            User targetUser = this.getById(targetUserId);
+            BigDecimal targetBalanceBefore = targetUser == null ? null : targetUser.getBalance();
 
             // --- A. 操作目标用户 ---
             LedgerCreationDTO targetLedger = LedgerCreationDTO.builder()
@@ -1395,7 +1470,18 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
                     .build();
 
             // 调用核心账本服务 (会自动处理加锁、余额计算、流水写入)
-            userLedgerService.createLedgerAndUpdateBalance(targetLedger);
+            BigDecimal targetBalanceAfter = userLedgerService.createLedgerAndUpdateBalance(targetLedger);
+            if (isRecharge) {
+                operationLogService.recordSuccess(
+                        OperationType.RECHARGE_USER,
+                        operatorForLog,
+                        targetUser,
+                        dto.getAmount(),
+                        targetBalanceBefore,
+                        targetBalanceAfter,
+                        "为用户批量充值"
+                );
+            }
 
             // --- B. 如果是代理操作，需反向操作代理账户 ---
             if (!isAdmin) {

@@ -49,6 +49,9 @@ public class AgentController {
     private UserLedgerService userLedgerService;
 
     @Autowired
+    private OperationLogService operationLogService;
+
+    @Autowired
     @Lazy
     private PriceTemplateService priceTemplateService;
 
@@ -680,6 +683,21 @@ public class AgentController {
             return Result.error("查询失败：" + e.getMessage());
         }
     }
+
+    /**
+     * 查询当前代理的操作日志
+     */
+    @SaCheckLogin
+    @RequestMapping(value = "/operationLogs", method = {RequestMethod.GET, RequestMethod.POST})
+    public Result<?> listOperationLogs(OperationLogQueryDTO queryDTO) {
+        long agentId = StpUtil.getLoginIdAsLong();
+        checkAgentPermission(agentId);
+        OperationLogQueryDTO query = queryDTO == null ? new OperationLogQueryDTO() : queryDTO;
+        query.setOperatorId(agentId);
+        return Result.success("查询成功", operationLogService.listLogs(query));
+    }
+
+
 
     /**
      * 代理批量删除下级用户

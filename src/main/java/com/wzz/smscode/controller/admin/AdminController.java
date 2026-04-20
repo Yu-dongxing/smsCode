@@ -66,6 +66,7 @@ public class AdminController {
     @Autowired private NumberRecordService numberRecordService;
     @Autowired private SystemConfigService systemConfigService;
     @Autowired private ProjectService projectService;
+    @Autowired private OperationLogService operationLogService;
 
 
     @Autowired
@@ -358,6 +359,14 @@ public class AdminController {
     }
 
     // --- 账本与记录查询 ---
+
+    /**
+     * 查询操作日志
+     */
+    @RequestMapping(value = "/operationLogs", method = {RequestMethod.GET, RequestMethod.POST})
+    public Result<?> listOperationLogs(OperationLogQueryDTO queryDTO) {
+        return Result.success("查询成功", operationLogService.listLogs(queryDTO));
+    }
 
 
 
