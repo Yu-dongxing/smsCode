@@ -1029,6 +1029,33 @@ public class AdminController {
     }
 
     /**
+     * 分页查询价格模板，支持按模板名称或创建者ID筛选。
+     */
+    @GetMapping("/price-templates/page")
+    public Result<IPage<PriceTemplateResponseDTO>> pagePriceTemplates(
+            @RequestParam(required = false) String name,
+            @RequestParam(required = false) String templateName,
+            @RequestParam(required = false) Long creatorId,
+            @RequestParam(required = false) Long creatId,
+            @RequestParam(defaultValue = "1") long page,
+            @RequestParam(defaultValue = "10") long size,
+            @RequestParam(required = false) Long pageNum,
+            @RequestParam(required = false) Long pageSize) {
+        try {
+            String filterName = StringUtils.hasText(templateName) ? templateName : name;
+            Long filterCreatorId = creatorId != null ? creatorId : creatId;
+            long current = pageNum != null ? pageNum : page;
+            long pageLimit = pageSize != null ? pageSize : size;
+            IPage<PriceTemplate> pageRequest = new Page<>(current, pageLimit);
+            IPage<PriceTemplateResponseDTO> templates = priceTemplateService.pageTemplates(filterName, filterCreatorId, pageRequest);
+            return Result.success("查询成功", templates);
+        } catch (Exception e) {
+            log.error("分页查询价格模板失败", e);
+            return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，查询失败");
+        }
+    }
+
+    /**
      * 更新价格模板
      * @param templateId 模板ID
      * @param updateDTO 更新后的模板信息

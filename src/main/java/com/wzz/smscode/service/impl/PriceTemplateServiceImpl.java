@@ -1,6 +1,8 @@
 package com.wzz.smscode.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.wzz.smscode.dto.PriceTemplateCreateDTO;
 import com.wzz.smscode.dto.PriceTemplateItemDTO;
@@ -279,6 +281,56 @@ public class PriceTemplateServiceImpl extends ServiceImpl<PriceTemplateMapper, P
             responseDTO.setItems(itemDTOs);
             return responseDTO;
         }).collect(Collectors.toList());
+    }
+
+
+    @Override
+    public IPage<PriceTemplateResponseDTO> pageTemplates(String templateName, Long creatorId, IPage<PriceTemplate> page) {
+        LambdaQueryWrapper<PriceTemplate> queryWrapper = new LambdaQueryWrapper<>();
+        queryWrapper.like(StringUtils.hasText(templateName), PriceTemplate::getName, templateName);
+        queryWrapper.eq(creatorId != null, PriceTemplate::getCreatId, creatorId);
+        queryWrapper.orderByDesc(PriceTemplate::getCreateTime).orderByDesc(PriceTemplate::getId);
+
+        IPage<PriceTemplate> templatePage = this.page(page, queryWrapper);
+        List<PriceTemplate> templates = templatePage.getRecords();
+        Page<PriceTemplateResponseDTO> resultPage = new Page<>(
+                templatePage.getCurrent(),
+                templatePage.getSize(),
+                templatePage.getTotal()
+        );
+
+        if (CollectionUtils.isEmpty(templates)) {
+            resultPage.setRecords(Collections.emptyList());
+            return resultPage;
+        }
+
+        List<Long> templateIds = templates.stream().map(PriceTemplate::getId).collect(Collectors.toList());
+        List<PriceTemplateItem> allItems = priceTemplateItemService.list(
+                new LambdaQueryWrapper<PriceTemplateItem>().in(PriceTemplateItem::getTemplateId, templateIds)
+        );
+        Map<Long, List<PriceTemplateItem>> itemsByTemplateId = allItems.stream()
+                .collect(Collectors.groupingBy(PriceTemplateItem::getTemplateId));
+
+        List<PriceTemplateResponseDTO> records = templates.stream().map(template -> {
+            PriceTemplateResponseDTO responseDTO = new PriceTemplateResponseDTO();
+            responseDTO.setId(template.getId());
+            responseDTO.setName(template.getName());
+            responseDTO.setCreatId(template.getCreatId());
+
+            List<PriceTemplateItem> items = itemsByTemplateId.getOrDefault(template.getId(), Collections.emptyList());
+            List<PriceTemplateItemDTO> itemDTOs = items.stream().map(item -> {
+                PriceTemplateItemDTO itemDTO = new PriceTemplateItemDTO();
+                BeanUtils.copyProperties(item, itemDTO);
+                itemDTO.setProjectId(String.valueOf(item.getProjectId()));
+                return itemDTO;
+            }).collect(Collectors.toList());
+
+            responseDTO.setItems(itemDTOs);
+            return responseDTO;
+        }).collect(Collectors.toList());
+
+        resultPage.setRecords(records);
+        return resultPage;
     }
 
 

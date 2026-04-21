@@ -9,6 +9,7 @@ public class UserLineStatsDTO {
     private String userName;
     private Integer status;
     private String projectId;
+    private String projectName;
     private Integer lineId;
 
     private Long totalNumbers; // 取号总数

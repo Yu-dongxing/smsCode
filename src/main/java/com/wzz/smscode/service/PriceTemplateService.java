@@ -1,5 +1,6 @@
 package com.wzz.smscode.service;
 
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.wzz.smscode.dto.PriceTemplateCreateDTO;
 import com.wzz.smscode.dto.PriceTemplateResponseDTO;
@@ -28,6 +29,8 @@ public interface PriceTemplateService extends IService<PriceTemplate> {
      * @return 模板列表
      */
     List<PriceTemplateResponseDTO> listTemplatesByCreator(Long creatorId);
+
+    IPage<PriceTemplateResponseDTO> pageTemplates(String templateName, Long creatorId, IPage<PriceTemplate> page);
 
     /**
      * 更新模板，并校验操作者权限

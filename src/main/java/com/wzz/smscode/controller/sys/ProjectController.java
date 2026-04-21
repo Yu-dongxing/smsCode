@@ -35,7 +35,8 @@ public class ProjectController {
     public Result<?> findAll(@RequestParam(required = false) Long pageNum,
                              @RequestParam(required = false) Long pageSize,
                              @RequestParam(required = false) String projectName,
-                             @RequestParam(required = false) String projectId
+                             @RequestParam(required = false) String projectId,
+                             @RequestParam(required = false) String lineId
     ) {
         if (pageNum == null || pageSize == null) {
             pageNum = 1L;
@@ -50,6 +51,9 @@ public class ProjectController {
         }
         if (projectId != null && !projectId.isEmpty()) {
             queryWrapper.like(Project::getProjectId, projectId);
+        }
+        if (lineId != null && !lineId.isEmpty()) {
+            queryWrapper.eq(Project::getLineId, lineId);
         }
         IPage<Project> projectIPage = projectService.page(page, queryWrapper);
 

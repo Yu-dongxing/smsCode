@@ -1166,6 +1166,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
 
         List<UserLineStatsDTO> dtoList = new ArrayList<>();
         Set<Long> resultUserIds = new HashSet<>();
+        Set<String> resultProjectIds = new HashSet<>();
 
         for (Map<String, Object> map : resultPage.getRecords()) {
             UserLineStatsDTO dto = new UserLineStatsDTO();
@@ -1174,6 +1175,9 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             dto.setUserId(uId);
             dto.setProjectId((String) map.get("project_id"));
             dto.setLineId((Integer) map.get("line_id"));
+            if (StringUtils.hasText(dto.getProjectId())) {
+                resultProjectIds.add(dto.getProjectId());
+            }
 
             // 兼容不同数据库驱动返回的数值类型
             dto.setTotalNumbers(new BigDecimal(map.get("totalNumbers").toString()).longValue());
@@ -1199,12 +1203,34 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             }
         }
 
+        if (!resultProjectIds.isEmpty()) {
+            Map<String, String> projectNameMap = projectService.list(
+                            new LambdaQueryWrapper<Project>()
+                                    .select(Project::getProjectId, Project::getLineId, Project::getProjectName)
+                                    .in(Project::getProjectId, resultProjectIds)
+                    ).stream()
+                    .collect(Collectors.toMap(
+                            project -> buildProjectLineKey(project.getProjectId(), project.getLineId()),
+                            project -> project.getProjectName() == null ? "" : project.getProjectName(),
+                            (existing, replacement) -> existing
+                    ));
+
+            for (UserLineStatsDTO dto : dtoList) {
+                dto.setProjectName(projectNameMap.get(buildProjectLineKey(dto.getProjectId(), dto.getLineId())));
+            }
+        }
+
         Page<UserLineStatsDTO> finalPage = new Page<>(requestDTO.getPage(), requestDTO.getSize());
         finalPage.setTotal(resultPage.getTotal());
         finalPage.setRecords(dtoList);
 
         return finalPage;
     }
+
+    private String buildProjectLineKey(String projectId, Object lineId) {
+        return projectId + "#" + (lineId == null ? "" : lineId);
+    }
+
     @Transactional(rollbackFor = Exception.class)
     @Override
     public int batchRefundByQuery(BatchRefundQueryDTO queryDTO) {
