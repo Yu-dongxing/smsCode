@@ -4,11 +4,13 @@ import com.wzz.smscode.dto.ApiConfig.ApiConfig;
 import com.wzz.smscode.entity.Project;
 import com.wzz.smscode.entity.SystemConfig;
 import com.wzz.smscode.exception.BusinessException;
+import com.wzz.smscode.service.FilterErrorMonitorService;
 import com.wzz.smscode.service.ProjectService;
 import com.wzz.smscode.service.SystemConfigService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
@@ -23,6 +25,7 @@ import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 import java.util.regex.Matcher;
@@ -45,7 +48,10 @@ public class SmsApiService {
     private static final String DEFAULT_SPECIAL_API_BASE_URL = "http://154.86.19.28:13588";
     private final WebClient webClient; // 从WebClientConfig注入
     private final SystemConfigService systemConfigService;
+    private final FilterErrorMonitorService filterErrorMonitorService;
     private final ModuleUtil moduleUtil;
+    @Value("${sms.test.random-phone:false}")
+    private boolean randomPhoneTestEnabled;
     // 变量替换正则：匹配 {{variable}}
     private static final Pattern VARIABLE_PATTERN = Pattern.compile("\\{\\{(.+?)}}");
     @Autowired
@@ -80,6 +86,10 @@ public class SmsApiService {
     public Map<String, String> getPhoneNumber(Project project, String... dynamicParams) {
         log.info("开始为项目 [{} - {}] 获取手机号", project.getProjectName(), project.getLineId());
 
+        if (randomPhoneTestEnabled) {
+            return buildRandomPhoneContext(project);
+        }
+
         if (Boolean.TRUE.equals(project.getAesSpecialApiStatus())) {
             log.info("执行 AES 加密特殊接口获取手机号...");
             return getPhoneNumberAesSpecial(project);
@@ -112,6 +122,21 @@ public class SmsApiService {
             throw new BusinessException("未获取到手机号，请尝试重新获取");
         }
 
+        return context;
+    }
+
+    private Map<String, String> buildRandomPhoneContext(Project project) {
+        int secondDigit = ThreadLocalRandom.current().nextInt(3, 10);
+        int tail = ThreadLocalRandom.current().nextInt(0, 1_000_000_000);
+        String phone = "1" + secondDigit + String.format("%09d", tail);
+        Map<String, String> context = new HashMap<>();
+        context.put("phone", phone);
+        context.put("id", "TEST-" + System.currentTimeMillis());
+        if (StringUtils.hasText(project.getAuthTokenValue())) {
+            context.put("token", project.getAuthTokenValue());
+        }
+        log.warn("测试模式开启，项目 [{} - {}] 取号返回随机号码: {}",
+                project.getProjectName(), project.getLineId(), phone);
         return context;
     }
 
@@ -346,9 +371,13 @@ public class SmsApiService {
                                 log.info("[NUMBER-FILTER-TRACE] 项目ID: {} | 线路ID: {} | 手机号: {} - 接口响应内容: {}",
                                         projectId, type, phoneNumber, responseBody);
                                 boolean isAvailable = phoneNumberFilterService.parseStateFromResponseInt(responseBody)==0;
+                                if (!isAvailable) {
+                                    filterErrorMonitorService.recordFilterError(project, "筛选接口返回不是新号");
+                                }
                                 log.info("[NUMBER-FILTER-TRACE] 号码 [{}] 在服务器 [{}] 的筛选结果: {}", phoneNumber, serverIp, isAvailable ? "可用" : "不可用");
                                 return Mono.just(isAvailable);
                             })
+                            .doOnError(e -> filterErrorMonitorService.recordFilterError(project, "筛选接口请求异常: " + e.getMessage()))
                             .doOnError(e -> log.warn("[NUMBER-FILTER-TRACE] 项目ID: {} | 手机号: {} - 服务器 {} 请求异常: {}",
                                     projectId, phoneNumber, serverIp, e.getMessage()))
                             .onErrorResume(e -> Mono.empty()); // 如果当前服务器请求失败，返回空Mono，以便concatMap继续处理下一个服务器

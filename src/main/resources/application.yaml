@@ -79,3 +79,7 @@ admin:
   username: admin
   password: admin
   debug: true
+
+sms:
+  test:
+    random-phone: true

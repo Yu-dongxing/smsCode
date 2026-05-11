@@ -19,5 +19,7 @@ public interface SystemConfigService extends IService<SystemConfig> {
 
     BigDecimal getBalanceThreshold();
 
+    int getFilterErrorLimit();
+
     void checkAndBanUser(User user);
 }

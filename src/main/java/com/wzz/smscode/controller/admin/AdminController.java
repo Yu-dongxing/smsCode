@@ -65,6 +65,7 @@ public class AdminController {
     @Autowired private UserLedgerService userLedgerService;
     @Autowired private NumberRecordService numberRecordService;
     @Autowired private SystemConfigService systemConfigService;
+    @Autowired private FilterErrorMonitorService filterErrorMonitorService;
     @Autowired private ProjectService projectService;
     @Autowired private OperationLogService operationLogService;
 
@@ -625,10 +626,15 @@ public class AdminController {
     }
 
     /**
-     * 更新系统配置信息。
+     * 获取筛选自动关闭通知列表
+     */
+    @GetMapping("/filter/error/notices")
+    public Result<?> getFilterErrorNotices() {
+        return Result.success("查询成功", filterErrorMonitorService.listNotices());
+    }
 
-     * @param config 系统配置信息，必须提供
-     * @return 返回操作结果，成功则返回包含"更新成功"的消息；失败则根据情况返回错误代码和相应的错误消息
+    /**
+     * 更新系统配置信息
      */
     @PostMapping("/updateConfig")
     public Result<?> updateConfig(

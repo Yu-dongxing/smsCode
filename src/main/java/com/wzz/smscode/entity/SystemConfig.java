@@ -140,6 +140,14 @@ public class SystemConfig implements Serializable {
     private String systemNotice;
 
     /**
+     * 筛选错误次数上限
+     */
+    @ColumnComment("筛选错误次数上限")
+    @TableField("filter_error_limit")
+    @DefaultValue("300")
+    private Integer filterErrorLimit;
+
+    /**
      * 用户能够删除几天前的数据(账单和号码记录通用)
      */
     @ColumnComment("用户能够删除几天前的数据")

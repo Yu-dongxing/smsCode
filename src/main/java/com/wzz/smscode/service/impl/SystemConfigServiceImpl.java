@@ -121,6 +121,13 @@ public class SystemConfigServiceImpl extends ServiceImpl<SystemConfigMapper, Sys
         return (config != null && config.getBalanceThreshold() != null) ? config.getBalanceThreshold() : BigDecimal.ZERO;
     }
 
+    @Override
+    public int getFilterErrorLimit() {
+        SystemConfig config = getConfig();
+        Integer limit = config != null ? config.getFilterErrorLimit() : null;
+        return limit != null && limit > 0 ? limit : 300;
+    }
+
 
     /**
      * 检查并可能封禁用户。
