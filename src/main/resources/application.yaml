@@ -82,4 +82,4 @@ admin:
 
 sms:
   test:
-    random-phone: true
+    random-phone: false

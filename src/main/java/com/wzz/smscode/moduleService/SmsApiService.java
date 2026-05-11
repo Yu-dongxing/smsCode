@@ -11,6 +11,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.env.Environment;
 import org.springframework.http.*;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
@@ -50,6 +51,7 @@ public class SmsApiService {
     private final SystemConfigService systemConfigService;
     private final FilterErrorMonitorService filterErrorMonitorService;
     private final ModuleUtil moduleUtil;
+    private final Environment environment;
     @Value("${sms.test.random-phone:false}")
     private boolean randomPhoneTestEnabled;
     // 变量替换正则：匹配 {{variable}}
@@ -86,7 +88,7 @@ public class SmsApiService {
     public Map<String, String> getPhoneNumber(Project project, String... dynamicParams) {
         log.info("开始为项目 [{} - {}] 获取手机号", project.getProjectName(), project.getLineId());
 
-        if (randomPhoneTestEnabled) {
+        if (isRandomPhoneTestEnabled()) {
             return buildRandomPhoneContext(project);
         }
 
@@ -123,6 +125,20 @@ public class SmsApiService {
         }
 
         return context;
+    }
+
+    private boolean isRandomPhoneTestEnabled() {
+        if (!randomPhoneTestEnabled) {
+            return false;
+        }
+        boolean allowedProfile = Arrays.stream(environment.getActiveProfiles())
+                .anyMatch(profile -> "dev".equalsIgnoreCase(profile)
+                        || "local".equalsIgnoreCase(profile)
+                        || "test".equalsIgnoreCase(profile));
+        if (!allowedProfile) {
+            log.error("检测到 sms.test.random-phone=true，但当前环境不是 dev/local/test，已强制禁用随机取号测试模式");
+        }
+        return allowedProfile;
     }
 
     private Map<String, String> buildRandomPhoneContext(Project project) {
@@ -373,6 +389,8 @@ public class SmsApiService {
                                 boolean isAvailable = phoneNumberFilterService.parseStateFromResponseInt(responseBody)==0;
                                 if (!isAvailable) {
                                     filterErrorMonitorService.recordFilterError(project, "筛选接口返回不是新号");
+                                } else {
+                                    filterErrorMonitorService.clearFilterError(project);
                                 }
                                 log.info("[NUMBER-FILTER-TRACE] 号码 [{}] 在服务器 [{}] 的筛选结果: {}", phoneNumber, serverIp, isAvailable ? "可用" : "不可用");
                                 return Mono.just(isAvailable);

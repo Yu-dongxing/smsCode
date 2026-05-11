@@ -52,6 +52,35 @@ public class FilterErrorMonitorService {
         }
     }
 
+    public void clearFilterError(Project project) {
+        if (project == null || project.getProjectId() == null || project.getLineId() == null) {
+            log.warn("清理筛选错误计数失败，项目或线路信息为空: {}", project);
+            return;
+        }
+
+        String countKey = buildCountKey(project.getProjectId(), project.getLineId());
+        Boolean deleted = redisTemplate.delete(countKey);
+        if (Boolean.TRUE.equals(deleted)) {
+            log.info("项目 {} 线路 {} 筛选成功，已清理筛选错误计数",
+                    project.getProjectId(), project.getLineId());
+        }
+    }
+
+    public void clearFilterErrorAndNotice(Project project) {
+        if (project == null || project.getProjectId() == null || project.getLineId() == null) {
+            log.warn("清理筛选错误计数和通知失败，项目或线路信息为空: {}", project);
+            return;
+        }
+
+        String countKey = buildCountKey(project.getProjectId(), project.getLineId());
+        String noticeKey = buildNoticeKey(project.getProjectId(), project.getLineId());
+        Boolean countDeleted = redisTemplate.delete(countKey);
+        Boolean noticeDeleted = redisTemplate.delete(noticeKey);
+        log.info("项目 {} 线路 {} 重新开启筛选，清理筛选错误计数: {}, 清理通知: {}",
+                project.getProjectId(), project.getLineId(),
+                Boolean.TRUE.equals(countDeleted), Boolean.TRUE.equals(noticeDeleted));
+    }
+
     public List<FilterErrorNoticeDTO> listNotices() {
         Set<String> keys = redisTemplate.keys(NOTICE_KEY_PREFIX + "*");
         if (CollectionUtils.isEmpty(keys)) {

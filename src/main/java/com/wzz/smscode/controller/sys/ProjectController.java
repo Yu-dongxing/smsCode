@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.wzz.smscode.common.Result;
 import com.wzz.smscode.entity.Project;
 import com.wzz.smscode.exception.BusinessException;
+import com.wzz.smscode.service.FilterErrorMonitorService;
 import com.wzz.smscode.service.ProjectService;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -19,9 +20,11 @@ import org.springframework.web.bind.annotation.*;
 public class ProjectController {
     private static final Logger log = LogManager.getLogger(ProjectController.class);
     private final ProjectService projectService;
+    private final FilterErrorMonitorService filterErrorMonitorService;
 
-    public ProjectController(ProjectService projectService) {
+    public ProjectController(ProjectService projectService, FilterErrorMonitorService filterErrorMonitorService) {
         this.projectService = projectService;
+        this.filterErrorMonitorService = filterErrorMonitorService;
     }
 
     /**
@@ -72,8 +75,15 @@ public class ProjectController {
     public Result<?> updateByProject(@RequestBody Project project){
 //        log.info("传入数据：{}",project);
 
+        Project existingProject = project.getId() == null ? null : projectService.getById(project.getId());
         boolean is = projectService.updateProject(project);
         if (is){
+            Project updatedProject = project.getId() == null ? null : projectService.getById(project.getId());
+            if (existingProject != null && updatedProject != null
+                    && Boolean.FALSE.equals(existingProject.getEnableFilter())
+                    && Boolean.TRUE.equals(updatedProject.getEnableFilter())) {
+                filterErrorMonitorService.clearFilterErrorAndNotice(updatedProject);
+            }
             return Result.success("更新成功");
         }
         return Result.error("更新失败");
