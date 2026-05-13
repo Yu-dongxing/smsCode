@@ -10,13 +10,11 @@ import java.time.LocalDateTime;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
-public class FilterErrorNoticeDTO {
-    private String id;
-    private String projectId;
-    private String lineId;
-    private String projectName;
-    private String lineName;
-    private String message;
+public class FilterErrorDetailDTO {
+    private String phone;
+    private String responseBody;
+    private String errorType;
+    private String errorMessage;
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "GMT+8")
     private LocalDateTime createdAt;
 }

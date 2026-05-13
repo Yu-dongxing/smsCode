@@ -636,6 +636,11 @@ public class AdminController {
     /**
      * 更新系统配置信息
      */
+    @GetMapping("/filter/error/notices/{id}/details")
+    public Result<?> getFilterErrorNoticeDetails(@PathVariable("id") String id) {
+        return Result.success("查询成功", filterErrorMonitorService.listNoticeDetails(id));
+    }
+
     @PostMapping("/updateConfig")
     public Result<?> updateConfig(
              @RequestBody SystemConfig config) {

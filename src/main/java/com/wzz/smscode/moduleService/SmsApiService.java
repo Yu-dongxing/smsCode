@@ -388,16 +388,18 @@ public class SmsApiService {
                                         projectId, type, phoneNumber, responseBody);
                                 boolean isAvailable = phoneNumberFilterService.parseStateFromResponseInt(responseBody)==0;
                                 if (!isAvailable) {
-                                    filterErrorMonitorService.recordFilterError(project, "筛选接口返回不是新号");
+                                    filterErrorMonitorService.recordFilterError(project, phoneNumber, responseBody,
+                                            FilterErrorMonitorService.ERROR_TYPE_RESPONSE_NOT_NEW, "筛选接口返回不是新号");
                                 } else {
                                     filterErrorMonitorService.clearFilterError(project);
                                 }
                                 log.info("[NUMBER-FILTER-TRACE] 号码 [{}] 在服务器 [{}] 的筛选结果: {}", phoneNumber, serverIp, isAvailable ? "可用" : "不可用");
                                 return Mono.just(isAvailable);
                             })
-                            .doOnError(e -> filterErrorMonitorService.recordFilterError(project, "筛选接口请求异常: " + e.getMessage()))
                             .doOnError(e -> log.warn("[NUMBER-FILTER-TRACE] 项目ID: {} | 手机号: {} - 服务器 {} 请求异常: {}",
                                     projectId, phoneNumber, serverIp, e.getMessage()))
+                            .doOnError(e -> filterErrorMonitorService.recordFilterError(project, phoneNumber, null,
+                                    FilterErrorMonitorService.ERROR_TYPE_REQUEST_ERROR, "筛选接口请求异常: " + e.getMessage()))
                             .onErrorResume(e -> Mono.empty()); // 如果当前服务器请求失败，返回空Mono，以便concatMap继续处理下一个服务器
                 })
                 .next() // 只取第一个成功的结果
