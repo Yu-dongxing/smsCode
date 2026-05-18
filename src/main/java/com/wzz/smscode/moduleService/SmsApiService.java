@@ -47,6 +47,8 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 @Slf4j
 public class SmsApiService {
     private static final String DEFAULT_SPECIAL_API_BASE_URL = "http://154.86.19.28:13588";
+    private static final String DEFAULT_OUTSIDE_ORDER_API_BASE_URL = "http://8.134.82.224:8222";
+    private static final int OUTSIDE_ORDER_FEEDBACK_MAX_ATTEMPTS = 5;
     private final WebClient webClient; // 从WebClientConfig注入
     private final SystemConfigService systemConfigService;
     private final FilterErrorMonitorService filterErrorMonitorService;
@@ -90,6 +92,11 @@ public class SmsApiService {
 
         if (isRandomPhoneTestEnabled()) {
             return buildRandomPhoneContext(project);
+        }
+
+        if (Boolean.TRUE.equals(project.getOutsideOrderApiStatus())) {
+            log.info("执行外部抢单渠道取号: [{} - {}]", project.getProjectName(), project.getLineId());
+            return getPhoneNumberOutsideOrder(project);
         }
 
         if (Boolean.TRUE.equals(project.getAesSpecialApiStatus())) {
@@ -164,6 +171,9 @@ public class SmsApiService {
         // 1. 初始化上下文变量 (Context)
         Map<String, String> context =null;
 
+        if (Boolean.TRUE.equals(project.getOutsideOrderApiStatus())) {
+            return "0";
+        }
         if (Boolean.TRUE.equals(project.getSpecialApiStatus())) {
             return getApiBalanceSpecial(project);
         }
@@ -196,6 +206,11 @@ public class SmsApiService {
      */
 
     public String getVerificationCode(Project project, Map<String, String> identifierParams , Supplier<Boolean> stopCondition) {
+
+        if (Boolean.TRUE.equals(project.getOutsideOrderApiStatus())) {
+            log.info("检测到外部抢单渠道，进入订单验证码轮询流程...");
+            return pollForOutsideOrderVerificationCode(project, identifierParams, stopCondition);
+        }
 
         if (Boolean.TRUE.equals(project.getAesSpecialApiStatus())) {
             log.info("检测到开启 AES 特殊 API，进入 AES 轮询流程...");
@@ -263,6 +278,10 @@ public class SmsApiService {
     public boolean releasePhoneNumber(Project project, Map<String, String> identifierParams,boolean isSuccess) {
         String phone = identifierParams.get("phone");
         String id = identifierParams.get("id");
+        if (Boolean.TRUE.equals(project.getOutsideOrderApiStatus())) {
+            String remark = isSuccess ? "" : identifierParams.getOrDefault("releaseMsg", "fail");
+            return feedbackOutsideOrder(project, id, isSuccess, remark);
+        }
         log.info("开始释放项目 [{}] 的手机号: {}, 关联ID: {}", project.getProjectName(), phone, id);
         if (Boolean.TRUE.equals(project.getAesSpecialApiStatus())) {
             log.info("执行 AES 加密特殊接口释放手机号...");
@@ -307,6 +326,11 @@ public class SmsApiService {
      * @return Optional<String>
      */
     public Optional<String> fetchVerificationCodeOnce(Project project, Map<String, String> identifierParams) {
+        if (Boolean.TRUE.equals(project.getOutsideOrderApiStatus())) {
+            String code = getVerificationCodeOutsideOrderOnce(project, identifierParams);
+            return Optional.ofNullable(code);
+        }
+
          log.info("执行单次验证码获取, 参数: {}", identifierParams);
 
         if (Boolean.TRUE.equals(project.getAesSpecialApiStatus())) {
@@ -692,6 +716,208 @@ public class SmsApiService {
 
     //------------------------加解密特殊API----------------------------------
 
+
+    //--------------------外部抢单渠道api----------------------------------
+
+    private String getOutsideOrderApiBaseUrl(Project project) {
+        String customHost = project != null ? project.getOutsideOrderApiHost() : null;
+        String baseUrl = StringUtils.hasText(customHost) ? customHost.trim() : DEFAULT_OUTSIDE_ORDER_API_BASE_URL;
+        return baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
+    }
+
+    private Map<String, Object> callOutsideOrderApi(Project project, String path, Map<String, String> params) {
+        try {
+            UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl(getOutsideOrderApiBaseUrl(project) + path);
+            if (params != null) {
+                params.forEach((key, value) -> {
+                    if (StringUtils.hasText(key)) {
+                        builder.queryParam(key, value == null ? "" : value);
+                    }
+                });
+            }
+            URI uri = builder.build().encode().toUri();
+            HttpHeaders headers = new HttpHeaders();
+            headers.add("Connection", "close");
+            headers.add("User-Agent", "Mozilla/5.0");
+            HttpEntity<String> entity = new HttpEntity<>(headers);
+            ResponseEntity<String> response = specialRestTemplate.exchange(uri, HttpMethod.GET, entity, String.class);
+            String body = response.getBody();
+            log.info("外部抢单渠道响应: url={}, body={}", uri, body);
+            if (!StringUtils.hasText(body)) {
+                throw new BusinessException("外部抢单渠道返回为空");
+            }
+            return aesMapper.readValue(body, Map.class);
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("外部抢单渠道请求失败: path={}, params={}, err={}", path, params, e.getMessage());
+            throw new BusinessException("外部抢单渠道请求失败: " + e.getMessage());
+        }
+    }
+
+    private boolean isOutsideOrderSuccess(Map<String, Object> response) {
+        return response != null && "0".equals(String.valueOf(response.get("code")));
+    }
+
+    private String outsideOrderMessage(Map<String, Object> response) {
+        if (response == null) {
+            return "外部抢单渠道无响应";
+        }
+        Object msg = response.get("msg");
+        return msg == null ? "外部抢单渠道返回异常" : String.valueOf(msg);
+    }
+
+    private String stringValue(Object value) {
+        return value == null || "null".equalsIgnoreCase(String.valueOf(value)) ? null : String.valueOf(value);
+    }
+
+    public Map<String, String> getPhoneNumberOutsideOrder(Project project) {
+        if (!StringUtils.hasText(project.getOutsideOrderApiUserId())) {
+            throw new BusinessException("外部抢单渠道未配置 userId");
+        }
+        Map<String, String> params = new HashMap<>();
+        params.put("userId", project.getOutsideOrderApiUserId());
+        Map<String, Object> response = callOutsideOrderApi(project, "/apiOutSide/order/busGetOrderV1", params);
+        if (!isOutsideOrderSuccess(response)) {
+            throw new BusinessException(outsideOrderMessage(response));
+        }
+        Object dataObj = response.get("data");
+        if (!(dataObj instanceof Map<?, ?> data)) {
+            throw new BusinessException("外部抢单渠道取号返回缺少 data");
+        }
+        String phone = stringValue(data.get("phoneNo"));
+        String orderId = stringValue(data.get("orderId"));
+        if (!StringUtils.hasText(phone) || !StringUtils.hasText(orderId)) {
+            throw new BusinessException("外部抢单渠道取号返回缺少手机号或订单ID");
+        }
+        Map<String, String> context = new HashMap<>();
+        context.put("phone", phone);
+        context.put("id", orderId);
+        return context;
+    }
+
+    public boolean checkOutsideOrderPhone(Project project, String orderId, boolean passed) {
+        if (!StringUtils.hasText(orderId)) {
+            return false;
+        }
+        Map<String, String> params = new HashMap<>();
+        params.put("orderId", orderId);
+        params.put("status", passed ? "3" : "21");
+        try {
+            Map<String, Object> response = callOutsideOrderApi(project, "/apiOutSide/order/checkPhone", params);
+            boolean success = isOutsideOrderSuccess(response);
+            if (!success) {
+                log.warn("外部抢单渠道手机号验证反馈失败: orderId={}, passed={}, msg={}", orderId, passed, outsideOrderMessage(response));
+            }
+            return success;
+        } catch (Exception e) {
+            log.warn("外部抢单渠道手机号验证反馈异常: orderId={}, passed={}, err={}", orderId, passed, e.getMessage());
+            return false;
+        }
+    }
+
+    public String getVerificationCodeOutsideOrderOnce(Project project, Map<String, String> context) {
+        String orderId = context.get("id");
+        if (!StringUtils.hasText(orderId)) {
+            return null;
+        }
+        Map<String, String> params = new HashMap<>();
+        params.put("orderId", orderId);
+        Map<String, Object> response = callOutsideOrderApi(project, "/apiOutSide/order/getOrderInfo", params);
+        if (!isOutsideOrderSuccess(response)) {
+            log.warn("外部抢单渠道查询验证码失败: orderId={}, msg={}", orderId, outsideOrderMessage(response));
+            return null;
+        }
+        Object dataObj = response.get("data");
+        if (!(dataObj instanceof Map<?, ?> data)) {
+            return null;
+        }
+        String phoneCode = stringValue(data.get("phoneCode"));
+        if (StringUtils.hasText(phoneCode)) {
+            Matcher matcher = Pattern.compile("\\d{4,8}").matcher(phoneCode);
+            if (matcher.find()) {
+                return matcher.group();
+            }
+        }
+        return null;
+    }
+
+    private String pollForOutsideOrderVerificationCode(Project project, Map<String, String> context, Supplier<Boolean> stopCondition) {
+        long startTime = System.currentTimeMillis();
+        long timeout = project.getCodeTimeout() != null && project.getCodeTimeout() > 0
+                ? project.getCodeTimeout() * 1000L
+                : 5 * 60 * 1000L;
+        long interval = project.getOutsideOrderPollIntervalMs() != null && project.getOutsideOrderPollIntervalMs() > 0
+                ? project.getOutsideOrderPollIntervalMs()
+                : 3000L;
+        int attempts = 0;
+        while (System.currentTimeMillis() - startTime < timeout) {
+            if (stopCondition != null && stopCondition.get()) {
+                throw new BusinessException("订单已关闭，停止查询验证码");
+            }
+            attempts++;
+            try {
+                String code = getVerificationCodeOutsideOrderOnce(project, context);
+                if (StringUtils.hasText(code)) {
+                    log.info("外部抢单渠道获取验证码成功: orderId={}, attempts={}", context.get("id"), attempts);
+                    return code;
+                }
+                Thread.sleep(interval);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new BusinessException("获取验证码被中断");
+            } catch (Exception e) {
+                log.warn("外部抢单渠道轮询验证码异常: orderId={}, err={}", context.get("id"), e.getMessage());
+                try {
+                    Thread.sleep(interval);
+                } catch (InterruptedException interruptedException) {
+                    Thread.currentThread().interrupt();
+                    throw new BusinessException("获取验证码被中断");
+                }
+            }
+        }
+        throw new BusinessException("获取验证码超时");
+    }
+
+    public boolean feedbackOutsideOrder(Project project, String orderId, boolean success, String remark) {
+        if (!StringUtils.hasText(orderId)) {
+            return false;
+        }
+        int configuredAttempts = project.getOutsideOrderFeedbackMaxAttempts() == null
+                ? OUTSIDE_ORDER_FEEDBACK_MAX_ATTEMPTS
+                : project.getOutsideOrderFeedbackMaxAttempts();
+        int maxAttempts = Math.max(1, Math.min(configuredAttempts, OUTSIDE_ORDER_FEEDBACK_MAX_ATTEMPTS));
+        long interval = project.getOutsideOrderFeedbackRetryIntervalMs() == null
+                ? 2500L
+                : project.getOutsideOrderFeedbackRetryIntervalMs();
+        interval = Math.max(2000L, Math.min(interval, 3000L));
+
+        Map<String, String> params = new HashMap<>();
+        params.put("orderId", orderId);
+        params.put("status", success ? "10" : "22");
+        params.put("remark", remark == null ? "" : remark);
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                Map<String, Object> response = callOutsideOrderApi(project, "/apiOutSide/order/checkMsg", params);
+                if (isOutsideOrderSuccess(response)) {
+                    log.info("外部抢单渠道订单反馈成功: orderId={}, status={}, attempt={}", orderId, params.get("status"), attempt);
+                    return true;
+                }
+                log.warn("外部抢单渠道订单反馈失败: orderId={}, attempt={}, msg={}", orderId, attempt, outsideOrderMessage(response));
+            } catch (Exception e) {
+                log.warn("外部抢单渠道订单反馈异常: orderId={}, attempt={}, err={}", orderId, attempt, e.getMessage());
+            }
+            if (attempt < maxAttempts) {
+                try {
+                    Thread.sleep(interval);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
+            }
+        }
+        return false;
+    }
 
     // 静态初始化 BouncyCastle 驱动
     static {

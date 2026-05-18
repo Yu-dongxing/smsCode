@@ -317,6 +317,34 @@ public class Project extends BaseEntity {
     @TableField("special_api_host")
     private String specialApiHost;
 
+    @ColumnComment("是否启用外部抢单渠道API配置")
+    @TableField("outside_order_api_status")
+    @DefaultValue("0")
+    private Boolean outsideOrderApiStatus;
+
+    @ColumnComment("外部抢单渠道请求host")
+    @TableField("outside_order_api_host")
+    private String outsideOrderApiHost;
+
+    @ColumnComment("外部抢单渠道userId")
+    @TableField("outside_order_api_user_id")
+    private String outsideOrderApiUserId;
+
+    @ColumnComment("外部抢单渠道取码轮询间隔毫秒")
+    @TableField("outside_order_poll_interval_ms")
+    @DefaultValue("3000")
+    private Integer outsideOrderPollIntervalMs;
+
+    @ColumnComment("外部抢单渠道反馈重试间隔毫秒")
+    @TableField("outside_order_feedback_retry_interval_ms")
+    @DefaultValue("2500")
+    private Integer outsideOrderFeedbackRetryIntervalMs;
+
+    @ColumnComment("外部抢单渠道反馈最大重试次数")
+    @TableField("outside_order_feedback_max_attempts")
+    @DefaultValue("5")
+    private Integer outsideOrderFeedbackMaxAttempts;
+
     //****************加解密api字段
 
     /**

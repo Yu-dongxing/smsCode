@@ -51,6 +51,20 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
     @Autowired
     private NumberRecordCacheManager cacheManager; // 注入缓存管理器
 
+    private void validateSpecialChannelSwitches(Project project) {
+        int enabledCount = 0;
+        if (Boolean.TRUE.equals(project.getSpecialApiStatus())) enabledCount++;
+        if (Boolean.TRUE.equals(project.getAesSpecialApiStatus())) enabledCount++;
+        if (Boolean.TRUE.equals(project.getOutsideOrderApiStatus())) enabledCount++;
+        if (enabledCount > 1) {
+            throw new BusinessException("特殊渠道开关只能启用一个");
+        }
+        if (Boolean.TRUE.equals(project.getOutsideOrderApiStatus())
+                && !StringUtils.hasText(project.getOutsideOrderApiUserId())) {
+            throw new BusinessException("启用外部抢单渠道时必须配置 userId");
+        }
+    }
+
     @Transactional(rollbackFor = Exception.class)
     @Override
     public boolean updateProject(Project projectDTO) {
@@ -72,6 +86,7 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
             throw new BusinessException("更新项目基础信息失败，操作已回滚。");
         }
         Project updatedProject = this.getById(projectDTO.getId());
+        validateSpecialChannelSwitches(updatedProject);
         priceSyncService.validateProjectPriceConfig(updatedProject);
         cacheManager.evictProject(oldProjectId, oldLineId);
         cacheManager.evictProject(updatedProject.getProjectId(), Integer.valueOf(updatedProject.getLineId()));
@@ -246,6 +261,7 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
         if(project.getLineId() == null || project.getProjectId() == null || project.getProjectName() == null) {
             throw new BusinessException(0,"项目id，项目名称，线路id不能为空");
         }
+        validateSpecialChannelSwitches(project);
         priceSyncService.validateProjectPriceConfig(project);
         // 1. 保存项目自身
         boolean projectSaved = super.save(project);
@@ -321,9 +337,23 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
 
         LambdaQueryWrapper<PriceTemplateItem> deleteWrapper = new LambdaQueryWrapper<>();
         deleteWrapper.eq(PriceTemplateItem::getProjectTableId, id);
+        try {
+            Long projectId = Long.valueOf(projectToDelete.getProjectId());
+            Long lineId = Long.valueOf(projectToDelete.getLineId());
+            deleteWrapper.or(wrapper -> wrapper
+                    .eq(PriceTemplateItem::getProjectId, projectId)
+                    .eq(PriceTemplateItem::getLineId, lineId));
+        } catch (NumberFormatException e) {
+            log.warn("项目 '{}' 的项目ID或线路ID不是数字，仅按项目表ID删除价格模板项", projectToDelete.getProjectName());
+        }
 
         // 执行删除模板项
         priceTemplateItemService.remove(deleteWrapper);
+        try {
+            cacheManager.evictProject(projectToDelete.getProjectId(), Integer.valueOf(projectToDelete.getLineId()));
+        } catch (NumberFormatException e) {
+            log.warn("项目 '{}' 的线路ID不是数字，跳过项目缓存清理", projectToDelete.getProjectName());
+        }
         log.info("项目 '{}' 关联的模板项配置已清理完毕。", projectToDelete.getProjectName());
 
         // 2. 删除项目本身

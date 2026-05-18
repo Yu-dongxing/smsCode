@@ -74,6 +74,19 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         return count > 0;
     }
 
+    private void rejectOutsideOrderPhoneIfNeeded(Project project, Map<String, String> identifier) {
+        if (Boolean.TRUE.equals(project.getOutsideOrderApiStatus()) && identifier != null) {
+            smsApiService.checkOutsideOrderPhone(project, identifier.get("id"), false);
+        }
+    }
+
+    private boolean acceptOutsideOrderPhoneIfNeeded(Project project, Map<String, String> identifier) {
+        if (!Boolean.TRUE.equals(project.getOutsideOrderApiStatus())) {
+            return true;
+        }
+        return identifier != null && smsApiService.checkOutsideOrderPhone(project, identifier.get("id"), true);
+    }
+
     private double calculateUserCodeRateWithinMinutes(Long userId, Integer windowMinutes) {
         int effectiveWindowMinutes = (windowMinutes == null || windowMinutes <= 0) ? 1440 : windowMinutes;
         LocalDateTime windowStart = LocalDateTime.now().minusMinutes(effectiveWindowMinutes);
@@ -207,11 +220,13 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                 String phone = (currentIdentifier != null) ? currentIdentifier.get("phone") : null;
                 boolean isValidPhone = StringUtils.hasText(phone) && PHONE_NUMBER_PATTERN.matcher(phone).matches();
                 if (!isValidPhone) {
+                    rejectOutsideOrderPhoneIfNeeded(projectT, currentIdentifier);
                     log.warn("获取号码无效或格式不正确 (尝试 {}/{}): {}", attempt, MAX_ATTEMPTS, phone);
                     if (attempt < MAX_ATTEMPTS) Thread.sleep(500);
                     continue;
                 }
                 if (isPhoneNumberExistsInProject(projectId, phone)) {
+                    rejectOutsideOrderPhoneIfNeeded(projectT, currentIdentifier);
                     log.warn("号码 [{}] 已存在，重试...", phone);
                     if (attempt < MAX_ATTEMPTS) Thread.sleep(200);
                     continue;
@@ -226,17 +241,24 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                             log.info("[NUMBER-FILTER-TRACE] 项目ID: {} | 线路ID: {} | 手机号: {} - 筛选结果: [通过]",
                                     projectT.getId(), projectT.getSelectNumberApiRequestValue(), phone);
                         } else {
+                            rejectOutsideOrderPhoneIfNeeded(projectT, currentIdentifier);
                             log.warn("[NUMBER-FILTER-TRACE] 项目ID: {} | 线路ID: {} | 手机号: {} - 筛选结果: [未通过]",
                                     projectT.getId(), projectT.getSelectNumberApiRequestValue(), phone);
                             if (attempt < MAX_ATTEMPTS) Thread.sleep(200);
                             continue;
                         }
                     } catch (Exception e) {
+                        rejectOutsideOrderPhoneIfNeeded(projectT, currentIdentifier);
                         log.error("[NUMBER-FILTER-TRACE] 项目ID: {} | 线路ID: {} | 手机号: {} - 筛选异常中断: {}",
                                 projectT.getId(), projectT.getSelectNumberApiRequestValue(), phone, e.getMessage());
                         log.error("筛选调用异常，视为筛选不通过", e);
                         continue;
                     }
+                }
+                if (!acceptOutsideOrderPhoneIfNeeded(projectT, currentIdentifier)) {
+                    log.warn("外部抢单渠道手机号通过回调失败，订单ID: {}", currentIdentifier.get("id"));
+                    if (attempt < MAX_ATTEMPTS) Thread.sleep(500);
+                    continue;
                 }
                 successfulIdentifier = currentIdentifier;
                 numberFoundAndVerified = true;
