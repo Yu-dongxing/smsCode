@@ -42,6 +42,10 @@ public class PriceTemplateServiceImpl extends ServiceImpl<PriceTemplateMapper, P
     @Lazy
     private UserService userService;
 
+    @Autowired
+    @Lazy
+    private PriceSyncService priceSyncService;
+
 
     @Transactional(rollbackFor = Exception.class)
     @Override
@@ -134,6 +138,7 @@ public class PriceTemplateServiceImpl extends ServiceImpl<PriceTemplateMapper, P
         }
 
         priceTemplateItemService.saveBatch(itemsToSave);
+        priceSyncService.syncByTemplateChanged(template.getId());
         return true;
     }
 
@@ -233,6 +238,7 @@ public class PriceTemplateServiceImpl extends ServiceImpl<PriceTemplateMapper, P
             }).collect(Collectors.toList());
             priceTemplateItemService.saveBatch(items);
         }
+        priceSyncService.syncByTemplateChanged(template.getId());
         return true;
     }
 
@@ -469,6 +475,7 @@ public class PriceTemplateServiceImpl extends ServiceImpl<PriceTemplateMapper, P
                 priceTemplateItemService.saveBatch(newItems);
             }
         }
+        priceSyncService.syncByTemplateChanged(templateId);
         return true;
     }
 

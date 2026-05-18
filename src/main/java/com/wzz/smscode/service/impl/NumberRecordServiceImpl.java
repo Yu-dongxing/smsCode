@@ -54,6 +54,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
     @Autowired private SystemConfigService systemConfigService;
     //@Autowired private UserLedgerService userLedgerService; // 引入账本服务
     @Autowired @Lazy private PriceTemplateService priceTemplateService;
+    @Autowired @Lazy private PriceSyncService priceSyncService;
     @Autowired private SmsApiService smsApiService;
 
     // 修改点 3: 建议此处也加上 @Lazy 避免初始化顺序问题
@@ -159,6 +160,11 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
 
         BigDecimal price = priceItem.getPrice(); // 用户售价
         BigDecimal costPrice = priceItem.getCostPrice(); // 成本价
+        try {
+            priceSyncService.validateRuntimeParentPrice(user, projectId, lineId, price);
+        } catch (BusinessException e) {
+            return GetNumberResponseDTO.error(-5, e.getMessage());
+        }
 
         Project projectT = projectService.getProject(projectId, lineId);
         if (projectT == null) return GetNumberResponseDTO.error(-5, "总项目表中不存在这个项目和线路！");

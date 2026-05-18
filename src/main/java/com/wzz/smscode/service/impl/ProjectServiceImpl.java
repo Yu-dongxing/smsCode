@@ -45,6 +45,10 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
     private PriceTemplateItemService priceTemplateItemService;
 
     @Autowired
+    @Lazy
+    private PriceSyncService priceSyncService;
+
+    @Autowired
     private NumberRecordCacheManager cacheManager; // 注入缓存管理器
 
     @Transactional(rollbackFor = Exception.class)
@@ -67,30 +71,13 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
             log.error("更新项目基础信息失败, Project ID: {}", projectDTO.getId());
             throw new BusinessException("更新项目基础信息失败，操作已回滚。");
         }
+        Project updatedProject = this.getById(projectDTO.getId());
+        priceSyncService.validateProjectPriceConfig(updatedProject);
         cacheManager.evictProject(oldProjectId, oldLineId);
-        cacheManager.evictProject(projectDTO.getProjectId(), Integer.valueOf(projectDTO.getLineId()));
+        cacheManager.evictProject(updatedProject.getProjectId(), Integer.valueOf(updatedProject.getLineId()));
         log.info("项目基础信息已更新并清理缓存, ID: {}", projectDTO.getId());
-        log.info("开始同步更新关联的价格模板项配置...");
-        LambdaUpdateWrapper<PriceTemplateItem> updateWrapper = new LambdaUpdateWrapper<>();
-        updateWrapper.eq(PriceTemplateItem::getProjectTableId, existingProject.getId());
-        try {
-            if (projectDTO.getProjectId() != null) {
-                updateWrapper.set(PriceTemplateItem::getProjectId, Long.valueOf(projectDTO.getProjectId()));
-            }
-            if (projectDTO.getLineId() != null) {
-                updateWrapper.set(PriceTemplateItem::getLineId, Long.valueOf(projectDTO.getLineId()));
-            }
-        } catch (NumberFormatException e) {
-            log.error("项目ID或线路ID格式转换错误，无法同步模板", e);
-        }
-
-        updateWrapper.set(PriceTemplateItem::getProjectName, projectDTO.getProjectName());
-        updateWrapper.set(PriceTemplateItem::getCostPrice, projectDTO.getCostPrice());
-        updateWrapper.set(PriceTemplateItem::getMinPrice, projectDTO.getPriceMin());
-        updateWrapper.set(PriceTemplateItem::getMaxPrice, projectDTO.getPriceMax());
-
-        boolean itemsUpdated = priceTemplateItemService.update(updateWrapper);
-        log.info("关联的价格模板项同步完成: {}, Project ID: {}", itemsUpdated, projectDTO.getId());
+        log.info("开始按层级同步关联价格模板项, Project ID: {}", projectDTO.getId());
+        priceSyncService.syncByProjectChanged(updatedProject);
 
         return true;
     }
@@ -259,6 +246,7 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
         if(project.getLineId() == null || project.getProjectId() == null || project.getProjectName() == null) {
             throw new BusinessException(0,"项目id，项目名称，线路id不能为空");
         }
+        priceSyncService.validateProjectPriceConfig(project);
         // 1. 保存项目自身
         boolean projectSaved = super.save(project);
         if (!projectSaved) {
@@ -309,6 +297,7 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
             if (!itemsSaved) {
                 throw new BusinessException("为模板批量创建项目配置失败，操作已回滚。");
             }
+            priceSyncService.syncByProjectChanged(project);
         }
 
         return true;
