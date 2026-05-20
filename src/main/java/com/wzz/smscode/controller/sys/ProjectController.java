@@ -4,27 +4,37 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.wzz.smscode.common.Result;
+import com.wzz.smscode.dto.project.ProjectAddResponseDTO;
 import com.wzz.smscode.entity.Project;
 import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.service.FilterErrorMonitorService;
 import com.wzz.smscode.service.ProjectService;
+import com.wzz.smscode.service.ProjectSyncTaskService;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
 
-/**
- * 项目接口控制器
- */
 @RestController
 @RequestMapping("/api/project")
 public class ProjectController {
     private static final Logger log = LogManager.getLogger(ProjectController.class);
+
     private final ProjectService projectService;
     private final FilterErrorMonitorService filterErrorMonitorService;
+    private final ProjectSyncTaskService projectSyncTaskService;
 
-    public ProjectController(ProjectService projectService, FilterErrorMonitorService filterErrorMonitorService) {
+    public ProjectController(ProjectService projectService,
+                             FilterErrorMonitorService filterErrorMonitorService,
+                             ProjectSyncTaskService projectSyncTaskService) {
         this.projectService = projectService;
         this.filterErrorMonitorService = filterErrorMonitorService;
+        this.projectSyncTaskService = projectSyncTaskService;
     }
 
     /**
@@ -49,7 +59,7 @@ public class ProjectController {
         Page<Project> page = new Page<>(pageNum, pageSize);
         LambdaQueryWrapper<Project> queryWrapper = new LambdaQueryWrapper<>();
         queryWrapper.orderByDesc(Project::getCreateTime);
-        if(projectName != null && !projectName.isEmpty()) {
+        if (projectName != null && !projectName.isEmpty()) {
             queryWrapper.like(Project::getProjectName, projectName);
         }
         if (projectId != null && !projectId.isEmpty()) {
@@ -72,12 +82,10 @@ public class ProjectController {
      * @return 返回一个Result对象。如果更新成功，则返回成功消息"更新成功"；如果更新失败，则返回错误消息"更新失败"。
      */
     @PostMapping("/update")
-    public Result<?> updateByProject(@RequestBody Project project){
-//        log.info("传入数据：{}",project);
-
+    public Result<?> updateByProject(@RequestBody Project project) {
         Project existingProject = project.getId() == null ? null : projectService.getById(project.getId());
-        boolean is = projectService.updateProject(project);
-        if (is){
+        boolean updated = projectService.updateProject(project);
+        if (updated) {
             Project updatedProject = project.getId() == null ? null : projectService.getById(project.getId());
             if (existingProject != null && updatedProject != null
                     && Boolean.FALSE.equals(existingProject.getEnableFilter())
@@ -96,14 +104,14 @@ public class ProjectController {
      * @return 返回一个Result对象。如果删除成功，则返回成功消息"删除成功"；如果删除失败，则返回错误消息"删除失败"或具体的业务异常信息。
      */
     @PostMapping("/delete/by-id/{id}")
-    public Result<?> deleteById(@PathVariable("id") long id){
-        try{
-            Boolean is = projectService.deleteByID(id);
-            if (is){
+    public Result<?> deleteById(@PathVariable("id") long id) {
+        try {
+            Boolean deleted = projectService.deleteByID(id);
+            if (deleted) {
                 return Result.success("删除成功");
             }
             return Result.error("删除失败");
-        } catch (BusinessException e){
+        } catch (BusinessException e) {
             return Result.error(e.getMessage());
         }
     }
@@ -115,15 +123,24 @@ public class ProjectController {
      * @return 返回一个Result对象。如果添加成功，则返回成功消息"添加成功"；如果添加失败，则返回错误消息"添加失败"或具体的业务异常信息。
      */
     @PostMapping("/add")
-    public Result<?> add(@RequestBody Project project){
-        try{
-            Boolean is  =  projectService.save(project);
-            if (is){
-                return Result.success("添加成功");
+    public Result<?> add(@RequestBody Project project) {
+        try {
+            ProjectAddResponseDTO response = projectService.createProject(project);
+            if (response != null) {
+                return Result.success("项目创建成功，后台正在同步价格模板中", response);
             }
-            return Result.error("添加失败！");
-        }catch (BusinessException e){
+            return Result.error("添加项目配置失败");
+        } catch (BusinessException e) {
             return Result.error(e.getMessage());
         }
+    }
+
+    @GetMapping("/sync/status/{taskId}")
+    public Result<?> getSyncStatus(@PathVariable String taskId) {
+        var status = projectSyncTaskService.getStatus(taskId);
+        if (status == null) {
+            return Result.error("Sync task does not exist or has expired");
+        }
+        return Result.success("Query success", status);
     }
 }

@@ -28,6 +28,9 @@ import java.math.BigDecimal;
         onDelete = ForeignKeyAction.CASCADE // 删除模板时，级联删除所有配置项
 )
 @Index(name = "idx_template_id", columns = {"template_id"}, comment = "模板ID索引")
+@Index(name = "idx_project_table_id", columns = {"project_table_id"}, comment = "Project table ID index")
+@Index(name = "idx_template_project_line", columns = {"template_id", "project_id", "line_id"}, comment = "Template project line index")
+@Index(name = "idx_project_line", columns = {"project_id", "line_id"}, comment = "Project line index")
 public class PriceTemplateItem extends BaseEntity {
 
     /**

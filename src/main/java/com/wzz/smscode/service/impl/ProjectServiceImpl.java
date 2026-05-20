@@ -4,8 +4,10 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.wzz.smscode.cacheManager.NumberRecordCacheManager;
+import com.wzz.smscode.dto.project.ProjectAddResponseDTO;
 import com.wzz.smscode.dto.project.ProjectPriceDetailsDTO;
 import com.wzz.smscode.dto.project.ProjectPriceSummaryDTO;
+import com.wzz.smscode.dto.project.ProjectSyncTaskStatusDTO;
 import com.wzz.smscode.entity.*;
 import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.mapper.ProjectMapper;
@@ -47,6 +49,9 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
     @Autowired
     @Lazy
     private PriceSyncService priceSyncService;
+
+    @Autowired
+    private ProjectSyncTaskService projectSyncTaskService;
 
     @Autowired
     private NumberRecordCacheManager cacheManager; // 注入缓存管理器
@@ -258,6 +263,25 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
     @Override
     @Transactional(rollbackFor = Exception.class)
     public boolean save(Project project) {
+        boolean saved = saveProjectAndTemplateItems(project);
+        if (saved) {
+            priceSyncService.syncByProjectChanged(project);
+        }
+        return saved;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public ProjectAddResponseDTO createProject(Project project) {
+        boolean saved = saveProjectAndTemplateItems(project);
+        if (!saved) {
+            return null;
+        }
+        ProjectSyncTaskStatusDTO syncTaskStatus = projectSyncTaskService.submitProjectSync(project);
+        return ProjectAddResponseDTO.of(project, syncTaskStatus);
+    }
+
+    private boolean saveProjectAndTemplateItems(Project project) {
         if(project.getLineId() == null || project.getProjectId() == null || project.getProjectName() == null) {
             throw new BusinessException(0,"项目id，项目名称，线路id不能为空");
         }
@@ -313,7 +337,6 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
             if (!itemsSaved) {
                 throw new BusinessException("为模板批量创建项目配置失败，操作已回滚。");
             }
-            priceSyncService.syncByProjectChanged(project);
         }
 
         return true;

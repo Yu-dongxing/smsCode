@@ -33,6 +33,7 @@ import java.time.LocalDateTime;
 //        onUpdate = ForeignKeyAction.RESTRICT       // 不允许更新上级用户的ID
 //)
 @Index(name = "idx_parent_id", columns = {"parent_id"}, comment = "上级用户ID索引，加速查询下级")
+@Index(name = "idx_template_id", columns = {"template_id"}, comment = "Template ID index")
 public class User extends BaseEntity {
 
 

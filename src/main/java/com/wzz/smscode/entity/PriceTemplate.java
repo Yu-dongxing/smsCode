@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.annotation.TableName;
 import com.wzz.smscode.annotation.ColumnComment;
 import com.wzz.smscode.annotation.ColumnType;
 import com.wzz.smscode.annotation.DefaultValue;
+import com.wzz.smscode.annotation.Index;
 import com.wzz.smscode.annotation.TableComment;
 import com.wzz.smscode.common.BaseEntity;
 import lombok.Data;
@@ -17,6 +18,7 @@ import lombok.EqualsAndHashCode;
 @EqualsAndHashCode(callSuper = true)
 @TableName("price_template")
 @TableComment("项目线路价格配置模板表")
+@Index(name = "idx_creat_id", columns = {"creat_id"}, comment = "Creator ID index")
 public class PriceTemplate extends BaseEntity {
 
     /**

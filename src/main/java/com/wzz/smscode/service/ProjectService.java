@@ -2,6 +2,7 @@ package com.wzz.smscode.service;
 
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.wzz.smscode.dto.EntityDTO.ProjectDTO;
+import com.wzz.smscode.dto.project.ProjectAddResponseDTO;
 import com.wzz.smscode.dto.project.ProjectPriceDetailsDTO;
 import com.wzz.smscode.dto.project.ProjectPriceSummaryDTO;
 import com.wzz.smscode.entity.Project;
@@ -32,6 +33,8 @@ public interface ProjectService extends IService<Project> {
     Map<String, BigDecimal> fillMissingPrices(Map<String, BigDecimal> inputPrices);
 
     Map<String, ProjectPriceSummaryDTO> getAllProjectPriceSummaries();
+
+    ProjectAddResponseDTO createProject(Project project);
 
     Boolean deleteByID(long id);
 

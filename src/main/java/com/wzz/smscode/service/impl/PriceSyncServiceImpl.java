@@ -11,6 +11,7 @@ import com.wzz.smscode.service.PriceTemplateItemService;
 import com.wzz.smscode.service.PriceTemplateService;
 import com.wzz.smscode.service.ProjectService;
 import com.wzz.smscode.service.UserService;
+import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
@@ -19,10 +20,17 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.CollectionUtils;
 
 import java.math.BigDecimal;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Queue;
 import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -59,40 +67,97 @@ public class PriceSyncServiceImpl implements PriceSyncService {
     public void syncByProjectChanged(Project project) {
         validateProjectPriceConfig(project);
 
-        String projectId = project.getProjectId();
-        Long lineId = Long.valueOf(project.getLineId());
-        List<PriceTemplateItem> items = priceTemplateItemService.list(new LambdaQueryWrapper<PriceTemplateItem>()
+        Long numericProjectId = parseLong(project.getProjectId(), "Project ID must be numeric");
+        Long lineId = parseLong(project.getLineId(), "Line ID must be numeric");
+        List<PriceTemplateItem> projectItems = priceTemplateItemService.list(new LambdaQueryWrapper<PriceTemplateItem>()
                 .and(wrapper -> wrapper.eq(PriceTemplateItem::getProjectTableId, project.getId())
-                        .or(w -> w.eq(PriceTemplateItem::getProjectId, Long.valueOf(projectId))
+                        .or(w -> w.eq(PriceTemplateItem::getProjectId, numericProjectId)
                                 .eq(PriceTemplateItem::getLineId, lineId))));
-        if (CollectionUtils.isEmpty(items)) {
+        if (CollectionUtils.isEmpty(projectItems)) {
+            log.info("Project price sync skipped: no template items, projectId={}, lineId={}",
+                    project.getProjectId(), project.getLineId());
             return;
         }
 
-        Set<String> syncedKeys = new HashSet<>();
-        List<PriceTemplate> rootTemplates = priceTemplateService.list(new LambdaQueryWrapper<PriceTemplate>()
-                .eq(PriceTemplate::getCreatId, 0L));
-        for (PriceTemplate rootTemplate : rootTemplates) {
-            PriceTemplateItem rootItem = getItem(rootTemplate.getId(), project);
+        Map<Long, PriceTemplateItem> itemByTemplateId = projectItems.stream()
+                .filter(item -> item.getTemplateId() != null)
+                .collect(Collectors.toMap(
+                        PriceTemplateItem::getTemplateId,
+                        Function.identity(),
+                        (first, second) -> first
+                ));
+
+        List<PriceTemplate> templates = priceTemplateService.list();
+        if (CollectionUtils.isEmpty(templates)) {
+            return;
+        }
+        Map<Long, PriceTemplate> templateById = templates.stream()
+                .filter(template -> template.getId() != null)
+                .collect(Collectors.toMap(PriceTemplate::getId, Function.identity(), (first, second) -> first));
+        Map<Long, List<PriceTemplate>> templatesByCreator = templates.stream()
+                .filter(template -> template.getCreatId() != null)
+                .collect(Collectors.groupingBy(PriceTemplate::getCreatId));
+
+        Set<Long> templateIds = templates.stream()
+                .map(PriceTemplate::getId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        Map<Long, List<User>> usersByTemplateId = loadUsersByTemplateId(templateIds);
+        Map<Long, User> usersById = usersByTemplateId.values().stream()
+                .flatMap(List::stream)
+                .filter(user -> user.getId() != null)
+                .collect(Collectors.toMap(User::getId, Function.identity(), (first, second) -> first));
+
+        Set<Long> syncedTemplateIds = new HashSet<>();
+        List<PriceTemplateItem> itemsToUpdate = new ArrayList<>();
+        Queue<TemplateSyncNode> queue = new ArrayDeque<>();
+
+        for (PriceTemplate rootTemplate : templatesByCreator.getOrDefault(0L, Collections.emptyList())) {
+            PriceTemplateItem rootItem = itemByTemplateId.get(rootTemplate.getId());
             if (rootItem == null) {
                 continue;
             }
             applyProjectBase(rootItem, project);
-            priceTemplateItemService.updateById(rootItem);
-            syncedKeys.add(syncKey(rootTemplate.getId(), project));
-            syncChildren(rootTemplate.getId(), rootItem, project, syncedKeys);
+            markSynced(rootTemplate.getId(), rootItem, syncedTemplateIds, itemsToUpdate, queue);
         }
 
-        // Repair orphaned or irregular templates too, so project metadata never stays stale.
-        for (PriceTemplateItem item : items) {
-            if (syncedKeys.contains(syncKey(item.getTemplateId(), project))) {
+        while (!queue.isEmpty()) {
+            TemplateSyncNode parent = queue.poll();
+            List<User> boundUsers = usersByTemplateId.getOrDefault(parent.templateId(), Collections.emptyList());
+            for (User boundUser : boundUsers) {
+                List<PriceTemplate> childTemplates = templatesByCreator.getOrDefault(boundUser.getId(), Collections.emptyList());
+                for (PriceTemplate childTemplate : childTemplates) {
+                    Long childTemplateId = childTemplate.getId();
+                    if (Objects.equals(childTemplateId, parent.templateId()) || syncedTemplateIds.contains(childTemplateId)) {
+                        continue;
+                    }
+                    PriceTemplateItem childItem = itemByTemplateId.get(childTemplateId);
+                    if (childItem == null) {
+                        continue;
+                    }
+                    applyTemplateBounds(childItem, project, parent.item().getPrice());
+                    markSynced(childTemplateId, childItem, syncedTemplateIds, itemsToUpdate, queue);
+                }
+            }
+        }
+
+        for (PriceTemplateItem item : projectItems) {
+            Long templateId = item.getTemplateId();
+            if (templateId == null || syncedTemplateIds.contains(templateId)) {
                 continue;
             }
-            PriceTemplate template = priceTemplateService.getById(item.getTemplateId());
-            BigDecimal floorPrice = resolveCreatorCost(template, projectId, lineId);
+            PriceTemplate template = templateById.get(templateId);
+            BigDecimal floorPrice = resolveCreatorCost(template, usersById, itemByTemplateId);
             applyTemplateBounds(item, project, floorPrice);
-            priceTemplateItemService.updateById(item);
+            itemsToUpdate.add(item);
+            syncedTemplateIds.add(templateId);
         }
+
+        if (!itemsToUpdate.isEmpty()) {
+            priceTemplateItemService.updateBatchById(itemsToUpdate, 500);
+        }
+        log.info("项目价格同步已完成，projectId={}, lineId={}, updatedItems={}",
+                project.getProjectId(), project.getLineId(), itemsToUpdate.size());
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -101,24 +166,36 @@ public class PriceSyncServiceImpl implements PriceSyncService {
         if (templateId == null) {
             return;
         }
-        List<PriceTemplateItem> parentItems = priceTemplateItemService.list(new LambdaQueryWrapper<PriceTemplateItem>()
+        List<PriceTemplateItem> templateItems = priceTemplateItemService.list(new LambdaQueryWrapper<PriceTemplateItem>()
                 .eq(PriceTemplateItem::getTemplateId, templateId));
-        if (CollectionUtils.isEmpty(parentItems)) {
+        if (CollectionUtils.isEmpty(templateItems)) {
             return;
         }
-        Set<String> syncedKeys = new HashSet<>();
-        for (PriceTemplateItem parentItem : parentItems) {
-            Project project = projectService.getById(parentItem.getProjectTableId());
+
+        List<Long> projectTableIds = templateItems.stream()
+                .map(PriceTemplateItem::getProjectTableId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .collect(Collectors.toList());
+        Map<Long, Project> projectsById = CollectionUtils.isEmpty(projectTableIds)
+                ? Collections.emptyMap()
+                : projectService.listByIds(projectTableIds).stream()
+                .collect(Collectors.toMap(Project::getId, Function.identity(), (first, second) -> first));
+
+        Set<String> syncedProjects = new HashSet<>();
+        for (PriceTemplateItem templateItem : templateItems) {
+            Project project = projectsById.get(templateItem.getProjectTableId());
             if (project == null) {
-                project = projectService.getProject(String.valueOf(parentItem.getProjectId()), parentItem.getLineId().intValue());
+                project = projectService.getProject(String.valueOf(templateItem.getProjectId()), templateItem.getLineId().intValue());
             }
             if (project == null) {
-                log.warn("价格同步跳过：模板项 {} 找不到项目配置", parentItem.getId());
+                log.warn("Price sync skipped: template item {} has no project config", templateItem.getId());
                 continue;
             }
-            validateProjectPriceConfig(project);
-            syncedKeys.add(syncKey(templateId, project));
-            syncChildren(templateId, parentItem, project, syncedKeys);
+            String projectKey = project.getProjectId() + ":" + project.getLineId();
+            if (syncedProjects.add(projectKey)) {
+                syncByProjectChanged(project);
+            }
         }
     }
 
@@ -136,70 +213,48 @@ public class PriceSyncServiceImpl implements PriceSyncService {
             return;
         }
         if (currentPrice.compareTo(parentItem.getPrice()) < 0) {
-            throw new BusinessException("价格配置低于上级成本，请联系上级调整模板");
+            throw new BusinessException("Price config is lower than parent cost, please adjust parent template");
         }
     }
 
-    private void syncChildren(Long parentTemplateId, PriceTemplateItem parentItem, Project project, Set<String> syncedKeys) {
-        if (parentTemplateId == null || parentItem == null || parentItem.getPrice() == null) {
+    private Map<Long, List<User>> loadUsersByTemplateId(Set<Long> templateIds) {
+        if (CollectionUtils.isEmpty(templateIds)) {
+            return Collections.emptyMap();
+        }
+        List<User> users = userService.list(new LambdaQueryWrapper<User>()
+                .in(User::getTemplateId, templateIds)
+                .select(User::getId, User::getTemplateId, User::getIsAgent));
+        if (CollectionUtils.isEmpty(users)) {
+            return Collections.emptyMap();
+        }
+        return users.stream()
+                .filter(user -> user.getTemplateId() != null)
+                .collect(Collectors.groupingBy(User::getTemplateId));
+    }
+
+    private void markSynced(Long templateId,
+                            PriceTemplateItem item,
+                            Set<Long> syncedTemplateIds,
+                            List<PriceTemplateItem> itemsToUpdate,
+                            Queue<TemplateSyncNode> queue) {
+        if (templateId == null || !syncedTemplateIds.add(templateId)) {
             return;
         }
-        List<User> boundUsers = userService.list(new LambdaQueryWrapper<User>()
-                .eq(User::getTemplateId, parentTemplateId)
-                .select(User::getId, User::getIsAgent));
-        if (CollectionUtils.isEmpty(boundUsers)) {
-            return;
-        }
-        for (User boundUser : boundUsers) {
-            List<PriceTemplate> childTemplates = priceTemplateService.list(new LambdaQueryWrapper<PriceTemplate>()
-                    .eq(PriceTemplate::getCreatId, boundUser.getId()));
-            if (CollectionUtils.isEmpty(childTemplates)) {
-                continue;
-            }
-            for (PriceTemplate childTemplate : childTemplates) {
-                if (Objects.equals(childTemplate.getId(), parentTemplateId)) {
-                    continue;
-                }
-                PriceTemplateItem childItem = getItem(childTemplate.getId(), project);
-                if (childItem == null) {
-                    continue;
-                }
-                applyTemplateBounds(childItem, project, parentItem.getPrice());
-                priceTemplateItemService.updateById(childItem);
-
-                if (syncedKeys.add(syncKey(childTemplate.getId(), project))) {
-                    syncChildren(childTemplate.getId(), childItem, project, syncedKeys);
-                }
-            }
-        }
+        itemsToUpdate.add(item);
+        queue.offer(new TemplateSyncNode(templateId, item));
     }
 
-    private PriceTemplateItem getItem(Long templateId, String projectId, Long lineId) {
-        return priceTemplateItemService.getOne(new LambdaQueryWrapper<PriceTemplateItem>()
-                .eq(PriceTemplateItem::getTemplateId, templateId)
-                .eq(PriceTemplateItem::getProjectId, Long.valueOf(projectId))
-                .eq(PriceTemplateItem::getLineId, lineId)
-                .last("LIMIT 1"));
-    }
-
-    private PriceTemplateItem getItem(Long templateId, Project project) {
-        return priceTemplateItemService.getOne(new LambdaQueryWrapper<PriceTemplateItem>()
-                .eq(PriceTemplateItem::getTemplateId, templateId)
-                .and(wrapper -> wrapper.eq(PriceTemplateItem::getProjectTableId, project.getId())
-                        .or(w -> w.eq(PriceTemplateItem::getProjectId, Long.valueOf(project.getProjectId()))
-                                .eq(PriceTemplateItem::getLineId, Long.valueOf(project.getLineId()))))
-                .last("LIMIT 1"));
-    }
-
-    private BigDecimal resolveCreatorCost(PriceTemplate template, String projectId, Long lineId) {
+    private BigDecimal resolveCreatorCost(PriceTemplate template,
+                                          Map<Long, User> usersById,
+                                          Map<Long, PriceTemplateItem> itemByTemplateId) {
         if (template == null || template.getCreatId() == null || template.getCreatId() == 0L) {
             return null;
         }
-        User creator = userService.getById(template.getCreatId());
+        User creator = usersById.get(template.getCreatId());
         if (creator == null || creator.getTemplateId() == null) {
             return null;
         }
-        PriceTemplateItem parentItem = priceTemplateService.getPriceConfig(creator.getTemplateId(), projectId, lineId.intValue());
+        PriceTemplateItem parentItem = itemByTemplateId.get(creator.getTemplateId());
         return parentItem == null ? null : parentItem.getPrice();
     }
 
@@ -261,7 +316,25 @@ public class PriceSyncServiceImpl implements PriceSyncService {
         return first.compareTo(second) >= 0 ? first : second;
     }
 
-    private String syncKey(Long templateId, Project project) {
-        return templateId + ":" + project.getProjectId() + ":" + project.getLineId();
+    private Long parseLong(String value, String message) {
+        try {
+            return Long.valueOf(value);
+        } catch (NumberFormatException e) {
+            throw new BusinessException(message);
+        }
+    }
+
+    @AllArgsConstructor
+    private static class TemplateSyncNode {
+        private Long templateId;
+        private PriceTemplateItem item;
+
+        Long templateId() {
+            return templateId;
+        }
+
+        PriceTemplateItem item() {
+            return item;
+        }
     }
 }
