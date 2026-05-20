@@ -1,7 +1,9 @@
 package com.wzz.smscode.service;
 
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.wzz.smscode.dto.project.ProjectSyncTaskStatusDTO;
 import com.wzz.smscode.entity.Project;
+import com.wzz.smscode.mapper.ProjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.task.AsyncTaskExecutor;
@@ -23,12 +25,15 @@ public class ProjectSyncTaskService {
 
     private final AsyncTaskExecutor taskExecutor;
     private final PriceSyncService priceSyncService;
+    private final ProjectMapper projectMapper;
     private final ConcurrentMap<String, ProjectSyncTaskStatusDTO> tasks = new ConcurrentHashMap<>();
 
     public ProjectSyncTaskService(@Qualifier("taskExecutor") AsyncTaskExecutor taskExecutor,
-                                  PriceSyncService priceSyncService) {
+                                  PriceSyncService priceSyncService,
+                                  ProjectMapper projectMapper) {
         this.taskExecutor = taskExecutor;
         this.priceSyncService = priceSyncService;
+        this.projectMapper = projectMapper;
     }
 
     public ProjectSyncTaskStatusDTO submitProjectSync(Project project) {
@@ -43,7 +48,14 @@ public class ProjectSyncTaskService {
         tasks.put(status.getTaskId(), status);
         trimOldTasksIfNeeded();
 
-        Runnable submitTask = () -> taskExecutor.execute(() -> runProjectSync(status.getTaskId(), project));
+        Runnable submitTask = () -> {
+            try {
+                taskExecutor.execute(() -> runProjectSync(status.getTaskId(), project));
+            } catch (Exception e) {
+                markFailedToSubmit(status, project, e);
+            }
+        };
+
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
@@ -73,17 +85,41 @@ public class ProjectSyncTaskService {
             priceSyncService.syncByProjectChanged(project);
             status.setStatus("SUCCESS");
             status.setMessage("Price template sync completed");
-            log.info("项目价格同步任务已完成，taskId={}, projectId={}, lineId={}",
+            status.setErrorMessage(null);
+            updateProjectTemplateSyncResult(project.getId(), 1, null);
+            log.info("Project price sync task completed, taskId={}, projectId={}, lineId={}",
                     taskId, project.getProjectId(), project.getLineId());
         } catch (Exception e) {
             status.setStatus("FAILED");
             status.setMessage("Price template sync failed");
             status.setErrorMessage(e.getMessage());
-            log.error("项目价格同步任务失败，taskId={}, projectId={}, lineId={}",
+            updateProjectTemplateSyncResult(project.getId(), 2, e.getMessage());
+            log.error("Project price sync task failed, taskId={}, projectId={}, lineId={}",
                     taskId, project.getProjectId(), project.getLineId(), e);
         } finally {
             status.setFinishedAt(LocalDateTime.now());
         }
+    }
+
+    private void markFailedToSubmit(ProjectSyncTaskStatusDTO status, Project project, Exception e) {
+        status.setStatus("FAILED");
+        status.setMessage("Price template sync failed to submit");
+        status.setErrorMessage(e.getMessage());
+        status.setFinishedAt(LocalDateTime.now());
+        updateProjectTemplateSyncResult(project.getId(), 2, e.getMessage());
+        log.error("Project price sync task submit failed, taskId={}, projectId={}, lineId={}",
+                status.getTaskId(), project.getProjectId(), project.getLineId(), e);
+    }
+
+    private void updateProjectTemplateSyncResult(Long projectId, Integer syncStatus, String message) {
+        if (projectId == null) {
+            return;
+        }
+        LambdaUpdateWrapper<Project> wrapper = new LambdaUpdateWrapper<>();
+        wrapper.eq(Project::getId, projectId)
+                .set(Project::getTemplateSyncStatus, syncStatus)
+                .set(Project::getTemplateSyncMessage, syncStatus != null && syncStatus == 1 ? null : message);
+        projectMapper.update(null, wrapper);
     }
 
     private void trimOldTasksIfNeeded() {

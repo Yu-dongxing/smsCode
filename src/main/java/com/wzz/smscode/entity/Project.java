@@ -167,6 +167,16 @@ public class Project extends BaseEntity {
     @DefaultValue("1")
     private boolean status;
 
+    @ColumnComment("Template sync status: 0 syncing, 1 success, 2 failed")
+    @TableField("template_sync_status")
+    @DefaultValue("1")
+    private Integer templateSyncStatus;
+
+    @ColumnComment("Template sync message, empty on success")
+    @TableField("template_sync_message")
+    @ColumnType("TEXT")
+    private String templateSyncMessage;
+
 
     // --- 号码筛选配置 ---
 

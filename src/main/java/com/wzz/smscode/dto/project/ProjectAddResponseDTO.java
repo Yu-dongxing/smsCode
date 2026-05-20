@@ -12,6 +12,8 @@ public class ProjectAddResponseDTO {
     private String syncTaskId;
     private String syncStatus;
     private String syncMessage;
+    private Integer templateSyncStatus;
+    private String templateSyncMessage;
 
     public static ProjectAddResponseDTO of(Project project, ProjectSyncTaskStatusDTO taskStatus) {
         ProjectAddResponseDTO response = new ProjectAddResponseDTO();
@@ -19,6 +21,8 @@ public class ProjectAddResponseDTO {
         response.setProjectId(project.getProjectId());
         response.setLineId(project.getLineId());
         response.setProjectName(project.getProjectName());
+        response.setTemplateSyncStatus(project.getTemplateSyncStatus());
+        response.setTemplateSyncMessage(project.getTemplateSyncMessage());
         if (taskStatus != null) {
             response.setSyncTaskId(taskStatus.getTaskId());
             response.setSyncStatus(taskStatus.getStatus());

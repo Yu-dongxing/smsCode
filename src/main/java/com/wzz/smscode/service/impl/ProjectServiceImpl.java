@@ -266,6 +266,7 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
         boolean saved = saveProjectAndTemplateItems(project);
         if (saved) {
             priceSyncService.syncByProjectChanged(project);
+            updateTemplateSyncResult(project.getId(), 1, null);
         }
         return saved;
     }
@@ -285,6 +286,8 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
         if(project.getLineId() == null || project.getProjectId() == null || project.getProjectName() == null) {
             throw new BusinessException(0,"项目id，项目名称，线路id不能为空");
         }
+        project.setTemplateSyncStatus(0);
+        project.setTemplateSyncMessage(null);
         validateSpecialChannelSwitches(project);
         priceSyncService.validateProjectPriceConfig(project);
         // 1. 保存项目自身
@@ -340,6 +343,14 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
         }
 
         return true;
+    }
+
+    private void updateTemplateSyncResult(Long projectId, Integer status, String message) {
+        LambdaUpdateWrapper<Project> wrapper = new LambdaUpdateWrapper<>();
+        wrapper.eq(Project::getId, projectId)
+                .set(Project::getTemplateSyncStatus, status)
+                .set(Project::getTemplateSyncMessage, message);
+        this.update(wrapper);
     }
 
     /**
