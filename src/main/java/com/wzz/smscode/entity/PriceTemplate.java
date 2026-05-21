@@ -42,4 +42,14 @@ public class PriceTemplate extends BaseEntity {
     @TableField("user_ids")
     @ColumnType("TEXT")
     private String userIds;
+
+    @ColumnComment("Template sync status: 0 syncing, 1 success, 2 failed")
+    @TableField("template_sync_status")
+    @DefaultValue("1")
+    private Integer templateSyncStatus;
+
+    @ColumnComment("Template sync message, empty on success")
+    @TableField("template_sync_message")
+    @ColumnType("TEXT")
+    private String templateSyncMessage;
 }

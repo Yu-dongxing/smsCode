@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.wzz.smscode.dto.PriceTemplateCreateDTO;
 import com.wzz.smscode.dto.PriceTemplateResponseDTO;
+import com.wzz.smscode.dto.PriceTemplateSyncTaskStatusDTO;
 import com.wzz.smscode.entity.PriceTemplate;
 import com.wzz.smscode.entity.PriceTemplateItem;
 import org.springframework.transaction.annotation.Transactional;
@@ -32,6 +33,13 @@ public interface PriceTemplateService extends IService<PriceTemplate> {
 
     IPage<PriceTemplateResponseDTO> pageTemplates(String templateName, Long creatorId, IPage<PriceTemplate> page);
 
+    IPage<PriceTemplateResponseDTO> pageTemplates(String templateName,
+                                                  Long creatorId,
+                                                  Integer templateSyncStatus,
+                                                  Long projectId,
+                                                  Long lineId,
+                                                  IPage<PriceTemplate> page);
+
     /**
      * 更新模板，并校验操作者权限
      * @param templateId 模板ID
@@ -41,6 +49,8 @@ public interface PriceTemplateService extends IService<PriceTemplate> {
      */
     boolean updateTemplate(Long templateId, PriceTemplateCreateDTO updateDTO, Long operatorId);
 
+    PriceTemplateSyncTaskStatusDTO updateTemplateAndSubmitSync(Long templateId, PriceTemplateCreateDTO updateDTO, Long operatorId);
+
     /**
      * 删除模板，并校验操作者权限
      * @param templateId 模板ID
@@ -48,6 +58,9 @@ public interface PriceTemplateService extends IService<PriceTemplate> {
      * @return 是否成功
      */
     boolean deleteTemplate(Long templateId, Long operatorId);
+
+    @Transactional(rollbackFor = Exception.class)
+    boolean batchDeleteTemplates(List<Long> templateIds, Long operatorId);
 
     PriceTemplateItem getPriceConfig(Long templateId, String projectId, Integer lineId);
 

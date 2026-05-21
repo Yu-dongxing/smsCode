@@ -26,6 +26,7 @@ import org.apache.logging.log4j.Logger;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
@@ -561,6 +562,42 @@ public class AgentController {
     }
 
     /**
+     * [代理] 分页查询自己创建的价格模板，支持多条件筛选。
+     */
+    @SaCheckLogin
+    @GetMapping("/price-templates/page")
+    public Result<IPage<PriceTemplateResponseDTO>> pageAgentPriceTemplates(
+            @RequestParam(required = false) String name,
+            @RequestParam(required = false) String templateName,
+            @RequestParam(required = false) Integer templateSyncStatus,
+            @RequestParam(required = false) Long projectId,
+            @RequestParam(required = false) Long lineId,
+            @RequestParam(defaultValue = "1") long page,
+            @RequestParam(defaultValue = "10") long size,
+            @RequestParam(required = false) Long pageNum,
+            @RequestParam(required = false) Long pageSize) {
+        long agentId = StpUtil.getLoginIdAsLong();
+        try {
+            String filterName = StringUtils.hasText(templateName) ? templateName : name;
+            long current = pageNum != null ? pageNum : page;
+            long pageLimit = pageSize != null ? pageSize : size;
+            IPage<PriceTemplate> pageRequest = new Page<>(current, pageLimit);
+            IPage<PriceTemplateResponseDTO> templates = priceTemplateService.pageTemplates(
+                    filterName,
+                    agentId,
+                    templateSyncStatus,
+                    projectId,
+                    lineId,
+                    pageRequest
+            );
+            return Result.success("查询成功", templates);
+        } catch (Exception e) {
+            log.error("代理 [{}] 分页查询价格模板失败", agentId, e);
+            return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，查询失败");
+        }
+    }
+
+    /**
      * [代理] 更新自己的价格模板
      * @param templateId 模板ID
      * @param updateDTO 更新后的模板信息
@@ -571,8 +608,8 @@ public class AgentController {
     public Result<?> updateAgentPriceTemplate(@PathVariable Long templateId, @RequestBody PriceTemplateCreateDTO updateDTO) {
         long agentId = StpUtil.getLoginIdAsLong();
         try {
-            boolean success = priceTemplateService.updateTemplate(templateId, updateDTO, agentId);
-            return success ? Result.success("更新成功") : Result.error("更新失败");
+            var syncTask = priceTemplateService.updateTemplateAndSubmitSync(templateId, updateDTO, agentId);
+            return syncTask != null ? Result.success("修改成功，等待同步", syncTask) : Result.error("更新失败");
         } catch (BusinessException e) {
             return Result.error(e.getMessage());
         } catch (Exception e) {
@@ -598,6 +635,26 @@ public class AgentController {
         } catch (Exception e) {
             log.error("代理 [{}] 删除价格模板失败", agentId, e);
             return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，删除失败");
+        }
+    }
+
+    /**
+     * [代理] 批量删除自己的价格模板
+     * @param batchDeleteDTO 模板ID列表
+     * @return 操作结果
+     */
+    @SaCheckLogin
+    @PostMapping("/price-templates/batch-delete")
+    public Result<?> batchDeleteAgentPriceTemplates(@RequestBody PriceTemplateBatchDeleteDTO batchDeleteDTO) {
+        long agentId = StpUtil.getLoginIdAsLong();
+        try {
+            boolean success = priceTemplateService.batchDeleteTemplates(batchDeleteDTO == null ? null : batchDeleteDTO.getEffectiveIds(), agentId);
+            return success ? Result.success("批量删除成功") : Result.error("批量删除失败");
+        } catch (BusinessException e) {
+            return Result.error(e.getMessage());
+        } catch (Exception e) {
+            log.error("代理 [{}] 批量删除价格模板失败", agentId, e);
+            return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，批量删除失败");
         }
     }
 

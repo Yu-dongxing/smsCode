@@ -7,6 +7,7 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.wzz.smscode.dto.PriceTemplateCreateDTO;
 import com.wzz.smscode.dto.PriceTemplateItemDTO;
 import com.wzz.smscode.dto.PriceTemplateResponseDTO;
+import com.wzz.smscode.dto.PriceTemplateSyncTaskStatusDTO;
 import com.wzz.smscode.entity.*;
 import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.mapper.PriceTemplateItemMapper;
@@ -45,6 +46,9 @@ public class PriceTemplateServiceImpl extends ServiceImpl<PriceTemplateMapper, P
     @Autowired
     @Lazy
     private PriceSyncService priceSyncService;
+
+    @Autowired
+    private PriceTemplateSyncTaskService priceTemplateSyncTaskService;
 
 
     @Transactional(rollbackFor = Exception.class)
@@ -275,6 +279,8 @@ public class PriceTemplateServiceImpl extends ServiceImpl<PriceTemplateMapper, P
             responseDTO.setName(template.getName());
             // creatId 也可以选择性返回
             responseDTO.setCreatId(template.getCreatId());
+            responseDTO.setTemplateSyncStatus(template.getTemplateSyncStatus());
+            responseDTO.setTemplateSyncMessage(template.getTemplateSyncMessage());
 
             List<PriceTemplateItem> items = itemsByTemplateId.getOrDefault(template.getId(), Collections.emptyList());
             List<PriceTemplateItemDTO> itemDTOs = items.stream().map(item -> {
@@ -292,9 +298,42 @@ public class PriceTemplateServiceImpl extends ServiceImpl<PriceTemplateMapper, P
 
     @Override
     public IPage<PriceTemplateResponseDTO> pageTemplates(String templateName, Long creatorId, IPage<PriceTemplate> page) {
+        return pageTemplates(templateName, creatorId, null, null, null, page);
+    }
+
+    @Override
+    public IPage<PriceTemplateResponseDTO> pageTemplates(String templateName,
+                                                         Long creatorId,
+                                                         Integer templateSyncStatus,
+                                                         Long projectId,
+                                                         Long lineId,
+                                                         IPage<PriceTemplate> page) {
         LambdaQueryWrapper<PriceTemplate> queryWrapper = new LambdaQueryWrapper<>();
         queryWrapper.like(StringUtils.hasText(templateName), PriceTemplate::getName, templateName);
         queryWrapper.eq(creatorId != null, PriceTemplate::getCreatId, creatorId);
+        queryWrapper.eq(templateSyncStatus != null, PriceTemplate::getTemplateSyncStatus, templateSyncStatus);
+
+        if (projectId != null || lineId != null) {
+            LambdaQueryWrapper<PriceTemplateItem> itemWrapper = new LambdaQueryWrapper<>();
+            itemWrapper.select(PriceTemplateItem::getTemplateId);
+            itemWrapper.eq(projectId != null, PriceTemplateItem::getProjectId, projectId);
+            itemWrapper.eq(lineId != null, PriceTemplateItem::getLineId, lineId);
+
+            List<Long> matchedTemplateIds = priceTemplateItemService.list(itemWrapper).stream()
+                    .map(PriceTemplateItem::getTemplateId)
+                    .filter(Objects::nonNull)
+                    .distinct()
+                    .collect(Collectors.toList());
+
+            if (matchedTemplateIds.isEmpty()) {
+                Page<PriceTemplateResponseDTO> emptyPage = new Page<>(page.getCurrent(), page.getSize(), 0);
+                emptyPage.setRecords(Collections.emptyList());
+                return emptyPage;
+            }
+
+            queryWrapper.in(PriceTemplate::getId, matchedTemplateIds);
+        }
+
         queryWrapper.orderByDesc(PriceTemplate::getCreateTime).orderByDesc(PriceTemplate::getId);
 
         IPage<PriceTemplate> templatePage = this.page(page, queryWrapper);
@@ -322,6 +361,8 @@ public class PriceTemplateServiceImpl extends ServiceImpl<PriceTemplateMapper, P
             responseDTO.setId(template.getId());
             responseDTO.setName(template.getName());
             responseDTO.setCreatId(template.getCreatId());
+            responseDTO.setTemplateSyncStatus(template.getTemplateSyncStatus());
+            responseDTO.setTemplateSyncMessage(template.getTemplateSyncMessage());
 
             List<PriceTemplateItem> items = itemsByTemplateId.getOrDefault(template.getId(), Collections.emptyList());
             List<PriceTemplateItemDTO> itemDTOs = items.stream().map(item -> {
@@ -475,8 +516,17 @@ public class PriceTemplateServiceImpl extends ServiceImpl<PriceTemplateMapper, P
                 priceTemplateItemService.saveBatch(newItems);
             }
         }
-        priceSyncService.syncByTemplateChanged(templateId);
         return true;
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    @Override
+    public PriceTemplateSyncTaskStatusDTO updateTemplateAndSubmitSync(Long templateId, PriceTemplateCreateDTO updateDTO, Long operatorId) {
+        boolean success = updateTemplate(templateId, updateDTO, operatorId);
+        if (!success) {
+            return null;
+        }
+        return priceTemplateSyncTaskService.submitTemplateSync(templateId);
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -497,6 +547,44 @@ public class PriceTemplateServiceImpl extends ServiceImpl<PriceTemplateMapper, P
         // 由于设置了外键级联删除，理论上只需要删除主表即可。
         return this.removeById(templateId);
     }
+
+    @Transactional(rollbackFor = Exception.class)
+    @Override
+    public boolean batchDeleteTemplates(List<Long> templateIds, Long operatorId) {
+        if (CollectionUtils.isEmpty(templateIds)) {
+            throw new BusinessException("模板ID不能为空");
+        }
+
+        List<Long> ids = templateIds.stream()
+                .filter(Objects::nonNull)
+                .distinct()
+                .collect(Collectors.toList());
+        if (CollectionUtils.isEmpty(ids)) {
+            throw new BusinessException("模板ID不能为空");
+        }
+
+        List<PriceTemplate> templates = this.list(new LambdaQueryWrapper<PriceTemplate>()
+                .in(PriceTemplate::getId, ids));
+        if (templates.size() != ids.size()) {
+            throw new BusinessException("部分模板不存在");
+        }
+
+        if (operatorId == null) {
+            throw new BusinessException("操作人ID不能为空");
+        }
+        if (!operatorId.equals(0L)) {
+            boolean hasNoPermission = templates.stream()
+                    .anyMatch(template -> !operatorId.equals(template.getCreatId()));
+            if (hasNoPermission) {
+                throw new BusinessException("模板不存在或无权操作");
+            }
+        }
+
+        priceTemplateItemService.remove(new LambdaQueryWrapper<PriceTemplateItem>()
+                .in(PriceTemplateItem::getTemplateId, ids));
+        return this.removeByIds(ids);
+    }
+
     @Autowired private PriceTemplateItemMapper itemMapper;
 
 

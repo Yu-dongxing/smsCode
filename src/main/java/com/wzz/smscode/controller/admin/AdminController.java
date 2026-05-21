@@ -1075,8 +1075,8 @@ public class AdminController {
     @PostMapping("/price-templates/{templateId}")
     public Result<?> updatePriceTemplate(@PathVariable Long templateId, @RequestBody PriceTemplateCreateDTO updateDTO) {
         try {
-            boolean success = priceTemplateService.updateTemplate(templateId, updateDTO,0L);
-            return success ? Result.success("更新成功") : Result.error("更新失败");
+            var syncTask = priceTemplateService.updateTemplateAndSubmitSync(templateId, updateDTO,0L);
+            return syncTask != null ? Result.success("修改成功，等待同步", syncTask) : Result.error("更新失败");
         } catch (BusinessException e) {
             return Result.error(e.getMessage());
         } catch (Exception e) {
@@ -1100,6 +1100,24 @@ public class AdminController {
         } catch (Exception e) {
             log.error("删除价格模板失败", e);
             return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，删除失败");
+        }
+    }
+
+    /**
+     * 批量删除价格模板
+     * @param batchDeleteDTO 模板ID列表
+     * @return 操作结果
+     */
+    @PostMapping("/price-templates/batch-delete")
+    public Result<?> batchDeletePriceTemplates(@RequestBody PriceTemplateBatchDeleteDTO batchDeleteDTO) {
+        try {
+            boolean success = priceTemplateService.batchDeleteTemplates(batchDeleteDTO == null ? null : batchDeleteDTO.getEffectiveIds(), 0L);
+            return success ? Result.success("批量删除成功") : Result.error("批量删除失败");
+        } catch (BusinessException e) {
+            return Result.error(e.getMessage());
+        } catch (Exception e) {
+            log.error("批量删除价格模板失败", e);
+            return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统错误，批量删除失败");
         }
     }
 
