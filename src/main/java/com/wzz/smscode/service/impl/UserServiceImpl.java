@@ -10,6 +10,8 @@ import com.wzz.smscode.cacheManager.NumberRecordCacheManager;
 import com.wzz.smscode.common.CommonResultDTO;
 import com.wzz.smscode.common.Constants;
 import com.wzz.smscode.dto.BatchChargeRequestDTO;
+import com.wzz.smscode.dto.CreatDTO.BulkUserCreateDTO;
+import com.wzz.smscode.dto.CreatDTO.BulkUserCreateResultDTO;
 import com.wzz.smscode.dto.CreatDTO.LedgerCreationDTO;
 import com.wzz.smscode.dto.CreatDTO.UserCreateDTO;
 import com.wzz.smscode.dto.EntityDTO.UserDTO;
@@ -49,6 +51,7 @@ import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.security.SecureRandom;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -140,6 +143,179 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         statsDTO.setTotalProfit(userLedgerService.getTotalProfitByUserId(agentId)==null?BigDecimal.ZERO:userLedgerService.getTotalProfitByUserId(agentId));
 
         return statsDTO;
+    }
+
+
+    @Transactional(rollbackFor = Exception.class)
+    @Override
+    public List<BulkUserCreateResultDTO> createUsersBulk(BulkUserCreateDTO dto, Long operatorId) {
+        if (dto.getCount() == null || dto.getCount() <= 0) {
+            throw new BusinessException("生成数量必须大于0");
+        }
+        if (dto.getCount() > 100) {
+            throw new BusinessException("单次批量开户数量不能超过100个");
+        }
+        if (dto.getTemplateId() == null) {
+            throw new BusinessException("必须指定价格模板");
+        }
+        PriceTemplate template = priceTemplateService.getById(dto.getTemplateId());
+        if (template == null) {
+            throw new BusinessException("指定的价格模板不存在");
+        }
+
+        boolean isAdmin = (operatorId == 0L);
+        User operator = isAdmin ? buildAdminOperator() : this.getById(operatorId);
+        if (operator == null) throw new BusinessException("操作员不存在");
+        if (!isAdmin && operator.getIsAgent() != 1) {
+            throw new BusinessException("无权创建用户");
+        }
+
+        Long targetParentId = operatorId;
+        String parentName = operator.getUserName();
+        if (isAdmin && dto.getParentId() != null && dto.getParentId() != 0L) {
+            User assignedAgent = this.getById(dto.getParentId());
+            if (assignedAgent == null || assignedAgent.getIsAgent() != 1) {
+                throw new BusinessException("指定的归属代理不存在或不具备代理权限");
+            }
+            targetParentId = dto.getParentId();
+            parentName = assignedAgent.getUserName();
+        }
+
+        List<User> usersToSave = new ArrayList<>();
+        // 维护一个用于返回明文密码与用户名的对照映射
+        List<BulkUserCreateResultDTO> resultList = new ArrayList<>();
+        BigDecimal initialBalance = dto.getInitialBalance() != null ? dto.getInitialBalance() : BigDecimal.ZERO;
+
+        for (int i = 0; i < dto.getCount(); i++) {
+            String username = generateUniqueAlphanumericUsername();
+            String password = StringUtils.hasText(dto.getDefaultPassword()) ? dto.getDefaultPassword() : username;
+
+            User user = new User();
+            user.setUserName(username);
+            user.setPassword(password); // 若后续采用加密，建议此处仍保留明文用于结果返回
+            user.setParentId(targetParentId);
+            user.setIsAgent(Boolean.TRUE.equals(dto.getIsAgent()) ? 1 : 0);
+            user.setStatus(0);
+            user.setBalance(BigDecimal.ZERO);
+            user.setTemplateId(dto.getTemplateId());
+
+            if (dto.getBlacklistedProjects() != null && !dto.getBlacklistedProjects().isEmpty()) {
+                user.setProjectBlacklist(String.join(",", dto.getBlacklistedProjects()));
+            }
+
+            usersToSave.add(user);
+
+            // 装配返回结果 DTO
+            resultList.add(BulkUserCreateResultDTO.builder()
+                    .username(username)
+                    .password(password)
+                    .balance(initialBalance)
+                    .parentId(targetParentId)
+                    .parentName(parentName)
+                    .templateId(dto.getTemplateId())
+                    .templateName(template.getName())
+                    .build());
+        }
+
+        // 批量保存
+        if (!this.saveBatch(usersToSave)) {
+            throw new BusinessException("批量创建用户失败");
+        }
+
+        // 维护模板库
+        for (User user : usersToSave) {
+            priceTemplateService.addUserToTemplate(user.getTemplateId(), user.getId());
+
+            operationLogService.recordSuccess(
+                    OperationType.CREATE_USER,
+                    operator,
+                    user,
+                    null,
+                    null,
+                    user.getBalance(),
+                    "批量开户自动生成"
+            );
+        }
+
+        // 处理资金初始化分配
+        if (initialBalance.compareTo(BigDecimal.ZERO) > 0) {
+            if (!isAdmin) {
+                BigDecimal totalRequired = initialBalance.multiply(BigDecimal.valueOf(dto.getCount()));
+                if (operator.getBalance().compareTo(totalRequired) < 0) {
+                    throw new BusinessException("您的余额不足以分配给这批新用户，共需: " + totalRequired);
+                }
+            }
+
+            for (User user : usersToSave) {
+                LedgerCreationDTO userRechargeDto = LedgerCreationDTO.builder()
+                        .userId(user.getId())
+                        .amount(initialBalance)
+                        .ledgerType(1)
+                        .fundType(FundType.AGENT_RECHARGE)
+                        .remark("批量开户初始充值")
+                        .build();
+                BigDecimal balanceAfter = ledgerService.createLedgerAndUpdateBalance(userRechargeDto);
+
+                operationLogService.recordSuccess(
+                        OperationType.RECHARGE_USER,
+                        operator,
+                        user,
+                        initialBalance,
+                        BigDecimal.ZERO,
+                        balanceAfter,
+                        "批量开户初始充值"
+                );
+
+                if (!isAdmin) {
+                    LedgerCreationDTO operatorDeductDto = LedgerCreationDTO.builder()
+                            .userId(operatorId)
+                            .amount(initialBalance)
+                            .ledgerType(0)
+                            .fundType(FundType.AGENT_DEDUCTION)
+                            .remark("为批量新用户 " + user.getUserName() + " 分配资金")
+                            .build();
+                    ledgerService.createLedgerAndUpdateBalance(operatorDeductDto);
+                }
+            }
+        }
+
+        return resultList;
+    }
+
+    /**
+     * 随机生成包含字母和数字且长度大于等于9位的用户名，并验证库中唯一性
+     */
+    private String generateUniqueAlphanumericUsername() {
+        String letters = "abcdefghijklmnopqrstuvwxyz";
+        String digits = "0123456789";
+        SecureRandom random = new SecureRandom();
+
+        int maxRetry = 50;
+        while (maxRetry-- > 0) {
+            StringBuilder sb = new StringBuilder();
+            // 保证混入至少5位随机字母和4位随机数字，拼合为9位，再进行洗牌打乱
+            for (int i = 0; i < 5; i++) {
+                sb.append(letters.charAt(random.nextInt(letters.length())));
+            }
+            for (int i = 0; i < 4; i++) {
+                sb.append(digits.charAt(random.nextInt(digits.length())));
+            }
+
+            List<Character> charList = sb.toString().chars().mapToObj(c -> (char) c).collect(Collectors.toList());
+            Collections.shuffle(charList);
+
+            StringBuilder finalUsername = new StringBuilder();
+            for (char c : charList) {
+                finalUsername.append(c);
+            }
+
+            String candidate = finalUsername.toString();
+            // 检查库中是否存在
+            if (this.count(new LambdaQueryWrapper<User>().eq(User::getUserName, candidate)) == 0) {
+                return candidate;
+            }
+        }
+        throw new BusinessException("系统繁忙，未能生成唯一的随机用户名，请重试");
     }
 
     @Override

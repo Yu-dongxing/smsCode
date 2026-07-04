@@ -6,6 +6,8 @@ import com.baomidou.mybatisplus.extension.service.IService;
 import com.wzz.smscode.common.CommonResultDTO;
 import com.wzz.smscode.dto.AddUserProjectPricesRequestDTO;
 import com.wzz.smscode.dto.BatchChargeRequestDTO;
+import com.wzz.smscode.dto.CreatDTO.BulkUserCreateDTO;
+import com.wzz.smscode.dto.CreatDTO.BulkUserCreateResultDTO;
 import com.wzz.smscode.dto.agent.AgentDashboardStatsDTO;
 import com.wzz.smscode.dto.agent.AgentProjectLineUpdateDTO;
 import com.wzz.smscode.dto.agent.AgentProjectPriceDTO;
@@ -41,6 +43,9 @@ public interface UserService extends IService<User> {
 
     @Transactional
     boolean createUser(UserCreateDTO dto, Long operatorId);
+
+    @Transactional(rollbackFor = Exception.class)
+    List<BulkUserCreateResultDTO> createUsersBulk(BulkUserCreateDTO dto, Long operatorId);
 
 
 

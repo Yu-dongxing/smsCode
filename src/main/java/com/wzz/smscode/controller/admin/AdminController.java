@@ -10,6 +10,8 @@ import com.wzz.smscode.common.CommonResultDTO;
 import com.wzz.smscode.common.Constants;
 import com.wzz.smscode.common.Result;
 import com.wzz.smscode.dto.*;
+import com.wzz.smscode.dto.CreatDTO.BulkUserCreateDTO;
+import com.wzz.smscode.dto.CreatDTO.BulkUserCreateResultDTO;
 import com.wzz.smscode.dto.CreatDTO.UserCreateDTO;
 import com.wzz.smscode.dto.EntityDTO.LedgerDTO;
 import com.wzz.smscode.dto.EntityDTO.UserDTO;
@@ -230,6 +232,23 @@ public class AdminController {
             // 记录未预料到的系统异常
             log.error("创建用户时发生系统内部错误", e);
             return Result.error(Constants.ERROR_SYSTEM_ERROR, "创建用户时发生系统内部错误，请联系管理员");
+        }
+    }
+
+    /**
+     * 批量开户接口 (支持返回新生成账户的详细凭证)
+     */
+    @PostMapping("/bulkCreateUser")
+    public Result<?> bulkCreateUser(@RequestBody BulkUserCreateDTO bulkDto) {
+        try {
+            // 管理员操作，operatorId 传入 0L
+            List<BulkUserCreateResultDTO> createdAccounts = userService.createUsersBulk(bulkDto, 0L);
+            return Result.success("批量创建成功", createdAccounts);
+        } catch (BusinessException e) {
+            return Result.error(e.getMessage());
+        } catch (Exception e) {
+            log.error("批量创建用户发生系统错误", e);
+            return Result.error(Constants.ERROR_SYSTEM_ERROR, "批量创建用户时发生内部错误");
         }
     }
 
