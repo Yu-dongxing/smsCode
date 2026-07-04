@@ -254,6 +254,29 @@ public class AdminController {
 
 
     /**
+     * 批量删除/一键安全清理无余额的废弃账户
+     *
+     * @param userIds 可选，明确勾选希望删除的用户ID集合
+     * @param inactiveDays 可选，不活跃判定天数。
+     *                     (勾选操作时无需填写；当未传入 ids 时视为"一键安全清理"，此时必须提供不活跃天数，如 30 天未登录)
+     */
+    @PostMapping("/user/clear-inactive-zero-balance")
+    public Result<?> clearInactiveZeroBalanceUsers(
+            @RequestBody(required = false) List<Long> userIds,
+            @RequestParam(required = false) Integer inactiveDays) {
+        try {
+            int purgedCount = userService.deleteZeroBalanceUsers(userIds, inactiveDays);
+            return Result.success("清理操作执行完毕", "成功清理并移除 " + purgedCount + " 个废弃账户及其配置");
+        } catch (BusinessException e) {
+            return Result.error(e.getMessage());
+        } catch (Exception e) {
+            log.error("安全清理废弃账户发生未知错误", e);
+            return Result.error(Constants.ERROR_SYSTEM_ERROR, "操作失败：" + e.getMessage());
+        }
+    }
+
+
+    /**
      * 获取所有代理商列表（用于下拉选择）
      */
     @GetMapping("/listAllAgents")

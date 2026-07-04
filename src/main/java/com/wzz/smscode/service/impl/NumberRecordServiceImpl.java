@@ -1131,7 +1131,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
     @Override
     public IPage<UserLineStatsDTO> getUserLineStats(UserLineStatsRequestDTO requestDTO, Long agentId) {
         // -----------------------------------------------------------------
-        // 步骤 1: 处理用户关联过滤 (userName 和 agentId)
+        // 步骤 1: 处理用户关联过滤 (userName 和 agentId) - 保持原样
         // -----------------------------------------------------------------
         List<Long> filterUserIds = null;
         boolean needUserFilter = StringUtils.hasText(requestDTO.getUserName()) || agentId != null;
@@ -1150,7 +1150,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         }
 
         // -----------------------------------------------------------------
-        // 步骤 2: 构建分组统计查询
+        // 步骤 2: 构建分组统计查询 (已修改)
         // -----------------------------------------------------------------
         QueryWrapper<NumberRecord> queryWrapper = new QueryWrapper<>();
         Integer lineId = null;
@@ -1160,16 +1160,16 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             } catch (NumberFormatException e) {
                 throw new IllegalArgumentException("线路id必须是有效的数字");
             }
-
         }
 
-        // 聚合函数：确保 totalCodes 统计 status=2 的逻辑与报表接口一致
+        // 【修改点 A】：在分组查询中新增 price 列的累加，仅计算已扣费(charged = 1)的总消费金额
         queryWrapper.select(
                 "user_id",
                 "project_id",
                 "line_id",
                 "COUNT(*) as totalNumbers",
-                "SUM(CASE WHEN status = 2 THEN 1 ELSE 0 END) as totalCodes"
+                "SUM(CASE WHEN status = 2 THEN 1 ELSE 0 END) as totalCodes",
+                "COALESCE(SUM(CASE WHEN charged = 1 THEN price ELSE 0 END), 0) as totalConsume"
         );
 
         // 调用通用过滤器，保持与“数据报表”接口一致的项目、线路、时间筛选逻辑
@@ -1193,7 +1193,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         queryWrapper.orderByDesc("totalNumbers");
 
         // -----------------------------------------------------------------
-        // 步骤 3: 执行查询并转换
+        // 步骤 3: 执行查询并转换 (已修改)
         // -----------------------------------------------------------------
         Page<Map<String, Object>> mapPage = new Page<>(requestDTO.getPage(), requestDTO.getSize());
         IPage<Map<String, Object>> resultPage = this.baseMapper.selectMapsPage(mapPage, queryWrapper);
@@ -1216,6 +1216,10 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             // 兼容不同数据库驱动返回的数值类型
             dto.setTotalNumbers(new BigDecimal(map.get("totalNumbers").toString()).longValue());
             dto.setTotalCodes(new BigDecimal(map.get("totalCodes").toString()).longValue());
+
+            // 【修改点 B】：安全提取并拼装“消费总金额”数据
+            Object totalConsumeVal = map.get("totalConsume");
+            dto.setTotalConsume(totalConsumeVal != null ? new BigDecimal(totalConsumeVal.toString()) : BigDecimal.ZERO);
 
             dto.calculateRate();
             dtoList.add(dto);

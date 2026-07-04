@@ -48,6 +48,10 @@ public interface UserService extends IService<User> {
     List<BulkUserCreateResultDTO> createUsersBulk(BulkUserCreateDTO dto, Long operatorId);
 
 
+    @Transactional(rollbackFor = Exception.class)
+    int deleteZeroBalanceUsers(List<Long> userIds, Integer inactiveDays);
+
+
 
     IPage<User> listSubUsers(String userName, Long templateId, Long operatorId, IPage<User> page);
 

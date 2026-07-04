@@ -318,6 +318,75 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         throw new BusinessException("系统繁忙，未能生成唯一的随机用户名，请重试");
     }
 
+
+    @Transactional(rollbackFor = Exception.class)
+    @Override
+    public int deleteZeroBalanceUsers(List<Long> userIds, Integer inactiveDays) {
+        LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
+
+        // 强制安全红线一：必须是没有余额的用户 (balance <= 0)
+        queryWrapper.le(User::getBalance, BigDecimal.ZERO);
+
+        // 强制安全红线二：不能删除顶级系统管理员
+        queryWrapper.ne(User::getId, 0L);
+
+        // 区分清理模式
+        if (!CollectionUtils.isEmpty(userIds)) {
+            // 模式 A: 管理员在列表勾选了特定废账户进行批量清理
+            queryWrapper.in(User::getId, userIds);
+        } else {
+            // 模式 B: 一键清理。安全起见，通常配合 inactiveDays (无登录轨迹的时间天数，例如 15 天未登录)
+            if (inactiveDays != null && inactiveDays > 0) {
+                LocalDateTime thresholdTime = LocalDateTime.now().minusDays(inactiveDays);
+                queryWrapper.and(wrapper -> wrapper
+                        .isNull(User::getLastLoginTime)
+                        .or()
+                        .le(User::getLastLoginTime, thresholdTime)
+                );
+            } else {
+                // 如果没指定不活跃天数，强制不执行一键清理，防止误删刚好用完余额的当日活跃客户
+                throw new BusinessException("安全提示：一键清理无余额用户时，必须指定连续未登录的不活跃天数！");
+            }
+        }
+
+        List<User> targets = this.list(queryWrapper);
+        if (CollectionUtils.isEmpty(targets)) {
+            return 0;
+        }
+
+        List<Long> targetIds = targets.stream().map(User::getId).collect(Collectors.toList());
+
+        // 1. 删除其关联的用户项目价格线路配置 (避免产生数据库孤儿死数据)
+        userProjectLineService.remove(new LambdaQueryWrapper<UserProjectLine>()
+                .in(UserProjectLine::getUserId, targetIds));
+
+        // 2. 执行物理删除
+        boolean deleted = this.removeByIds(targetIds);
+        if (!deleted) {
+            throw new BusinessException("物理删除过程失败");
+        }
+
+        // 3. 同步失效缓存，并记录系统审计日志
+        User adminOperator = buildAdminOperator();
+        for (User deletedUser : targets) {
+            cacheManager.evictUser(deletedUser.getUserName());
+
+            operationLogService.recordSuccess(
+                    OperationType.DELETE_USER,
+                    adminOperator,
+                    deletedUser,
+                    null,
+                    deletedUser.getBalance(),
+                    null,
+                    "管理员执行清理零余额废账户"
+            );
+        }
+
+        log.warn("【系统维护】管理员执行了废账户清理，物理清退了 {} 个废账户。涉及ID: {}", targetIds.size(), targetIds);
+        return targetIds.size();
+    }
+
+
     @Override
     public User findAndLockById(Long userId) {
         return baseMapper.selectByIdForUpdate(userId);

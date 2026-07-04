@@ -16,6 +16,11 @@ public class UserLineStatsDTO {
     private Long totalCodes;   // 取码总数 (status=2)
     private String successRate; // 来码率 (百分比字符串)
 
+    /**
+     * 新增：该线路下的消费总金额
+     */
+    private BigDecimal totalConsume;
+
     // 辅助字段，用于后端计算百分比，不一定非要返回给前端
     public void calculateRate() {
         if (totalNumbers == null || totalNumbers == 0) {

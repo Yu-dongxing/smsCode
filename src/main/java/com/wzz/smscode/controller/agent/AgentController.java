@@ -9,6 +9,8 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.wzz.smscode.common.Constants;
 import com.wzz.smscode.common.Result;
 import com.wzz.smscode.dto.*;
+import com.wzz.smscode.dto.CreatDTO.BulkUserCreateDTO;
+import com.wzz.smscode.dto.CreatDTO.BulkUserCreateResultDTO;
 import com.wzz.smscode.dto.CreatDTO.UserCreateDTO;
 import com.wzz.smscode.dto.EntityDTO.LedgerDTO;
 import com.wzz.smscode.dto.LoginDTO.AgentLoginDTO;
@@ -81,6 +83,43 @@ public class AgentController {
         StpUtil.login(agent.getId());
         // 返回 Token 信息
         return Result.success("登录成功", StpUtil.getTokenValue());
+    }
+
+    /**
+     * [代理端] 批量开户接口
+     *
+     * 自动生成 9位字母+数字 随机组合的下级账号，支持分拨余额，并返回开户明细清单（含明密文密码、余额等）
+     *
+     * {
+     *   "count": 5,                 // 批量生成 5 个账号
+     *   "initialBalance": 10.00,    // 每个账号初始赠送/分拨 10 元余额 (系统将自动从该代理账户中扣除共 50 元)
+     *   "templateId": 2,            // 绑定的价格模板 ID
+     *   "isAgent": false,           // 生成的是否为普通下级用户 (false) 还是下级代理 (true)
+     *   "defaultPassword": "",      // 默认密码。若为空字符串，系统会自动生成与各自随机用户名相同的密码
+     *   "blacklistedProjects": []   // 黑名单配置（可选）
+     * }
+     * @param bulkDto 批量开户配置参数
+     * @return 包含生成的账号明细列表的 Result 对象
+     */
+    @SaCheckLogin
+    @PostMapping("/bulkCreateUser")
+    public Result<?> bulkCreateUserByAgent(@RequestBody BulkUserCreateDTO bulkDto) {
+        long agentId = StpUtil.getLoginIdAsLong();
+        // 校验当前操作人是否具备代理身份
+        checkAgentPermission(agentId);
+
+        try {
+            // 调用业务层执行批量开户
+            // 业务层内部会对代理余额、关联价格模板等进行统一校验，并生成 9位+ 随机用户名
+            List<BulkUserCreateResultDTO> createdAccounts = userService.createUsersBulk(bulkDto, agentId);
+            return Result.success("批量开户成功", createdAccounts);
+        } catch (BusinessException e) {
+            // 业务级校验失败（如：代理余额不足，模板不匹配等）
+            return Result.error(e.getMessage());
+        } catch (Exception e) {
+            log.error("代理 [{}] 批量创建用户发生系统未知异常", agentId, e);
+            return Result.error(Constants.ERROR_SYSTEM_ERROR, "系统繁忙，批量开户失败");
+        }
     }
 
     /**
