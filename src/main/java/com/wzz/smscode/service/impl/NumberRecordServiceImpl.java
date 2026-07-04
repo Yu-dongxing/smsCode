@@ -138,7 +138,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
 
 //    @Transactional
     @Override
-    public GetNumberResponseDTO getNumber(String userName, String password, String projectId, Integer lineId) {
+    public GetNumberResponseDTO getNumber(String userName, String password, String projectId, Integer lineId,String source) {
         // 1. 身份验证与余额检查
         User user = userService.authenticateUserByUserName(userName, password);
         if (user == null) return GetNumberResponseDTO.error(Constants.ERROR_AUTH_FAILED, "用户验证失败");
@@ -286,7 +286,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                     price,
                     costPrice,
                     successfulIdentifier,
-                    projectT.getProjectName()
+                    projectT.getProjectName(), source
             );
         } catch (BusinessException e) {
             log.info("<getNumber> (<createOrderTransaction> {}/{})<出现异常错误>: {}", projectId, lineId, e.getMessage());
@@ -303,7 +303,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
     @Override
     public GetNumberResponseDTO createOrderTransaction(Long userId, String projectId, Integer lineId,
                                                        BigDecimal price, BigDecimal costPrice,
-                                                       Map<String, String> successfulIdentifier, String projectName) {
+                                                       Map<String, String> successfulIdentifier, String projectName, String source) {
         // 1. 扣费逻辑 (UserLedgerService 内部也会有事务，会加入到当前事务中)
         User user = userService.getById(userId);
         // 双重检查余额(可选)
@@ -338,6 +338,7 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         record.setBalanceAfter(newBalance);
         record.setGetNumberTime(LocalDateTime.now());
         record.setProjectName(projectName);
+        record.setSource(source);
         this.save(record); // 落库
         final Long recordId = record.getId();
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
@@ -576,6 +577,11 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             latestRecord.setStatus(2);
             latestRecord.setCode(result);
             latestRecord.setErrorInfo(null);
+            // 【新增】：计算来码耗时 (取码完成时间 - 初始取号时间)
+            if (latestRecord.getGetNumberTime() != null) {
+                long seconds = Duration.between(latestRecord.getGetNumberTime(), latestRecord.getCodeReceivedTime()).getSeconds();
+                latestRecord.setElapsedTime((int) seconds);
+            }
 
             this.updateById(latestRecord); // 更新数据库
             cacheManager.cacheRecord(latestRecord);

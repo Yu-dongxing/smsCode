@@ -17,6 +17,9 @@ import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.moduleService.PhoneNumberFilterService;
 import com.wzz.smscode.service.*;
 import com.wzz.smscode.service.impl.UserServiceImpl;
+import jakarta.servlet.http.Cookie;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -73,8 +76,21 @@ public class UserController {
             @RequestParam String userName,
             @RequestParam String password,
             @RequestParam String projectId,
-             @RequestParam Integer lineId) {
-        return numberRecordService.getNumber(userName, password, projectId, lineId);
+             @RequestParam Integer lineId,
+            HttpServletRequest request) {
+        // 默认判断为 api 请求
+        String source = "api";
+        Cookie[] cookies = request.getCookies();
+        if (cookies != null) {
+            for (Cookie cookie : cookies) {
+                if ("client_source".equals(cookie.getName()) && "web".equals(cookie.getValue())) {
+                    source = "网页";
+                    break;
+                }
+            }
+        }
+
+        return numberRecordService.getNumber(userName, password, projectId, lineId,source);
     }
 
     /**
@@ -245,7 +261,8 @@ public class UserController {
     @RequestMapping(value = "/info", method = {RequestMethod.GET, RequestMethod.POST})
     public CommonResultDTO<UserDTO> getUserInfo(
             @RequestParam String userName,
-            @RequestParam String password) {
+            @RequestParam String password,
+            HttpServletResponse response) {
         User user = userService.authenticateUserByUserName(userName, password,false);
         if (user == null) {
             return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED, "用户ID或密码错误");
@@ -253,6 +270,12 @@ public class UserController {
         if (user.getStatus()==1){
             return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED,"该用户已被禁用");
         }
+        // 在登录成功时，向浏览器写入 client_source = web 的指示性 Cookie
+        Cookie cookie = new Cookie("client_source", "web");
+        cookie.setPath("/");
+        cookie.setMaxAge(7 * 24 * 3600); // 7天有效
+        // cookie.setHttpOnly(true); // 如果前端不直接读此cookie，建议开启
+        response.addCookie(cookie);
         // 调用在 UserServiceImpl 中定义的 DTO 转换方法
         UserDTO userDTO = ((UserServiceImpl) userService).convertToDTO(user);
         return CommonResultDTO.success("登录成功", userDTO);

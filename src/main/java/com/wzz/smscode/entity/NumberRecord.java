@@ -187,4 +187,14 @@ public class NumberRecord extends BaseEntity {
     @ColumnComment("该号码是否释放")
     @DefaultValue("0")
     private Integer isReleased; // 0-未释放，1-已释放
+
+    @ColumnComment("来码耗时(秒)")
+    @TableField("elapsed_time")
+    @DefaultValue("0")
+    private Integer elapsedTime;
+
+    @ColumnComment("接码来源(api/网页)")
+    @TableField("source")
+    @DefaultValue("'无'")
+    private String source;
 }

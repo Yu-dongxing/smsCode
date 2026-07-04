@@ -65,4 +65,7 @@ public class NumberDTO {
     private LocalDateTime getNumberTime;
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
     private LocalDateTime codeReceivedTime;
+
+    private Integer elapsedTime;
+    private String source;
 }

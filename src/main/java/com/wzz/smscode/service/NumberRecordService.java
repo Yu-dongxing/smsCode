@@ -22,12 +22,12 @@ public interface NumberRecordService extends IService<NumberRecord> {
     void recoverInterruptedTask(NumberRecord record);
 
 //    @Transactional
-    GetNumberResponseDTO getNumber(String userName, String password, String projectId, Integer lineId);
+    GetNumberResponseDTO getNumber(String userName, String password, String projectId, Integer lineId,String source);
 
     @Transactional(rollbackFor = Exception.class)
     GetNumberResponseDTO createOrderTransaction(Long userId, String projectId, Integer lineId,
                                                 BigDecimal price, BigDecimal costPrice,
-                                                Map<String, String> successfulIdentifier, String projectName);
+                                                Map<String, String> successfulIdentifier, String projectName, String source);
 
     @Async("taskExecutor")
     void retrieveCode(Long numberId, String identifier);
