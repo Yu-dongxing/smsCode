@@ -1,5 +1,6 @@
 package com.wzz.smscode.service.impl;
 
+import cn.dev33.satoken.stp.StpUtil;
 import cn.hutool.core.bean.BeanUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
@@ -1430,6 +1431,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
 
         // 3. 幂等检查：如果状态已经一致，直接返回成功
         if (Objects.equals(user.getStatus(), status)) {
+            if (status == 1) {
+                StpUtil.logout(userId);
+            }
             return true;
         }
 
@@ -1444,6 +1448,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         // 5. 更新成功后清理缓存
         if (success) {
             cacheManager.evictUser(user.getUserName());
+            if (status == 1) {
+                StpUtil.logout(userId);
+            }
         }
 
         return success;
