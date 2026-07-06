@@ -86,20 +86,42 @@ public class UserProjectBanServiceImpl implements UserProjectBanService {
             double currentRate = (double) totalSuccess / totalCompleted;
             double limitRate = project.getMinRateThreshold() != null ? project.getMinRateThreshold().doubleValue() : 0.15;
 
+//            if (currentRate < limitRate) {
+//                int banHours = project.getBanDurationHours() != null ? project.getBanDurationHours() : 12;
+//
+//                // 7. 直接在 Redis 中设置封禁标志并设定 TTL，到期自动剔除、实现无库定时器负担解禁
+//                redisTemplate.opsForValue().set(banKey, "1", banHours, TimeUnit.HOURS);
+//
+//                // 8. 移除本地或 Redis 缓存中存储的用户信息，促使下次校验穿透实时拦截
+//                User userObj = userService.getById(userId);
+//                if (userObj != null) {
+//                    cacheManager.evictUser(userObj.getUserName());
+//                }
+//
+//                log.warn("【独立线路 Redis 风控】用户 [{}] 线路 [{}-{}] 2小时滑动回码率 {}/{} = {}%（阀值 {}%），触发自动限制 {} 小时。",
+//                        userId, projectId, lineId, totalSuccess, totalCompleted, String.format("%.2f", currentRate * 100), String.format("%.2f", limitRate * 100), banHours);
+//            }
+
             if (currentRate < limitRate) {
-                int banHours = project.getBanDurationHours() != null ? project.getBanDurationHours() : 12;
+                // 1. 获取封禁小时数（支持小数），若未配置则默认 12 小时
+                double banHours = project.getBanDurationHours() != null
+                        ? project.getBanDurationHours().doubleValue()
+                        : 12.0;
 
-                // 7. 直接在 Redis 中设置封禁标志并设定 TTL，到期自动剔除、实现无库定时器负担解禁
-                redisTemplate.opsForValue().set(banKey, "1", banHours, TimeUnit.HOURS);
+                // 2. 将小时转换为秒数 (例如 0.1 小时 * 3600 = 360 秒)
+                long banSeconds = (long) (banHours * 3600);
 
-                // 8. 移除本地或 Redis 缓存中存储的用户信息，促使下次校验穿透实时拦截
+                // 3. 在 Redis 中设定封禁标志，时间单位改为 TimeUnit.SECONDS
+                redisTemplate.opsForValue().set(banKey, "1", banSeconds, TimeUnit.SECONDS);
+
+                // 4. 清理本地缓存
                 User userObj = userService.getById(userId);
                 if (userObj != null) {
                     cacheManager.evictUser(userObj.getUserName());
                 }
 
-                log.warn("【独立线路 Redis 风控】用户 [{}] 线路 [{}-{}] 2小时滑动回码率 {}/{} = {}%（阀值 {}%），触发自动限制 {} 小时。",
-                        userId, projectId, lineId, totalSuccess, totalCompleted, String.format("%.2f", currentRate * 100), String.format("%.2f", limitRate * 100), banHours);
+                log.warn("【独立线路 Redis 风控】用户 [{}] 线路 [{}-{}] 2小时滑动回码率 {}/{} = {}%（阀值 {}%），触发自动限制 {} 小时（{} 秒）。",
+                        userId, projectId, lineId, totalSuccess, totalCompleted, String.format("%.2f", currentRate * 100), String.format("%.2f", limitRate * 100), banHours, banSeconds);
             }
 
         } catch (Exception e) {

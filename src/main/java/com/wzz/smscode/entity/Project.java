@@ -434,9 +434,15 @@ public class Project extends BaseEntity {
      * 自动释放：在封禁期间内，用户请求当前线路取号会收到“已被临时限制”的提示。时间一到，Redis 键自动失效，用户无需任何人手动操作即可自动解除限制、重新开始取号。
      * 作用：让您能够针对不同项目的重要程度，设置不同的惩罚时长（例如轻微劣质的封禁 2 小时给其恢复机会，恶意刷号或极低质量的直接封禁 24 小时）。
      */
+//    @ColumnComment("自动封禁时长(小时)")
+//    @TableField("ban_duration_hours")
+//    @DefaultValue("2")
+//    private Integer banDurationHours;
+
+
     @ColumnComment("自动封禁时长(小时)")
     @TableField("ban_duration_hours")
-    @DefaultValue("2")
-    private Integer banDurationHours;
+    @DefaultValue("12")
+    private BigDecimal banDurationHours; // 改为 BigDecimal 类型
 
 }
