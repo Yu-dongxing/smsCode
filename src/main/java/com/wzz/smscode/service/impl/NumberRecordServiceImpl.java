@@ -57,6 +57,9 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
     @Autowired @Lazy private PriceSyncService priceSyncService;
     @Autowired private SmsApiService smsApiService;
 
+    @Autowired
+    private UserProjectBanService userProjectBanService;
+
     // 修改点 3: 建议此处也加上 @Lazy 避免初始化顺序问题
     @Autowired @Lazy private NumberRecordCacheManager cacheManager;
 
@@ -142,6 +145,11 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         // 1. 身份验证与余额检查
         User user = userService.authenticateUserByUserName(userName, password);
         if (user == null) return GetNumberResponseDTO.error(Constants.ERROR_AUTH_FAILED, "用户验证失败");
+
+        // 【Redis 独立线路风控极速拦截】
+        if (userProjectBanService.isUserBanned(user.getId(), projectId, lineId)) {
+            return GetNumberResponseDTO.error(Constants.ERROR_AUTH_FAILED, "由于您在当前线路回码率较低，已被系统临时限制，请等待解禁或稍后再试。");
+        }
 
         SystemConfig config = systemConfigService.getConfig();
         if (user.getStatus() != 0) {
@@ -550,6 +558,9 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
         if (latestRecord.getStatus() == 2 && StringUtils.hasText(latestRecord.getCode())) {
             return;
         }
+        // 获取项目实例，以便提取该线路设置的风控阈值
+        Project project = projectService.getProject(latestRecord.getProjectId(), latestRecord.getLineId());
+
 
         if (isSuccess && StringUtils.hasText(result)) {
             // --- 1. 成功逻辑 ---
@@ -593,6 +604,8 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
             } catch (Exception e) {
                 log.error("代理返款失败，记录ID: {}", latestRecord.getId(), e);
             }
+            // 【新增】：向 Redis 反馈一次该独立线路下接码成功
+            userProjectBanService.recordAttemptAndCheckBan(latestRecord.getUserId(), latestRecord.getProjectId(), latestRecord.getLineId(), latestRecord.getId(), true, project);
         } else {
             // --- 2. 失败/超时逻辑 ---
             if (latestRecord.getCharged() == 1) {
@@ -619,6 +632,9 @@ public class NumberRecordServiceImpl extends ServiceImpl<NumberRecordMapper, Num
                 cacheManager.cacheRecord(latestRecord);
                 cacheManager.evictUser(latestRecord.getUserName());
                 userService.updateUserStats(latestRecord.getUserId());
+
+                // 【新增】：向 Redis 反馈一次该独立线路下退款（即未接码失败）
+                userProjectBanService.recordAttemptAndCheckBan(latestRecord.getUserId(), latestRecord.getProjectId(), latestRecord.getLineId(), latestRecord.getId(), false, project);
             }
         }
 
