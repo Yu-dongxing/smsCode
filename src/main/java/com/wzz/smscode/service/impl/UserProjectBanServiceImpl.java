@@ -1,20 +1,33 @@
 package com.wzz.smscode.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.wzz.smscode.cacheManager.NumberRecordCacheManager;
+import com.wzz.smscode.dto.UserProjectBanQueryDTO;
+import com.wzz.smscode.dto.UserProjectBanResponseDTO;
 import com.wzz.smscode.entity.Project;
 import com.wzz.smscode.entity.User;
+import com.wzz.smscode.entity.UserProjectBan;
+import com.wzz.smscode.exception.BusinessException;
+import com.wzz.smscode.mapper.UserProjectBanMapper;
 import com.wzz.smscode.service.UserProjectBanService;
 import com.wzz.smscode.service.UserService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.concurrent.TimeUnit;
 
 @Slf4j
 @Service
-public class UserProjectBanServiceImpl implements UserProjectBanService {
+public class UserProjectBanServiceImpl extends ServiceImpl<UserProjectBanMapper, UserProjectBan> implements UserProjectBanService {
 
     @Autowired
     private StringRedisTemplate redisTemplate;
@@ -36,6 +49,7 @@ public class UserProjectBanServiceImpl implements UserProjectBanService {
         return Boolean.TRUE.equals(redisTemplate.hasKey(banKey));
     }
 
+    @Transactional(rollbackFor = Exception.class)
     @Override
     public void recordAttemptAndCheckBan(Long userId, String projectId, Integer lineId, Long recordId, boolean isSuccess, Project project) {
         if (project == null || !Boolean.TRUE.equals(project.getEnableRateBan())) {
@@ -86,22 +100,6 @@ public class UserProjectBanServiceImpl implements UserProjectBanService {
             double currentRate = (double) totalSuccess / totalCompleted;
             double limitRate = project.getMinRateThreshold() != null ? project.getMinRateThreshold().doubleValue() : 0.15;
 
-//            if (currentRate < limitRate) {
-//                int banHours = project.getBanDurationHours() != null ? project.getBanDurationHours() : 12;
-//
-//                // 7. 直接在 Redis 中设置封禁标志并设定 TTL，到期自动剔除、实现无库定时器负担解禁
-//                redisTemplate.opsForValue().set(banKey, "1", banHours, TimeUnit.HOURS);
-//
-//                // 8. 移除本地或 Redis 缓存中存储的用户信息，促使下次校验穿透实时拦截
-//                User userObj = userService.getById(userId);
-//                if (userObj != null) {
-//                    cacheManager.evictUser(userObj.getUserName());
-//                }
-//
-//                log.warn("【独立线路 Redis 风控】用户 [{}] 线路 [{}-{}] 2小时滑动回码率 {}/{} = {}%（阀值 {}%），触发自动限制 {} 小时。",
-//                        userId, projectId, lineId, totalSuccess, totalCompleted, String.format("%.2f", currentRate * 100), String.format("%.2f", limitRate * 100), banHours);
-//            }
-
             if (currentRate < limitRate) {
                 // 1. 获取封禁小时数（支持小数），若未配置则默认 12 小时
                 double banHours = project.getBanDurationHours() != null
@@ -110,22 +108,102 @@ public class UserProjectBanServiceImpl implements UserProjectBanService {
 
                 // 2. 将小时转换为秒数 (例如 0.1 小时 * 3600 = 360 秒)
                 long banSeconds = (long) (banHours * 3600);
+                LocalDateTime banTime = LocalDateTime.now();
+                LocalDateTime unbanTime = banTime.plusSeconds(banSeconds);
 
-                // 3. 在 Redis 中设定封禁标志，时间单位改为 TimeUnit.SECONDS
+                // 1. 写入 Redis 用于极速业务拦截 [3]
                 redisTemplate.opsForValue().set(banKey, "1", banSeconds, TimeUnit.SECONDS);
 
-                // 4. 清理本地缓存
+                // 2. 写入 MySQL 用于后台数据看板及解封管理
+                UserProjectBan banRecord = new UserProjectBan();
+                banRecord.setUserId(userId);
+                banRecord.setProjectId(projectId);
+                banRecord.setLineId(lineId);
+                banRecord.setBanTime(banTime);
+                banRecord.setUnbanTime(unbanTime);
+                banRecord.setStatus(0); // 0-封禁中
+                banRecord.setTriggerAttempts(totalCompleted.intValue());
+                banRecord.setTriggerSuccesses(totalSuccess.intValue());
+                banRecord.setTriggerRate(java.math.BigDecimal.valueOf(currentRate));
+                this.save(banRecord);
+
                 User userObj = userService.getById(userId);
                 if (userObj != null) {
                     cacheManager.evictUser(userObj.getUserName());
                 }
 
-                log.warn("【独立线路 Redis 风控】用户 [{}] 线路 [{}-{}] 2小时滑动回码率 {}/{} = {}%（阀值 {}%），触发自动限制 {} 小时（{} 秒）。",
-                        userId, projectId, lineId, totalSuccess, totalCompleted, String.format("%.2f", currentRate * 100), String.format("%.2f", limitRate * 100), banHours, banSeconds);
+                log.warn("【风控系统】用户 [{}] 线路 [{}-{}] 2小时滑动回码率 {}/{} = {}%（阀值 {}%），自动触发封禁并持久化入库。",
+                        userId, projectId, lineId, totalSuccess, totalCompleted, String.format("%.2f", currentRate * 100), String.format("%.2f", limitRate * 100));
             }
 
         } catch (Exception e) {
-            log.error("Redis 滑动窗口风控机制计算异常", e);
+            log.error("计算滑动风控异常", e);
+        }
+    }
+
+    @Override
+    public IPage<UserProjectBanResponseDTO> getBanList(UserProjectBanQueryDTO query) {
+        Page<UserProjectBanResponseDTO> pageRequest = new Page<>(query.getPage(), query.getSize());
+        IPage<UserProjectBanResponseDTO> resultPage = this.baseMapper.selectBanPage(pageRequest, query);
+
+        LocalDateTime now = LocalDateTime.now();
+        // 计算每一条在封明细的剩余秒数，支撑前端实时倒计时组件
+        for (UserProjectBanResponseDTO dto : resultPage.getRecords()) {
+            if (dto.getUnbanTime() != null && dto.getUnbanTime().isAfter(now)) {
+                dto.setRemainingSeconds(Duration.between(now, dto.getUnbanTime()).getSeconds());
+            } else {
+                dto.setRemainingSeconds(0L);
+            }
+        }
+        return resultPage;
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    @Override
+    public void unbanUserProjectLine(Long id) {
+        UserProjectBan banRecord = this.getById(id);
+        if (banRecord == null || banRecord.getStatus() != 0) {
+            throw new BusinessException("该封禁记录已被手动解除或已过期自动解禁");
+        }
+
+        // 1. 同步物理纠正数据库状态
+        banRecord.setStatus(1);
+        this.updateById(banRecord);
+
+        // 2. 清理 Redis 中的阻断 Key
+        String banKey = String.format("smscode:ban:%d:%s:%d", banRecord.getUserId(), banRecord.getProjectId(), banRecord.getLineId());
+        redisTemplate.delete(banKey);
+
+        // 3. 擦除该用户此线路上 Redis 的 ZSET 统计滑块（给予用户一次全新的取号取码统计周期）
+        String completedKey = String.format("smscode:stats:completed:%d:%s:%d", banRecord.getUserId(), banRecord.getProjectId(), banRecord.getLineId());
+        String successKey = String.format("smscode:stats:success:%d:%s:%d", banRecord.getUserId(), banRecord.getProjectId(), banRecord.getLineId());
+        redisTemplate.delete(completedKey);
+        redisTemplate.delete(successKey);
+
+        // 4. 失效主用户缓存
+        User user = userService.getById(banRecord.getUserId());
+        if (user != null) {
+            cacheManager.evictUser(user.getUserName());
+        }
+    }
+
+    /**
+     * 【重要修复】：每1分钟扫描一次 MySQL，将物理时间上已经过期的零余额封禁明细更新为“状态已解禁（1）”，实现无缝双向状态同步。
+     */
+    @Scheduled(cron = "0 */1 * * * ?")
+    @Transactional(rollbackFor = Exception.class)
+    @Override
+    public void syncExpiredBansToDatabase() {
+        LocalDateTime now = LocalDateTime.now();
+
+        boolean updated = this.update(new LambdaUpdateWrapper<UserProjectBan>()
+                .set(UserProjectBan::getStatus, 1)      // 状态变更为：已解禁
+                .eq(UserProjectBan::getStatus, 0)       // 锁死当前仍处于状态：0(封禁中)
+                .le(UserProjectBan::getUnbanTime, now)  // 自动解禁临界点时间达到
+        );
+
+        if (updated) {
+            log.info("【自动解禁同步调度】检测到过期封禁，已同步将 MySQL 库中对应记录状态置为 [已解禁]。");
         }
     }
 }

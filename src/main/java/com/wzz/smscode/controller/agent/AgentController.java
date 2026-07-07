@@ -34,6 +34,8 @@ import org.springframework.web.bind.annotation.*;
 import java.math.BigDecimal;
 import java.util.*;
 
+import static com.wzz.smscode.util.IpUtil.getClientIp;
+
 /**
  * 代理后台接口控制器
  * <p>
@@ -58,6 +60,9 @@ public class AgentController {
     @Lazy
     private PriceTemplateService priceTemplateService;
 
+    @Autowired
+    private LoginSecurityService loginSecurityService;
+
 
 
     /**
@@ -67,21 +72,29 @@ public class AgentController {
      * @return 包含 Token 的 Result 对象
      */
     @PostMapping("/login")
-    public Result<?> login(@RequestBody AgentLoginDTO loginDTO) {
-        // 调用业务层进行登录验证
+    public Result<?> login(@RequestBody AgentLoginDTO loginDTO, jakarta.servlet.http.HttpServletRequest request) {
+        String ip = getClientIp(request);
+        String username = loginDTO.getUsername();
+
+        // 强校验防御拦截
+        loginSecurityService.checkIpBlocked(ip);
+        loginSecurityService.checkAccountLocked(username);
+        loginSecurityService.recordLoginCall(username);
+
         User agent = userService.AgentLogin(loginDTO.getUsername(), loginDTO.getPassword());
 
-        // 验证失败
         if (agent == null) {
+            // 登录失败，记录 IP 失败计数
+            loginSecurityService.recordIpFailure(ip);
             return Result.error("用户名或密码错误");
         }
-        // 验证是否为代理
         if (agent.getIsAgent() != 1) {
             return Result.error(403, "权限不足，非代理用户");
         }
-        // 登录成功，使用 Sa-Token 创建会话
+
+        // 成功登录，清空错误指标
+        loginSecurityService.clearIpFailure(ip);
         StpUtil.login(agent.getId());
-        // 返回 Token 信息
         return Result.success("登录成功", StpUtil.getTokenValue());
     }
 

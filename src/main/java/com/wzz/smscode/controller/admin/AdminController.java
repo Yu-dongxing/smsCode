@@ -46,6 +46,8 @@ import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
 
+import static com.wzz.smscode.util.IpUtil.getClientIp;
+
 /**
  * 管理员后台接口控制器
  * <p>
@@ -76,6 +78,14 @@ public class AdminController {
     @Lazy
     private PriceTemplateService priceTemplateService;
 
+    @Autowired
+    private LoginSecurityService loginSecurityService;
+
+    @Autowired
+    private UserProjectBanService userProjectBanService;
+
+
+
     private final ErrorLogService errorLogService;
     public AdminController(ErrorLogService errorLogService) {
         this.errorLogService = errorLogService;
@@ -85,14 +95,60 @@ public class AdminController {
      * 管理员用户登录
      */
     @PostMapping("/login")
-    public Result<?> adminLogin(@RequestBody AdminLoginDTO adminLoginDTO){
-        if (username.equals(adminLoginDTO.getUsername()) && password.equals(adminLoginDTO.getPassword())){
-            Map<String,String> loginData = new HashMap<>();
+    public Result<?> adminLogin(@RequestBody AdminLoginDTO adminLoginDTO, jakarta.servlet.http.HttpServletRequest request) {
+        String ip = getClientIp(request);
+        String username = adminLoginDTO.getUsername();
+
+        // 强校验防御拦截
+        loginSecurityService.checkIpBlocked(ip);
+        loginSecurityService.checkAccountLocked(username);
+        loginSecurityService.recordLoginCall(username);
+
+        if (username.equals(adminLoginDTO.getUsername()) && password.equals(adminLoginDTO.getPassword())) {
+            // 登录成功，清除 IP 失败计数
+            loginSecurityService.clearIpFailure(ip);
+
+            Map<String, String> loginData = new HashMap<>();
             StpUtil.login("0"); // 登录ID为 "0"，代表管理员
-            loginData.put("token",StpUtil.getTokenValue());
+            loginData.put("token", StpUtil.getTokenValue());
             return Result.success("管理员登录成功，返回token", StpUtil.getTokenValue());
-        }else {
+        } else {
+            // 登录失败，计入 IP 失败惩罚机制
+            loginSecurityService.recordIpFailure(ip);
             return Result.error("用户名密码不正确！");
+        }
+    }
+
+
+    /**
+     * 可视化检索当前的临时项目线路禁用名单（支持复杂多条件组合模糊查询）
+     */
+    @SaCheckLogin
+    @GetMapping("/ban/list")
+    public Result<?> listBannedProjects(UserProjectBanQueryDTO queryDTO) {
+        try {
+            IPage<UserProjectBanResponseDTO> banList = userProjectBanService.getBanList(queryDTO);
+            return Result.success("查询成功", banList);
+        } catch (Exception e) {
+            log.error("查询项目封禁列表异常", e);
+            return Result.error("获取列表失败");
+        }
+    }
+
+    /**
+     * 管理后台手动强制解除用户某条项目线路的封禁
+     */
+    @SaCheckLogin
+    @PostMapping("/ban/unban/{id}")
+    public Result<?> unbanProjectLine(@PathVariable("id") Long id) {
+        try {
+            userProjectBanService.unbanUserProjectLine(id);
+            return Result.success("解封操作执行完毕，用户的线路限制已移除");
+        } catch (BusinessException e) {
+            return Result.error(e.getMessage());
+        } catch (Exception e) {
+            log.error("手动解封失败", e);
+            return Result.error("系统繁忙，解封失败");
         }
     }
 
