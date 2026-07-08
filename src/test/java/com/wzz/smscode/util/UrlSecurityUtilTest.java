@@ -27,6 +27,18 @@ class UrlSecurityUtilTest {
     }
 
     @Test
+    void allowsTemplateVariablesWhenSavingProviderConfig() {
+        assertDoesNotThrow(() -> UrlSecurityUtil.requireNonPrivateHttpTemplateUrl(
+                "https://api.yuxijm.com/api/phone/getCode?token={{token}}&phone={{phone}}&project_id=111"));
+    }
+
+    @Test
+    void stillBlocksPrivateHostWithTemplateVariables() {
+        assertThrows(BusinessException.class, () -> UrlSecurityUtil.requireNonPrivateHttpTemplateUrl(
+                "http://192.168.1.10/api?token={{token}}"));
+    }
+
+    @Test
     void restTemplateDoesNotFollowRedirects() throws Exception {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/redirect", exchange -> {

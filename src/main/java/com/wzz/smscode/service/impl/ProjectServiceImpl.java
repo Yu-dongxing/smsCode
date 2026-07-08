@@ -377,7 +377,7 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
 
     private void validateConfiguredUrl(String url) {
         if (StringUtils.hasText(url) && isHttpUrl(url.trim())) {
-            UrlSecurityUtil.requireNonPrivateHttpUrl(url.trim());
+            UrlSecurityUtil.requireNonPrivateHttpTemplateUrl(url.trim());
         }
     }
 

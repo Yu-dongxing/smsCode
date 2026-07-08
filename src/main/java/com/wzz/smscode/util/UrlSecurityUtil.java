@@ -8,11 +8,13 @@ import java.net.InetAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.UnknownHostException;
+import java.util.regex.Pattern;
 
 /**
  * URL 安全校验工具。
  */
 public final class UrlSecurityUtil {
+    private static final Pattern TEMPLATE_VARIABLE = Pattern.compile("\\{\\{[^{}]+}}");
 
     private UrlSecurityUtil() {
     }
@@ -27,6 +29,13 @@ public final class UrlSecurityUtil {
         URI uri = parseHttpUrl(url.trim());
         rejectPrivateIpv4(uri.getHost());
         return uri;
+    }
+
+    /**
+     * 保存接口配置时允许 {{变量}} 占位；真实请求前仍要校验变量替换后的 URL。
+     */
+    public static void requireNonPrivateHttpTemplateUrl(String url) {
+        requireNonPrivateHttpUrl(TEMPLATE_VARIABLE.matcher(url).replaceAll("example.com"));
     }
 
     private static URI parseHttpUrl(String url) {
