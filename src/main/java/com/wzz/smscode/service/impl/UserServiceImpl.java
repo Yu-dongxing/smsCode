@@ -1240,8 +1240,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         // 3.1 检查是否需要更新价格
         if (updateDTO.getAgentPrice() != null) {
             // 如果价格字段被传递了，执行价格校验逻辑
-//            Project project = projectService.getById(userProjectLine.getProjectTableId());
-            Project project = projectService.getProject(updateDTO.getProjectId(), Integer.valueOf(updateDTO.getLineId()));
+            Project project = projectService.getProject(userProjectLine.getProjectId(), Integer.valueOf(userProjectLine.getLineId()));
             if (project == null) {
                 log.error("数据不一致：UserProjectLine ID {} 对应的项目在线路表(project)中未找到", userProjectLine.getProjectTableId());
                 throw new BusinessException("更新失败：项目基础信息不存在。");
@@ -1270,17 +1269,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             userProjectLine.setRemark(updateDTO.getRemark());
             needsUpdate = true;
         }
-        if(updateDTO.getProjectId() != null) {
-            userProjectLine.setProjectId(updateDTO.getProjectId());
-            needsUpdate = true;
-        }
-
-        if (updateDTO.getLineId() != null) {
-            userProjectLine.setLineId(updateDTO.getLineId());
-            needsUpdate = true;
-        }
-
-        // 3.3 如果未来有其他字段，在这里添加类似的 if (updateDTO.getOtherField() != null) { ... } 逻辑块
+        // 3.3 项目和线路归属只能由模板同步维护，代理端不能通过此接口改绑。
 
         // 4. 如果有任何字段被修改，则执行数据库更新
         if (needsUpdate) {

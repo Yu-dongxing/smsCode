@@ -566,7 +566,14 @@ public class SmsApiService {
     private final RestTemplate specialRestTemplate = new RestTemplate(new SimpleClientHttpRequestFactory() {{
         setConnectTimeout(150*1000); // 连接超时 10秒
         setReadTimeout(150*1000);    // 读取超时 60秒 (对应您之前设置的长时间等待)
-    }});
+    }
+
+        @Override
+        protected void prepareConnection(java.net.HttpURLConnection connection, String httpMethod) throws java.io.IOException {
+            super.prepareConnection(connection, httpMethod);
+            connection.setInstanceFollowRedirects(false);
+        }
+    });
 
 
     /**

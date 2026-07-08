@@ -409,7 +409,8 @@ public class UserController {
 //    }
 
 
-    private final RestTemplate restTemplate = new RestTemplate();
+    @Autowired
+    private RestTemplate restTemplate;
     /**
      * 反向代理
      * 传入地址，我来请求，返回响应

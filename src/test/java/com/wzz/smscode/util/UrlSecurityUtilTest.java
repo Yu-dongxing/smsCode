@@ -1,8 +1,14 @@
 package com.wzz.smscode.util;
 
+import com.sun.net.httpserver.HttpServer;
+import com.wzz.smscode.config.RestTemplateConfig;
 import com.wzz.smscode.exception.BusinessException;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.ResponseEntity;
 
+import java.net.InetSocketAddress;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -18,5 +24,30 @@ class UrlSecurityUtilTest {
     void allowsPublicIpv4AndLoopbackByCurrentRequirement() {
         assertDoesNotThrow(() -> UrlSecurityUtil.requireNonPrivateHttpUrl("https://8.8.8.8/dns-query"));
         assertDoesNotThrow(() -> UrlSecurityUtil.requireNonPrivateHttpUrl("http://127.0.0.1:8080/health"));
+    }
+
+    @Test
+    void restTemplateDoesNotFollowRedirects() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/redirect", exchange -> {
+            exchange.getResponseHeaders().add("Location", "/final");
+            exchange.sendResponseHeaders(302, -1);
+            exchange.close();
+        });
+        server.createContext("/final", exchange -> {
+            byte[] body = "followed".getBytes();
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        try {
+            String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/redirect";
+            ResponseEntity<String> response = new RestTemplateConfig().restTemplate().getForEntity(url, String.class);
+
+            assertEquals(302, response.getStatusCode().value());
+        } finally {
+            server.stop(0);
+        }
     }
 }
