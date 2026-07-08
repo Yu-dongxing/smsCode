@@ -394,18 +394,18 @@ public class UserController {
             return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED,"用户认证失败！");
         }
     }
-    /**
-     * 用户注册（前端不需要使用）
-     */
-    @PostMapping("/regist")
-    public CommonResultDTO<?> userRegist(@RequestBody UserResultDTO userDTO){
-        Boolean is_true = userService.regist(userDTO);
-        if (is_true){
-            return CommonResultDTO.success("用户注册成功");
-        }else {
-            return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED,"用户注册失败！");
-        }
-    }
+//    /**
+//     * 用户注册（前端不需要使用）
+//     */
+//    @PostMapping("/regist")
+//    public CommonResultDTO<?> userRegist(@RequestBody UserResultDTO userDTO){
+//        Boolean is_true = userService.regist(userDTO);
+//        if (is_true){
+//            return CommonResultDTO.success("用户注册成功");
+//        }else {
+//            return CommonResultDTO.error(Constants.ERROR_AUTH_FAILED,"用户注册失败！");
+//        }
+//    }
 
 
     private final RestTemplate restTemplate = new RestTemplate();
