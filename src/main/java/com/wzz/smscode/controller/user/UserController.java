@@ -17,6 +17,7 @@ import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.moduleService.PhoneNumberFilterService;
 import com.wzz.smscode.service.*;
 import com.wzz.smscode.service.impl.UserServiceImpl;
+import com.wzz.smscode.util.UrlSecurityUtil;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -423,6 +424,7 @@ public class UserController {
             urlStr = urlStr.substring(1, urlStr.length() - 1);
         }
         try {
+            UrlSecurityUtil.requireNonPrivateHttpUrl(urlStr);
             String responseBody = restTemplate.getForObject(urlStr, String.class);
             return responseBody;
         } catch (Exception e) {

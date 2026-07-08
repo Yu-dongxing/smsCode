@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.wzz.smscode.cacheManager.NumberRecordCacheManager;
+import com.wzz.smscode.dto.ApiConfig.ApiConfig;
 import com.wzz.smscode.dto.project.ProjectAddResponseDTO;
 import com.wzz.smscode.dto.project.ProjectPriceDetailsDTO;
 import com.wzz.smscode.dto.project.ProjectPriceSummaryDTO;
@@ -12,6 +13,7 @@ import com.wzz.smscode.entity.*;
 import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.mapper.ProjectMapper;
 import com.wzz.smscode.service.*;
+import com.wzz.smscode.util.UrlSecurityUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -83,6 +85,7 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
         }
         String oldProjectId = existingProject.getProjectId();
         Integer oldLineId = Integer.valueOf(existingProject.getLineId());
+        validateProjectUrls(projectDTO);
         Project projectToUpdate = new Project();
         BeanUtils.copyProperties(projectDTO, projectToUpdate);
         boolean projectUpdated = this.updateById(projectToUpdate);
@@ -288,6 +291,7 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
         }
         project.setTemplateSyncStatus(0);
         project.setTemplateSyncMessage(null);
+        validateProjectUrls(project);
         validateSpecialChannelSwitches(project);
         priceSyncService.validateProjectPriceConfig(project);
         // 1. 保存项目自身
@@ -351,6 +355,35 @@ public class ProjectServiceImpl extends ServiceImpl<ProjectMapper, Project> impl
                 .set(Project::getTemplateSyncStatus, status)
                 .set(Project::getTemplateSyncMessage, message);
         this.update(wrapper);
+    }
+
+    private void validateProjectUrls(Project project) {
+        validateApiUrl(project.getLoginConfig());
+        validateApiUrl(project.getGetNumberConfig());
+        validateApiUrl(project.getGetCodeConfig());
+        validateApiUrl(project.getGetBalanceConfig());
+        validateApiUrl(project.getDeletePhoneConfig());
+        validateConfiguredUrl(project.getDomain());
+        validateConfiguredUrl(project.getSpecialApiHost());
+        validateConfiguredUrl(project.getOutsideOrderApiHost());
+        validateConfiguredUrl(project.getAesSpecialApiGateway());
+    }
+
+    private void validateApiUrl(ApiConfig config) {
+        if (config != null) {
+            validateConfiguredUrl(config.getUrl());
+        }
+    }
+
+    private void validateConfiguredUrl(String url) {
+        if (StringUtils.hasText(url) && isHttpUrl(url.trim())) {
+            UrlSecurityUtil.requireNonPrivateHttpUrl(url.trim());
+        }
+    }
+
+    private boolean isHttpUrl(String url) {
+        return url.regionMatches(true, 0, "http://", 0, "http://".length())
+                || url.regionMatches(true, 0, "https://", 0, "https://".length());
     }
 
     /**

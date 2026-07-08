@@ -10,6 +10,7 @@ import com.wzz.smscode.dto.RequestDTO.KeyValue;
 import com.wzz.smscode.entity.Project;
 import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.service.ProjectService;
+import com.wzz.smscode.util.UrlSecurityUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -173,7 +174,7 @@ public class ModuleUtil {
             String finalUrl = replaceVariables(rawUrl, context);
 
             // 3. 构建 Query 参数
-            UriComponentsBuilder uriBuilder = UriComponentsBuilder.fromHttpUrl(finalUrl);
+            UriComponentsBuilder uriBuilder = UriComponentsBuilder.fromUri(UrlSecurityUtil.requireNonPrivateHttpUrl(finalUrl));
             if (config.getParams() != null) {
                 for (KeyValue param : config.getParams()) {
                     if (StringUtils.hasText(param.getKey())) {

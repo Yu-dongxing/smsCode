@@ -1232,6 +1232,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         if (userProjectLine == null) {
             throw new BusinessException("操作失败：该项目不存在。");
         }
+        ensureAgentCanUpdateProjectLine(agentId, userProjectLine);
 
         boolean needsUpdate = false; // 标记是否需要执行数据库更新操作
 
@@ -1289,6 +1290,22 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             }
         }
         // 如果没有任何字段需要更新，则方法静默成功，不执行任何数据库操作
+    }
+
+    private void ensureAgentCanUpdateProjectLine(Long agentId, UserProjectLine userProjectLine) {
+        User agent = this.getById(agentId);
+        if (agent == null || agent.getIsAgent() == null || agent.getIsAgent() != 1) {
+            throw new BusinessException("无权操作项目配置");
+        }
+        Long ownerId = userProjectLine.getUserId();
+        if (Objects.equals(ownerId, agentId)) {
+            return;
+        }
+        User owner = ownerId == null ? null : this.getById(ownerId);
+        if (owner != null && Objects.equals(owner.getParentId(), agentId)) {
+            return;
+        }
+        throw new BusinessException("无权操作非本人或非下级用户的项目配置");
     }
 
     @Override

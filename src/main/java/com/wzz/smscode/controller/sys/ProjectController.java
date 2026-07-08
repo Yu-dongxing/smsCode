@@ -1,10 +1,13 @@
 package com.wzz.smscode.controller.sys;
 
+import cn.dev33.satoken.exception.NotPermissionException;
+import cn.dev33.satoken.stp.StpUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.wzz.smscode.common.Result;
 import com.wzz.smscode.dto.project.ProjectAddResponseDTO;
+import com.wzz.smscode.dto.project.ProjectMutationDTO;
 import com.wzz.smscode.entity.Project;
 import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.service.FilterErrorMonitorService;
@@ -82,7 +85,9 @@ public class ProjectController {
      * @return 返回一个Result对象。如果更新成功，则返回成功消息"更新成功"；如果更新失败，则返回错误消息"更新失败"。
      */
     @PostMapping("/update")
-    public Result<?> updateByProject(@RequestBody Project project) {
+    public Result<?> updateByProject(@RequestBody ProjectMutationDTO projectDTO) {
+        checkAdmin();
+        Project project = projectDTO.toProject();
         Project existingProject = project.getId() == null ? null : projectService.getById(project.getId());
         boolean updated = projectService.updateProject(project);
         if (updated) {
@@ -106,6 +111,7 @@ public class ProjectController {
     @PostMapping("/delete/by-id/{id}")
     public Result<?> deleteById(@PathVariable("id") long id) {
         try {
+            checkAdmin();
             Boolean deleted = projectService.deleteByID(id);
             if (deleted) {
                 return Result.success("删除成功");
@@ -123,8 +129,10 @@ public class ProjectController {
      * @return 返回一个Result对象。如果添加成功，则返回成功消息"添加成功"；如果添加失败，则返回错误消息"添加失败"或具体的业务异常信息。
      */
     @PostMapping("/add")
-    public Result<?> add(@RequestBody Project project) {
+    public Result<?> add(@RequestBody ProjectMutationDTO projectDTO) {
         try {
+            checkAdmin();
+            Project project = projectDTO.toProject();
             ProjectAddResponseDTO response = projectService.createProject(project);
             if (response != null) {
                 return Result.success("项目创建成功，后台正在同步价格模板中", response);
@@ -142,5 +150,12 @@ public class ProjectController {
             return Result.error("Sync task does not exist or has expired");
         }
         return Result.success("Query success", status);
+    }
+
+    private void checkAdmin() {
+        StpUtil.checkLogin();
+        if (!"0".equals(StpUtil.getLoginId().toString())) {
+            throw new NotPermissionException("非管理员账号，无权操作项目配置");
+        }
     }
 }

@@ -7,6 +7,7 @@ import com.wzz.smscode.exception.BusinessException;
 import com.wzz.smscode.service.FilterErrorMonitorService;
 import com.wzz.smscode.service.ProjectService;
 import com.wzz.smscode.service.SystemConfigService;
+import com.wzz.smscode.util.UrlSecurityUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -583,7 +584,7 @@ public class SmsApiService {
     private Map<String, String> getPhoneNumberSpecial(Project project) {
         log.info("调用特殊API获取号码: {}", project.getProjectName());
         // 基础 URL
-        String requestUrl = getSpecialApiBaseUrl(project) + "/GETPHONE";
+        String requestUrl = UrlSecurityUtil.requireNonPrivateHttpUrl(getSpecialApiBaseUrl(project) + "/GETPHONE").toString();
 
         try {
             // 1. 设置请求头：Connection: close 明确告知服务器不保持连接
@@ -637,7 +638,7 @@ public class SmsApiService {
         String token = project.getSpecialApiToken() == null ? "F037CA8EB52B92C7" : project.getSpecialApiToken();
         String baseUrl = getSpecialApiBaseUrl(project);
         // 构造特殊 URL
-        String fullUrl = String.format("%s/GETCODE&%s&%s", baseUrl, phone, token);
+        String fullUrl = UrlSecurityUtil.requireNonPrivateHttpUrl(String.format("%s/GETCODE&%s&%s", baseUrl, phone, token)).toString();
 
         // 等待逻辑
         if (!isManual) {
@@ -694,7 +695,7 @@ public class SmsApiService {
     public String getApiBalanceSpecial(Project project) {
         String token = project.getSpecialApiToken() == null ? "815BA9C64F8B7C43" : project.getSpecialApiToken();
         String baseUrl = getSpecialApiBaseUrl(project);
-        String url = String.format("%s/CX&%s", baseUrl, token);
+        String url = UrlSecurityUtil.requireNonPrivateHttpUrl(String.format("%s/CX&%s", baseUrl, token)).toString();
 
         try {
             HttpHeaders headers = new HttpHeaders();
@@ -727,7 +728,8 @@ public class SmsApiService {
 
     private Map<String, Object> callOutsideOrderApi(Project project, String path, Map<String, String> params) {
         try {
-            UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl(getOutsideOrderApiBaseUrl(project) + path);
+            URI baseUri = UrlSecurityUtil.requireNonPrivateHttpUrl(getOutsideOrderApiBaseUrl(project) + path);
+            UriComponentsBuilder builder = UriComponentsBuilder.fromUri(baseUri);
             if (params != null) {
                 params.forEach((key, value) -> {
                     if (StringUtils.hasText(key)) {
@@ -938,6 +940,7 @@ public class SmsApiService {
      */
     private Map<String, Object> callAesSpecialApi(String url, Map<String, Object> params, String key) {
         try {
+            url = UrlSecurityUtil.requireNonPrivateHttpUrl(url).toString();
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.TEXT_PLAIN);
             headers.add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36");
